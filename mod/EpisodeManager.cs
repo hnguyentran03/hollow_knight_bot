@@ -299,22 +299,15 @@ namespace HKRLBot
     public static class ResetMacro
     {
         private static int t;
-        // *** UNMEASURED PLACEHOLDER -- DO NOT TRUST ***
-        // mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop") is still
-        // TBD -- nobody has played the game with the F1 overlay to read the real
-        // Knight x= value while standing at the Hornet statue in GG_Workshop.
-        // 0f is NOT a measured coordinate; it is a placeholder.
-        // If this ships as-is: after a win, the walk-to-statue branch below will
-        // walk the Knight toward world x=0 in GG_Workshop, which is almost
-        // certainly NOT where the statue is. The Knight will stop wherever x=0
-        // happens to be (a wall, empty floor, off in the wrong part of the room),
-        // the "at the statue" Up/Jump confirm pulses will fire in the wrong
-        // place, the challenge menu will never open, and EpisodeManager will
-        // stay in `awaitingReset` forever after a win -- silently stalling the
-        // episode loop and never sending the trainer another state message.
-        // Replace this literal AND mod/DISCOVERED.md section 3 with a real
-        // measured value from a live play session before relying on the win path.
-        private const float StatueX = 0f; // UNMEASURED -- see comment above. PENDING USER VERIFICATION.
+        // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
+        // recorded from a live play session with the F1 overlay on 2026-07-18:
+        // "Knight X at Hornet statue in GG_Workshop: 62.21". This is a measured
+        // value, not an estimate -- do not change it without re-measuring in
+        // game (DISCOVERED.md's own warning: a wrong-but-plausible number here
+        // silently corrupts the reset macro with no visible error). If the game
+        // build or arena layout ever changes, re-verify against the overlay
+        // before trusting this again.
+        private const float StatueX = 62.21f;
 
         public static void Tick()
         {
