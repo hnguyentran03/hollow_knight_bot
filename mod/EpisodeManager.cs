@@ -20,14 +20,55 @@ namespace HKRLBot
         private int attempt;
         private bool episodeActive;
         private bool awaitingReset;     // trainer asked for reset; waiting for fight to be live
-        private int resetGraceFrames;   // let scene/HP settle after reload
+        // Throttles ResetMacro.Tick() to run once every 3 real (rendered) frames
+        // instead of every frame -- see the DEVIATION note above TickReset for
+        // why, and for how this relates to ResetMacro's own macro-tick constants.
+        private int resetGraceFrames;
         // Sticky "boss confirmed dead" flag for the current episode. See the
-        // DEVIATION note above ComputeDoneAndWon for why this exists.
+        // DEVIATION note above ComputeWon for why this exists.
         private bool wonLatched;
 
         private string Scene => GameManager.instance != null
             ? GameManager.instance.sceneName : "";
 
+        // DEVIATION from the brief's listing: the brief's single-phase loop did
+        // [read knight/boss] -> [SendState] -> [if !done, block for the next
+        // action] -> [apply it] every FrameSkip'th frame, in that order, reusing
+        // whatever action had been applied (or none, right after reset) for the
+        // frames leading up to the SendState call. Traced by hand (and confirmed
+        // with a throwaway non-Unity simulation of just this control flow, not
+        // committed -- see the report) against a client that, per the protocol
+        // spec, sends one action and blocks for exactly one state reply each
+        // round: with that ordering, the state sent in reply to the client's
+        // Nth action always reflects the *(N-1)th* action's held effect, because
+        // the mod computes and sends that state BEFORE it has read the Nth action
+        // off the socket at all. The effect of the Nth action isn't reported
+        // until the state sent in reply to the (N+1)th action. This is a
+        // constant one-cycle mislabeling versus the brief's own protocol text
+        // two lines above ("action -> mod holds those buttons for FRAME_SKIP
+        // frames, then replies with the next state message"): the reply to an
+        // action should reflect having held THAT action, not the previous one.
+        // Fix: split each decision cycle into two phases -- AwaitingAction (block
+        // for the next action, apply it immediately) and Holding (let FrameSkip
+        // frames elapse under that action, THEN sample state and send). This
+        // matches the spec text exactly and each SendState now reflects exactly
+        // the action the client is currently waiting on a reply for.
+        //
+        // Task 6 review (Important 1): the AwaitingAction frame itself already
+        // holds the action (Apply() happens on that frame, via TryApplyButtons
+        // in the "action" case below), so it already counts as 1 of the
+        // FrameSkip=4 held frames. Only FrameSkip-1 further Holding frames are
+        // needed to reach a true total of 4 rendered frames per decision
+        // (~15 Hz at 60 fps), matching the plan's stated FRAME_SKIP=4. The
+        // original code set holdFramesLeft = FrameSkip (4 further frames on top
+        // of the already-held AwaitingAction frame), making the real cycle 5
+        // frames (~12 Hz) instead -- see where holdFramesLeft is assigned below.
+        // This matters beyond raw rate: Task 7's HKEnv uses max_steps=2700, which
+        // is the plan's ~3-minute episode timeout expressed in decision steps and
+        // is only correct at 15 Hz; at 12 Hz the same 2700 steps is 3.75 minutes,
+        // so the rate error would have silently corrupted the episode timeout too.
+        //
+        // Also folds in the boss-latch fix documented above ComputeWon.
         private void LateUpdate()
         {
             var server = HKRLBotMod.Instance.Server;
@@ -71,7 +112,11 @@ namespace HKRLBot
                 // revisit, not this loop -- flagged in the report, out of scope here.
                 var msg = SafeReadMessage(server);
                 if (msg == null) return;
-                if ((string)msg["type"] == "reset") awaitingReset = true;
+                if ((string)msg["type"] == "reset")
+                {
+                    awaitingReset = true;
+                    ResetMacro.Reset();
+                }
                 return;
             }
 
@@ -106,11 +151,16 @@ namespace HKRLBot
                             return;
                         }
                         phase = Phase.Holding;
-                        holdFramesLeft = FrameSkip;
+                        // FrameSkip - 1: this AwaitingAction frame already held
+                        // the action (Apply() just above), so it counts as the
+                        // first of FrameSkip held frames -- see the DEVIATION
+                        // note above LateUpdate (Important 1).
+                        holdFramesLeft = FrameSkip - 1;
                         break;
                     case "reset":
                         episodeActive = false;
                         awaitingReset = true;
+                        ResetMacro.Reset();
                         HKRLBotMod.Instance.Input.Clear();
                         break;
                     default:
@@ -147,32 +197,7 @@ namespace HKRLBot
             phase = Phase.AwaitingAction;
         }
 
-        // DEVIATION from the brief's listing: the brief's single-phase loop did
-        // [read knight/boss] -> [SendState] -> [if !done, block for the next
-        // action] -> [apply it] every FrameSkip'th frame, in that order, reusing
-        // whatever action had been applied (or none, right after reset) for the
-        // frames leading up to the SendState call. Traced by hand (and confirmed
-        // with a throwaway non-Unity simulation of just this control flow, not
-        // committed -- see the report) against a client that, per the protocol
-        // spec, sends one action and blocks for exactly one state reply each
-        // round: with that ordering, the state sent in reply to the client's
-        // Nth action always reflects the *(N-1)th* action's held effect, because
-        // the mod computes and sends that state BEFORE it has read the Nth action
-        // off the socket at all. The effect of the Nth action isn't reported
-        // until the state sent in reply to the (N+1)th action. This is a
-        // constant one-cycle mislabeling versus the brief's own protocol text
-        // two lines above ("action -> mod holds those buttons for FRAME_SKIP
-        // frames, then replies with the next state message"): the reply to an
-        // action should reflect having held THAT action, not the previous one.
-        // Fix: split each decision cycle into two phases -- AwaitingAction (block
-        // for the next action, apply it immediately) and Holding (let FrameSkip
-        // frames elapse under that action, THEN sample state and send). This
-        // matches the spec text exactly and each SendState now reflects exactly
-        // the action the client is currently waiting on a reply for.
-        //
-        // Also folds in the boss-latch fix documented on ComputeWon below.
-
-        // DEVIATION (small, same spirit as the one above): the brief computed
+        // DEVIATION (small, same spirit as the one above LateUpdate): the brief computed
         // `won` as a one-shot `b.Present && b.Hp <= 0` on whatever frame the
         // decision cycle happened to land on. Because state is only sampled once
         // every FrameSkip frames, it's possible for the boss's GameObject to be
@@ -241,6 +266,21 @@ namespace HKRLBot
 
         // ---- reset handling ----
 
+        // DEVIATION / Task 6 review (Important 2): resetGraceFrames throttles
+        // ResetMacro.Tick() to run once every 3 real (rendered) frames, not
+        // every frame: each time this method actually reaches the bottom and
+        // calls Tick(), it sets resetGraceFrames = 2, which burns the next 2
+        // LateUpdate calls (they hit the early-return above without checking
+        // fightLive or ticking the macro) before the 3rd call ticks again. This
+        // means ResetMacro's own `t` counter advances once per 3 real frames
+        // (~50ms at 60 FPS), NOT once per rendered frame -- so its modulo
+        // constants are macro-ticks, not frames. Chosen resolution: keep this
+        // 3-frame cadence as-is (it is already the tested/reasoned-about
+        // behavior; changing the real-time pulse durations right before the
+        // human tunes them against the live game would add risk for no
+        // benefit) but make the unit unambiguous -- see the named
+        // *Ticks constants and comments in ResetMacro below, which spell out
+        // both the macro-tick counts and their real-frame/real-time equivalents.
         private void TickReset(BridgeServer server)
         {
             if (resetGraceFrames > 0) { resetGraceFrames--; return; }
@@ -269,11 +309,6 @@ namespace HKRLBot
             ResetMacro.Tick();          // drive retry prompt / statue macro
             resetGraceFrames = 2;
         }
-
-        private void Awake()
-        {
-            phase = Phase.AwaitingAction;
-        }
     }
 
     // Navigates back into the fight using virtual inputs.
@@ -298,7 +333,25 @@ namespace HKRLBot
     // MonoBehaviour Update/LateUpdate bodies, i.e. main-thread by construction.
     public static class ResetMacro
     {
+        // Task 6 review (Important 2): `t` is driven by EpisodeManager.TickReset,
+        // which calls Tick() once every 3 real (rendered) frames (see the
+        // DEVIATION note above TickReset) -- so `t` counts MACRO-TICKS, not
+        // rendered frames: 1 macro-tick == 3 real frames == ~50ms at 60 FPS. All
+        // pulse-timing constants below are named/commented in macro-ticks with
+        // their real-frame/real-time equivalents spelled out, since these are
+        // the values the human is about to tune against the live game and needs
+        // to know the unit of.
+        //
+        // Task 6 review (Minor): `t` is static and previously never reset
+        // between reset attempts, so each attempt resumed mid-cycle from
+        // wherever the last attempt left off. Reset() gives each attempt a
+        // deterministic start; called by EpisodeManager whenever a fresh
+        // "reset" request is accepted (both the idle-poll and mid-episode
+        // "reset" message paths).
         private static int t;
+
+        public static void Reset() { t = 0; }
+
         // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
         // recorded from a live play session with the F1 overlay on 2026-07-18:
         // "Knight X at Hornet statue in GG_Workshop: 62.21". This is a measured
@@ -308,6 +361,20 @@ namespace HKRLBot
         // build or arena layout ever changes, re-verify against the overlay
         // before trusting this again.
         private const float StatueX = 62.21f;
+
+        // Retry-prompt confirm pulse (GG_Hornet_1, dead): hold Jump for
+        // RetryPulseTicks out of every RetryPulsePeriodTicks macro-ticks.
+        private const int RetryPulseTicks = 4;         // ~12 real frames, ~200ms @ 60fps
+        private const int RetryPulsePeriodTicks = 40;   // ~120 real frames, ~2.0s @ 60fps
+
+        // Statue challenge-menu macro (GG_Workshop, at statue): pulse Up to open
+        // the menu, then pulse Jump partway through the same cycle to confirm.
+        // Both pulses are ConfirmPulseTicks long; StatueMenuPeriodTicks is the
+        // full cycle, and StatueConfirmOffsetTicks is how far into the cycle the
+        // Jump confirm pulse starts.
+        private const int StatueMenuPeriodTicks = 60;     // ~180 real frames, ~3.0s @ 60fps
+        private const int ConfirmPulseTicks = 4;          // ~12 real frames, ~200ms @ 60fps
+        private const int StatueConfirmOffsetTicks = 30;  // ~90 real frames, ~1.5s @ 60fps
 
         public static void Tick()
         {
@@ -319,23 +386,32 @@ namespace HKRLBot
             if (scene == "GG_Hornet_1")
             {
                 // Dead in the boss scene: pulse confirm (jump button) at the retry prompt.
-                b.Jump = (t % 40) < 4;
+                b.Jump = (t % RetryPulsePeriodTicks) < RetryPulseTicks;
             }
             else if (scene == "GG_Workshop")
             {
                 var k = mod.Reader.ReadKnight();
-                if (k == null) return;
-                if (Mathf.Abs(k.X - StatueX) > 0.5f)
+                // Minor fix: previously `if (k == null) return;` skipped Apply()
+                // entirely, leaving whatever button a prior tick pressed stuck
+                // held indefinitely (every other path through Tick() ends in an
+                // Apply()). Now: if the knight isn't readable yet (e.g. mid
+                // scene-load), fall through with an all-false ActionButtons,
+                // releasing any held button instead of leaving it stuck.
+                if (k != null)
                 {
-                    b.Left = k.X > StatueX;
-                    b.Right = k.X < StatueX;
-                }
-                else
-                {
-                    // At the statue: pulse Up to open the challenge menu,
-                    // then confirm pulses to select Attuned and begin.
-                    b.Up = (t % 60) < 4;
-                    b.Jump = (t % 60) >= 30 && (t % 60) < 34;
+                    if (Mathf.Abs(k.X - StatueX) > 0.5f)
+                    {
+                        b.Left = k.X > StatueX;
+                        b.Right = k.X < StatueX;
+                    }
+                    else
+                    {
+                        // At the statue: pulse Up to open the challenge menu,
+                        // then confirm pulses to select Attuned and begin.
+                        b.Up = (t % StatueMenuPeriodTicks) < ConfirmPulseTicks;
+                        b.Jump = (t % StatueMenuPeriodTicks) >= StatueConfirmOffsetTicks
+                                 && (t % StatueMenuPeriodTicks) < StatueConfirmOffsetTicks + ConfirmPulseTicks;
+                    }
                 }
             }
             mod.Input.Apply(b);
