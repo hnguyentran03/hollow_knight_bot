@@ -25,21 +25,24 @@ class FakeGame:
 
     def _run(self):
         conn, _ = self._srv.accept()
-        f = conn.makefile("rwb")
+        try:
+            f = conn.makefile("rwb")
 
-        def send(msg):
-            f.write(json.dumps(msg).encode() + b"\n")
-            f.flush()
+            def send(msg):
+                f.write(json.dumps(msg).encode() + b"\n")
+                f.flush()
 
-        send({"type": "hello", "version": 1})
-        ep = None
-        while True:
-            line = f.readline()
-            if not line:
-                return
-            msg = json.loads(line)
-            if msg["type"] == "reset":
-                ep = self.episodes.pop(0)
-                send(ep.pop(0))
-            elif msg["type"] == "action":
-                send(ep.pop(0))
+            send({"type": "hello", "version": 1})
+            ep = None
+            while True:
+                line = f.readline()
+                if not line:
+                    return
+                msg = json.loads(line)
+                if msg["type"] == "reset":
+                    ep = self.episodes.pop(0)
+                    send(ep.pop(0))
+                elif msg["type"] == "action":
+                    send(ep.pop(0))
+        finally:
+            conn.close()
