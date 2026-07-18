@@ -20,6 +20,7 @@ namespace HKRLBot
             Root = new GameObject("HKRLBot");
             Object.DontDestroyOnLoad(Root);
             Root.AddComponent<OverlayUI>();
+            Root.AddComponent<EpisodeManager>();
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged +=
                 (_, _2) => Reader.OnSceneChange();
             On.HeroController.Start += (orig, self) => { orig(self); Input.Attach(); };

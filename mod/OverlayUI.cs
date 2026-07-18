@@ -20,6 +20,7 @@ namespace HKRLBot
         private void Update()
         {
             if (Input.GetKeyDown(KeyCode.F1)) show = !show;
+            if (Input.GetKeyDown(KeyCode.F3)) FSMLogger.LogAll();
 
             if (Input.GetKeyDown(KeyCode.F2)) { wiggle = !wiggle; if (!wiggle) HKRLBotMod.Instance.Input.Clear(); }
             if (wiggle)
