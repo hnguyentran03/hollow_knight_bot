@@ -41,7 +41,18 @@ namespace HKRLBot
         // (ResetMacro.Tick, ticked once per resetGraceFrames cycle -- i.e. once
         // per 3 real frames, ~20 macro-ticks/sec). See the DEVIATION note above
         // TickReset for the justification of the exact number.
-        private const int ResetMacroBudgetTicks = 900; // ~45s @ 20 macro-ticks/sec
+        //
+        // Final-review Issue 1: this MUST stay strictly below the Python
+        // trainer's 30s socket timeout (trainer/hkrl/protocol.py's
+        // Connection(timeout=30.0)), which is not itself changeable (settled,
+        // verified against the real game). If this budget's tick-equivalent
+        // seconds reach or exceed 30s, the trainer's own reset() call times
+        // out and the client tears down the connection BEFORE the mod ever
+        // reaches the budget check in TickReset below -- so the stuck-macro
+        // diagnostic that check logs never gets written. A future edit that
+        // raises this constant past 30s worth of ticks (600 at this cadence)
+        // silently reintroduces that bug.
+        private const int ResetMacroBudgetTicks = 450; // 22.5s @ 20 macro-ticks/sec -- must stay below the 30s trainer socket timeout (trainer/hkrl/protocol.py)
 
         private string Scene => GameManager.instance != null
             ? GameManager.instance.sceneName : "";
@@ -379,28 +390,39 @@ namespace HKRLBot
                 return;
             }
 
-            // Final-review fix (F2): the reset macro has no deadline of its
-            // own and, while awaitingReset, this loop never reads the socket
-            // (see the DEVIATION note above LateUpdate's idle branch) -- so a
-            // trainer that has already given up (its own 30s socket timeout,
-            // hkrl.protocol.Connection) and exited leaves the mod pressing
-            // virtual buttons in-game forever with no detector. Budget:
-            // ResetMacroBudgetTicks (900 macro-ticks == 45s @ ~20 macro-ticks/
-            // sec, since one macro-tick == 3 rendered frames == 50ms @ 60fps).
-            // Sized against the macro's own real timings: the retry-confirm
-            // cycle is RetryPulsePeriodTicks=40 ticks (2.0s) and the statue
-            // menu/confirm cycle is StatueMenuPeriodTicks=60 ticks (3.0s) --
-            // any legitimate reset (death-retry, or win-path walk-to-statue
-            // plus at most a couple of menu cycles) should complete within a
-            // handful of those cycles, comfortably inside 45s. 45s is also
-            // short enough that a human watching an apparently-stuck macro
-            // does not need to force-quit the game -- the mod gives up and
-            // logs on its own well before that point feels "hung forever".
+            // Final-review fix (F2, retimed by Issue 1 of the final review):
+            // the reset macro has no deadline of its own and, while
+            // awaitingReset, this loop never reads the socket (see the
+            // DEVIATION note above LateUpdate's idle branch) -- so a stuck
+            // macro would otherwise drive virtual buttons in-game forever
+            // with no detector. Budget: ResetMacroBudgetTicks (450 macro-ticks
+            // == 22.5s @ ~20 macro-ticks/sec, since one macro-tick == 3
+            // rendered frames == 50ms @ 60fps). This must be, and is, below
+            // the Python trainer's 30s socket timeout (hkrl.protocol.
+            // Connection): if it weren't, the trainer's own reset() call
+            // times out and the client tears down the connection before the
+            // mod ever reaches this check, so the diagnostic log just below
+            // -- the entire point of this budget -- would never get written
+            // (see the constant's own comment above). At 22.5s the mod gives
+            // up, logs where the macro got stuck, and drops the connection
+            // with 7.5s of margin to spare before the trainer's own timeout
+            // would otherwise fire. Sized against the macro's own real
+            // timings: the retry-confirm cycle is RetryPulsePeriodTicks=40
+            // ticks (2.0s) and the statue menu/confirm cycle is
+            // StatueMenuPeriodTicks=60 ticks (3.0s) -- any legitimate reset
+            // (death-retry, or win-path walk-to-statue plus at most a couple
+            // of menu cycles) should complete within a handful of those
+            // cycles, comfortably inside 22.5s.
             if (ResetMacro.Ticks >= ResetMacroBudgetTicks)
             {
                 HKRLBotMod.Instance.Log(
                     $"EpisodeManager: reset macro exceeded its {ResetMacroBudgetTicks}-tick "
-                    + $"(~{ResetMacroBudgetTicks / 20}s) budget -- giving up. "
+                    // Note: ResetMacroBudgetTicks / 20 here must stay a
+                    // floating-point division -- integer division silently
+                    // truncates 450/20's true 22.5s down to 22s. See Issue 1
+                    // of the final review, which caught this while retiming
+                    // the budget from 900 (45s) to 450 (22.5s) ticks.
+                    + $"(~{ResetMacroBudgetTicks / 20.0:F1}s) budget -- giving up. "
                     + $"Last attempted branch='{ResetMacro.LastBranch}', scene={Scene}, "
                     + $"knightX={(k != null ? k.X.ToString("F2") : "?")}. Clearing input and "
                     + "dropping the connection.");

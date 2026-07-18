@@ -41,9 +41,13 @@ from hkrl.protocol import ConnectionClosed
 # reset() can legitimately run the death-retry confirm pulse (~2s cycle) or
 # the win-path statue walk + challenge-menu macro (~3s cycle, plus however
 # long the walk to the statue takes), so it gets a longer grace period.
-# Both are comfortably under hkrl.protocol.Connection's 30s socket timeout,
-# so a real stall prints several heartbeats before the connection itself
-# gives up.
+# A reset() that truncates a still-live fight (HKEnv's max_steps) waits for
+# that fight to actually end before the mod will accept the reset as fresh
+# -- this can legitimately take tens of seconds, bounded only by the mod's
+# own ResetMacroBudgetTicks backstop (mod/EpisodeManager.cs; 22.5s as of
+# this writing), which is itself kept below hkrl.protocol.Connection's 30s
+# socket timeout so the mod always gives up and logs first. A real stall
+# still prints several heartbeats before that timeout could fire.
 STEP_WARN_AFTER = 2.0
 STEP_WARN_EVERY = 2.0
 RESET_WARN_AFTER = 5.0

@@ -78,19 +78,17 @@ namespace HKRLBot
                 ["info"] = new JObject { ["won"] = won, ["scene"] = scene, ["attempt"] = attempt }
             };
             var text = msg.ToString(Formatting.None);
-            // Final-review fix (F6): corrected -- this write is fast in the
-            // common case (a few hundred bytes into a loopback socket send
-            // buffer) but is NOT guaranteed non-blocking: AutoFlush means
-            // WriteLine can block on the underlying socket send if the peer
-            // stops draining its receive buffer (e.g. a wedged/blocked
-            // trainer). It is still safe to do under the lock -- unlike
-            // ReadMessage below, there is no call here with an unbounded (up
-            // to 10s ReadTimeout) wait under normal operation, so a stalled
-            // peer here is the rarer, already-broken case rather than the
-            // expected steady state ReadMessage has to tolerate. If the peer
-            // has gone away (broken pipe / reset)
-            // this throws IOException; treat that the same as a read failure so a dead
-            // writer can never surface as an unhandled exception on the Unity main
+            // Final-review fix (F6): this write is fast in the common case (a
+            // few hundred bytes into a loopback socket send buffer) but is
+            // NOT bounded: no stream.WriteTimeout is ever set on this stream,
+            // so if the peer stops draining its receive buffer (e.g. a
+            // wedged/blocked trainer), this WriteLine (AutoFlush) can block
+            // indefinitely -- and it does so while holding `gate`, which
+            // stalls AcceptLoop's ability to accept/install a reconnecting
+            // client for as long as the write is stuck. If the peer has gone
+            // away outright (broken pipe / reset) this throws IOException
+            // instead; treat that the same as a read failure so a dead writer
+            // can never surface as an unhandled exception on the Unity main
             // thread. See DEVIATION note on ReadMessage for why this matters.
             lock (gate)
             {
