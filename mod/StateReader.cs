@@ -28,10 +28,21 @@ namespace HKRLBot
         private PlayMakerFSM bossFsm;
         private Rigidbody2D bossRb;
         private GameObject needleGo;
+        // Task 6: ReadBoss() became a hot path once EpisodeManager calls it every
+        // decision step (previously only OverlayUI called it, once per rendered
+        // frame). GameObject.Find is a full scene-hierarchy scan; while the boss is
+        // genuinely absent from the current scene (any non-fight scene, or a fight
+        // scene before the boss has spawned), bossGo stays null forever and every
+        // single ReadBoss() call was re-running that scan. This flag remembers "we
+        // already looked for the boss in this scene" so absence is a cheap early-out
+        // after the first miss. Cleared by OnSceneChange() alongside the other cached
+        // handles so a scene change always gets a fresh search.
+        private bool bossSearchDone;
 
         public void OnSceneChange()
         {
             bossGo = null; bossHm = null; bossFsm = null; bossRb = null; needleGo = null;
+            bossSearchDone = false;
         }
 
         public KnightState ReadKnight()
@@ -44,8 +55,8 @@ namespace HKRLBot
             return new KnightState
             {
                 X = p.x, Y = p.y,
-                Vx = rb != null ? rb.linearVelocity.x : 0f,
-                Vy = rb != null ? rb.linearVelocity.y : 0f,
+                Vx = rb != null ? rb.velocity.x : 0f,
+                Vy = rb != null ? rb.velocity.y : 0f,
                 Hp = pd.health, Soul = pd.MPCharge,
                 OnGround = hc.cState.onGround, Dashing = hc.cState.dashing,
                 Invuln = hc.cState.invulnerable, FacingRight = hc.cState.facingRight,
@@ -55,9 +66,10 @@ namespace HKRLBot
 
         public BossState ReadBoss()
         {
-            if (bossGo == null)
+            if (bossGo == null && !bossSearchDone)
             {
                 bossGo = GameObject.Find("Hornet Boss 1");
+                bossSearchDone = true;
                 if (bossGo != null)
                 {
                     bossHm = bossGo.GetComponent<HealthManager>();
@@ -73,8 +85,8 @@ namespace HKRLBot
             {
                 Present = true,
                 X = bp.x, Y = bp.y,
-                Vx = bossRb != null ? bossRb.linearVelocity.x : 0f,
-                Vy = bossRb != null ? bossRb.linearVelocity.y : 0f,
+                Vx = bossRb != null ? bossRb.velocity.x : 0f,
+                Vy = bossRb != null ? bossRb.velocity.y : 0f,
                 Hp = bossHm != null ? ReflectionHelper.GetField<HealthManager, int>(bossHm, "hp") : 0,
                 FsmState = bossFsm != null ? bossFsm.ActiveStateName : ""
             };
