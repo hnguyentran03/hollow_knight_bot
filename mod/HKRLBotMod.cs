@@ -9,6 +9,7 @@ namespace HKRLBot
         internal static HKRLBotMod Instance;
         internal GameObject Root;
         public StateReader Reader = new StateReader();
+        public VirtualInput Input = new VirtualInput();
 
         public override string GetVersion() => "0.1.0";
 
@@ -20,6 +21,7 @@ namespace HKRLBot
             Root.AddComponent<OverlayUI>();
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged +=
                 (_, _2) => Reader.OnSceneChange();
+            On.HeroController.Start += (orig, self) => { orig(self); Input.Attach(); };
             Log("HKRLBot initialized");
         }
     }

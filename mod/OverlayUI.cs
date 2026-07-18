@@ -8,6 +8,9 @@ namespace HKRLBot
         private bool show = true;
         private static readonly GUIStyle Style = new GUIStyle();
 
+        private bool wiggle;
+        private int frame;
+
         private void Awake()
         {
             Style.fontSize = 18;
@@ -17,6 +20,18 @@ namespace HKRLBot
         private void Update()
         {
             if (Input.GetKeyDown(KeyCode.F1)) show = !show;
+
+            if (Input.GetKeyDown(KeyCode.F2)) { wiggle = !wiggle; if (!wiggle) HKRLBotMod.Instance.Input.Clear(); }
+            if (wiggle)
+            {
+                frame++;
+                var b = new ActionButtons();
+                b.Left = (frame / 30) % 2 == 0;
+                b.Right = !b.Left;
+                b.Jump = (frame % 60) < 10;
+                b.Attack = (frame % 45) < 3;
+                HKRLBotMod.Instance.Input.Apply(b);
+            }
         }
 
         private void OnGUI()
