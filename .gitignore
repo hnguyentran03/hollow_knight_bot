@@ -1,0 +1,27 @@
+# Design docs / specs (local only)
+docs/
+
+# Claude-related files
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.claude-*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Training artifacts
+checkpoints/
+runs/
+tensorboard/
+*.zip
+
+# macOS
+.DS_Store
+
+# .NET / C# build artifacts
+bin/
+obj/
