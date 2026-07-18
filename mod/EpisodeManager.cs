@@ -28,6 +28,21 @@ namespace HKRLBot
         // DEVIATION note above ComputeWon for why this exists.
         private bool wonLatched;
 
+        // Final-review fix (F1): true once TickReset has observed at least one
+        // NOT-live frame (fight over / wrong scene / boss not yet respawned)
+        // since the current reset was requested. Cleared to false every time a
+        // "reset" message is accepted (both the idle-poll and mid-episode
+        // paths below). fightLive in TickReset requires this flag in addition
+        // to the raw live-condition check -- see the DEVIATION note above
+        // TickReset for why a raw live-condition check alone is unsound.
+        private bool sawNotLiveSinceReset;
+
+        // Final-review fix (F2): macro-tick budget for the reset macro
+        // (ResetMacro.Tick, ticked once per resetGraceFrames cycle -- i.e. once
+        // per 3 real frames, ~20 macro-ticks/sec). See the DEVIATION note above
+        // TickReset for the justification of the exact number.
+        private const int ResetMacroBudgetTicks = 900; // ~45s @ 20 macro-ticks/sec
+
         private string Scene => GameManager.instance != null
             ? GameManager.instance.sceneName : "";
 
@@ -115,6 +130,7 @@ namespace HKRLBot
                 if ((string)msg["type"] == "reset")
                 {
                     awaitingReset = true;
+                    sawNotLiveSinceReset = false;   // F1: require a fresh not-live observation
                     ResetMacro.Reset();
                 }
                 return;
@@ -160,6 +176,7 @@ namespace HKRLBot
                     case "reset":
                         episodeActive = false;
                         awaitingReset = true;
+                        sawNotLiveSinceReset = false;   // F1: require a fresh not-live observation
                         ResetMacro.Reset();
                         HKRLBotMod.Instance.Input.Clear();
                         break;
@@ -281,14 +298,53 @@ namespace HKRLBot
         // benefit) but make the unit unambiguous -- see the named
         // *Ticks constants and comments in ResetMacro below, which spell out
         // both the macro-tick counts and their real-frame/real-time equivalents.
+        //
+        // Final-review fix (F1): the raw live-condition check below
+        // (Scene==BossScene && boss alive && knight alive) is true not only
+        // for a freshly (re)started fight but also for a fight that is simply
+        // STILL GOING when a "reset" arrives -- e.g. the trainer truncating an
+        // episode client-side (HKEnv's max_steps) without the fight actually
+        // having ended. Accepting the raw condition there would silently
+        // continue the same fight as "episode N+1" (wrong _max_bhp baseline,
+        // reward computed against a half-finished fight, `attempt` bumped so
+        // nothing downstream notices). Fix: `fightLive` additionally requires
+        // `sawNotLiveSinceReset`, which only becomes true once this method has
+        // observed a NOT-live frame (fight over, wrong scene, or boss not yet
+        // respawned) since the reset was requested -- see the field's comment
+        // above. Traced against all three reset origins:
+        //   - Death: the knight is already dead the instant the client's
+        //     reset arrives (that's why `lost` was true), so the very first
+        //     TickReset tick observes not-live and sets the flag immediately
+        //     -- unaffected in practice.
+        //   - Win: the boss is already dead (or the scene has already started
+        //     leaving GG_Hornet_1) the instant the reset arrives, so likewise
+        //     the flag is set on the first tick -- unaffected in practice.
+        //   - Truncation while the fight is genuinely still live: the flag is
+        //     NOT set yet, so fightLive stays false even though the raw
+        //     condition is true. ResetMacro.Tick() still runs every grace
+        //     cycle (below) and -- because this method already called
+        //     Input.Clear() when the "reset" was accepted -- the knight is no
+        //     longer being played and only receives the scene's retry-confirm
+        //     Jump pulse (ResetMacro's GG_Hornet_1 branch does not
+        //     conditionalize on k.Dead, so it runs unconditionally). Against
+        //     an aggressive, un-dodged Hornet this reliably lets the fight
+        //     actually end (a real death), which flips the raw condition to
+        //     not-live, sets the flag, and lets the existing death-retry
+        //     macro carry the rest of the way to a genuine fresh fight -- so
+        //     "episode N+1" really is a new attempt, not a continuation. This
+        //     is the "fight ends" case cited in the review; ResetMacroBudgetTicks
+        //     below is the backstop for the (unlikely but possible) case where
+        //     the passive knight never gets hit.
         private void TickReset(BridgeServer server)
         {
             if (resetGraceFrames > 0) { resetGraceFrames--; return; }
 
             var b = HKRLBotMod.Instance.Reader.ReadBoss();
             var k = HKRLBotMod.Instance.Reader.ReadKnight();
-            bool fightLive = Scene == BossScene && b.Present && b.Hp > 0
-                             && k != null && k.Hp > 0 && !k.Dead;
+            bool live = Scene == BossScene && b.Present && b.Hp > 0
+                        && k != null && k.Hp > 0 && !k.Dead;
+            if (!live) sawNotLiveSinceReset = true;
+            bool fightLive = live && sawNotLiveSinceReset;
             if (fightLive)
             {
                 awaitingReset = false;
@@ -303,9 +359,59 @@ namespace HKRLBot
                 // of the new episode until the client's first action overwrites it
                 // up to FrameSkip frames later.
                 HKRLBotMod.Instance.Input.Clear();
+                // Final-review fix (F4): log the boss's HP the instant the fight
+                // is confirmed live again. Because `live` just flipped
+                // false->true this very tick (a fresh (re)spawn -- see
+                // sawNotLiveSinceReset above), b.Hp here IS the fight's max HP,
+                // before any damage has been dealt. Hornet 1 Attuned has a
+                // known/expected HP pool; an Ascended or Radiant tier being
+                // accepted by mistake (the statue macro cannot see which tier
+                // is highlighted -- see the F4 finding) would show up here as
+                // an unexpectedly large number, which is otherwise invisible
+                // (the trainer's _max_bhp normalizes it away). This is
+                // deliberately just the raw HP reading: no PlayerData field for
+                // the selected challenge tier was available to verify, and
+                // guessing at one risks logging a confidently wrong value that
+                // looks like real diagnostic signal -- see the report.
+                HKRLBotMod.Instance.Log(
+                    $"Episode {attempt} starting: scene={Scene} bossMaxHp={b.Hp} knightHp={k.Hp}");
                 server.SendState(k, b, false, false, Scene, attempt);
                 return;
             }
+
+            // Final-review fix (F2): the reset macro has no deadline of its
+            // own and, while awaitingReset, this loop never reads the socket
+            // (see the DEVIATION note above LateUpdate's idle branch) -- so a
+            // trainer that has already given up (its own 30s socket timeout,
+            // hkrl.protocol.Connection) and exited leaves the mod pressing
+            // virtual buttons in-game forever with no detector. Budget:
+            // ResetMacroBudgetTicks (900 macro-ticks == 45s @ ~20 macro-ticks/
+            // sec, since one macro-tick == 3 rendered frames == 50ms @ 60fps).
+            // Sized against the macro's own real timings: the retry-confirm
+            // cycle is RetryPulsePeriodTicks=40 ticks (2.0s) and the statue
+            // menu/confirm cycle is StatueMenuPeriodTicks=60 ticks (3.0s) --
+            // any legitimate reset (death-retry, or win-path walk-to-statue
+            // plus at most a couple of menu cycles) should complete within a
+            // handful of those cycles, comfortably inside 45s. 45s is also
+            // short enough that a human watching an apparently-stuck macro
+            // does not need to force-quit the game -- the mod gives up and
+            // logs on its own well before that point feels "hung forever".
+            if (ResetMacro.Ticks >= ResetMacroBudgetTicks)
+            {
+                HKRLBotMod.Instance.Log(
+                    $"EpisodeManager: reset macro exceeded its {ResetMacroBudgetTicks}-tick "
+                    + $"(~{ResetMacroBudgetTicks / 20}s) budget -- giving up. "
+                    + $"Last attempted branch='{ResetMacro.LastBranch}', scene={Scene}, "
+                    + $"knightX={(k != null ? k.X.ToString("F2") : "?")}. Clearing input and "
+                    + "dropping the connection.");
+                HKRLBotMod.Instance.Input.Clear();
+                server.Drop();
+                awaitingReset = false;
+                episodeActive = false;
+                resetGraceFrames = 0;
+                return;
+            }
+
             ResetMacro.Tick();          // drive retry prompt / statue macro
             resetGraceFrames = 2;
         }
@@ -350,7 +456,34 @@ namespace HKRLBot
         // "reset" message paths).
         private static int t;
 
-        public static void Reset() { t = 0; }
+        // Final-review fix (F3/F2): exposes the macro-tick counter and the
+        // most recently logged branch name so EpisodeManager can (a) enforce
+        // ResetMacroBudgetTicks without duplicating a counter, and (b) report
+        // which branch the macro was stuck in when that budget expires.
+        public static int Ticks => t;
+        public static string LastBranch => lastLoggedBranch;
+
+        // Final-review fix (F3): before this, the reset macro logged nothing
+        // at all -- the death-retry auto-confirm and the win-path statue walk
+        // have never been executed, and the only diagnostic surface was the F1
+        // overlay plus the driver's "still waiting on reset()" heartbeat,
+        // neither of which can distinguish "walking to the statue" from "stuck
+        // in a menu" from "in the wrong scene entirely". Fix: log the scene,
+        // knight X, active branch, and macro tick on (a) every branch
+        // transition, so a human sees immediately when the macro moves from
+        // one phase to the next, and (b) a periodic heartbeat every
+        // HeartbeatIntervalTicks ticks so a macro that's stuck WITHOUT
+        // transitioning branches (e.g. stalled mid-walk) still produces
+        // regular evidence of what it's doing instead of going silent. Chosen
+        // interval: HeartbeatIntervalTicks=40 macro-ticks (2.0s) -- the same
+        // cadence as RetryPulsePeriodTicks, so a heartbeat lands roughly once
+        // per retry-confirm cycle. Logging every tick (20/sec) would be far
+        // too noisy for a human watching ModLog.txt live; 2s is frequent
+        // enough to see progress without drowning the log.
+        private const int HeartbeatIntervalTicks = 40; // ~2.0s @ 20 macro-ticks/sec
+        private static string lastLoggedBranch = "";
+
+        public static void Reset() { t = 0; lastLoggedBranch = ""; }
 
         // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
         // recorded from a live play session with the F1 overlay on 2026-07-18:
@@ -382,10 +515,13 @@ namespace HKRLBot
             string scene = GameManager.instance != null ? GameManager.instance.sceneName : "";
             t++;
             var b = new ActionButtons();
+            string branch;
+            float knightX = float.NaN;
 
             if (scene == "GG_Hornet_1")
             {
                 // Dead in the boss scene: pulse confirm (jump button) at the retry prompt.
+                branch = "dead-retry-pulse";
                 b.Jump = (t % RetryPulsePeriodTicks) < RetryPulseTicks;
             }
             else if (scene == "GG_Workshop")
@@ -399,8 +535,10 @@ namespace HKRLBot
                 // releasing any held button instead of leaving it stuck.
                 if (k != null)
                 {
+                    knightX = k.X;
                     if (Mathf.Abs(k.X - StatueX) > 0.5f)
                     {
+                        branch = "walk-to-statue";
                         b.Left = k.X > StatueX;
                         b.Right = k.X < StatueX;
                     }
@@ -408,12 +546,34 @@ namespace HKRLBot
                     {
                         // At the statue: pulse Up to open the challenge menu,
                         // then confirm pulses to select Attuned and begin.
+                        branch = "statue-menu";
                         b.Up = (t % StatueMenuPeriodTicks) < ConfirmPulseTicks;
                         b.Jump = (t % StatueMenuPeriodTicks) >= StatueConfirmOffsetTicks
                                  && (t % StatueMenuPeriodTicks) < StatueConfirmOffsetTicks + ConfirmPulseTicks;
                     }
                 }
+                else
+                {
+                    branch = "workshop-knight-unreadable";
+                }
             }
+            else
+            {
+                branch = "unexpected-scene";
+            }
+
+            // F3: log on every branch transition (immediate visibility into
+            // what the macro just started doing) plus a periodic heartbeat
+            // every HeartbeatIntervalTicks ticks even if the branch hasn't
+            // changed (visibility into a macro stuck mid-branch, e.g. stalled
+            // mid-walk). See the field/const comments above for why this rate.
+            if (branch != lastLoggedBranch || t % HeartbeatIntervalTicks == 0)
+            {
+                string xStr = float.IsNaN(knightX) ? "?" : knightX.ToString("F2");
+                mod.Log($"ResetMacro: tick={t} scene={scene} branch={branch} knightX={xStr}");
+                lastLoggedBranch = branch;
+            }
+
             mod.Input.Apply(b);
         }
     }

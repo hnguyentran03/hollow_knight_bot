@@ -37,6 +37,18 @@ namespace HKRLBot
                     DropLocked();
                     client = c;
                     var stream = c.GetStream();
+                    // Final-review fix (F5): this is an undocumented ceiling on
+                    // trainer think-time, not just a dead-peer detector.
+                    // ReadMessage's reader.ReadLine() (called synchronously from
+                    // EpisodeManager.LateUpdate on the Unity main thread) throws
+                    // IOException on timeout, which DropIfCurrent turns into an
+                    // unconditional dropped connection -- NOT a null/"try again"
+                    // return. So if the trainer takes longer than 10s to send its
+                    // next message for ANY reason (e.g. a PPO policy update
+                    // running synchronously between step() calls), the mod drops
+                    // the connection out from under it, potentially mid-episode.
+                    // See the matching note in trainer/hkrl/env.py. Do not change
+                    // this value without also reconsidering that call site.
                     stream.ReadTimeout = 10000;
                     reader = new StreamReader(stream);
                     writer = new StreamWriter(stream) { AutoFlush = true };
@@ -66,10 +78,17 @@ namespace HKRLBot
                 ["info"] = new JObject { ["won"] = won, ["scene"] = scene, ["attempt"] = attempt }
             };
             var text = msg.ToString(Formatting.None);
-            // The write itself is fast and non-blocking (a few hundred bytes into a
-            // loopback socket send buffer), so it is safe to do it under the lock --
-            // unlike ReadMessage below, there is no long blocking call here that would
-            // stall the accept thread. If the peer has gone away (broken pipe / reset)
+            // Final-review fix (F6): corrected -- this write is fast in the
+            // common case (a few hundred bytes into a loopback socket send
+            // buffer) but is NOT guaranteed non-blocking: AutoFlush means
+            // WriteLine can block on the underlying socket send if the peer
+            // stops draining its receive buffer (e.g. a wedged/blocked
+            // trainer). It is still safe to do under the lock -- unlike
+            // ReadMessage below, there is no call here with an unbounded (up
+            // to 10s ReadTimeout) wait under normal operation, so a stalled
+            // peer here is the rarer, already-broken case rather than the
+            // expected steady state ReadMessage has to tolerate. If the peer
+            // has gone away (broken pipe / reset)
             // this throws IOException; treat that the same as a read failure so a dead
             // writer can never surface as an unhandled exception on the Unity main
             // thread. See DEVIATION note on ReadMessage for why this matters.

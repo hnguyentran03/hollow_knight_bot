@@ -219,7 +219,21 @@ def main():
                      help="seed the random action sampler for a reproducible run")
     args = ap.parse_args()
 
-    env = HKEnv(host=args.host, port=args.port)
+    # Final-review fix (F7): this is the most likely first-run failure --
+    # game not running, mod not installed/loaded, or a wrong --port -- and
+    # without this it surfaces as a raw ConnectionRefusedError traceback with
+    # nothing pointing the human at the actual cause.
+    try:
+        env = HKEnv(host=args.host, port=args.port)
+    except ConnectionRefusedError:
+        print(f"\n!!! Could not connect to the HKRLBot mod at "
+              f"{args.host}:{args.port}.\n"
+              f"!!! Likely cause: the game isn't running, the mod isn't "
+              f"installed/loaded, or --port is wrong.\n"
+              f"!!! Start Hollow Knight with the mod installed "
+              f"(see mod/build.sh) and try again.", file=sys.stderr)
+        sys.exit(1)
+
     if args.seed is not None:
         env.action_space.seed(args.seed)
 

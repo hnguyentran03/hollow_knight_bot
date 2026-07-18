@@ -223,6 +223,32 @@ def _serve_one_episode_then_disconnect(episode_messages):
     return port
 
 
+def test_friendly_error_when_mod_not_reachable(capsys):
+    # F7: constructing HKEnv against a port nobody is listening on should
+    # print a clear, human-readable message naming the likely cause (game
+    # not running / mod not installed / wrong port) and exit(1), instead of
+    # letting a raw ConnectionRefusedError traceback reach the user. Bind an
+    # ephemeral port then immediately close it so nothing is listening --
+    # this reproduces a real connection refusal without needing the game.
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+
+    old_argv = sys.argv
+    sys.argv = ["random_agent.py", "--port", str(port), "--episodes", "1"]
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            random_agent.main()
+    finally:
+        sys.argv = old_argv
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert "could not connect" in err.lower()
+    assert "mod" in err.lower()
+
+
 def test_no_heartbeat_for_normal_speed_episode(capsys):
     # Sanity check for the other half of "distinguishable from slow
     # progress": a normal-speed episode against FakeGame (no artificial
