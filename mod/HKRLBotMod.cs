@@ -10,6 +10,7 @@ namespace HKRLBot
         internal GameObject Root;
         public StateReader Reader = new StateReader();
         public VirtualInput Input = new VirtualInput();
+        public BridgeServer Server = new BridgeServer();
 
         public override string GetVersion() => "0.1.0";
 
@@ -22,6 +23,7 @@ namespace HKRLBot
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged +=
                 (_, _2) => Reader.OnSceneChange();
             On.HeroController.Start += (orig, self) => { orig(self); Input.Attach(); };
+            Server.Start();
             Log("HKRLBot initialized");
         }
     }
