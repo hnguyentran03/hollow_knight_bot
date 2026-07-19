@@ -119,3 +119,22 @@ def test_launch_starts_the_game_in_its_own_process_group(tmp_path):
         assert os.getpgid(proc.pid) != os.getpgid(os.getpid())
     finally:
         launch_instances.shutdown([proc])
+
+
+def test_launch_supplies_steam_launch_context(tmp_path):
+    # Executed directly (not by Steam), the Steam build's DRM check finds no
+    # launch context, asks Steam to relaunch the game, and quits ~15s after
+    # boot -- observed live as exit 0 (or SIGBUS during Mono shutdown) at the
+    # title menu. SteamAppId/SteamGameId in the child env is that context.
+    app = tmp_path / "fake_game"
+    out = tmp_path / "env_seen"
+    app.write_text(f'#!/bin/sh\necho "$SteamAppId $SteamGameId" > "{out}"\nsleep 30\n')
+    app.chmod(0o755)
+    proc = launch_instances.launch(9020, app=app, visible=False)
+    try:
+        deadline = time.monotonic() + 5.0
+        while not out.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert out.read_text().strip() == "367520 367520"
+    finally:
+        launch_instances.shutdown([proc])

@@ -60,7 +60,15 @@ def wait_for_port(
 
 
 def launch(port: int, app: Path, visible: bool) -> subprocess.Popen:
-    env = dict(os.environ, HKRL_PORT=str(port))
+    # SteamAppId/SteamGameId are the launch context Steam exports to its
+    # children; the Steam build's DRM check looks for them in the
+    # environment. Executed directly without them, the game asks Steam to
+    # relaunch it (steam://run/367520 in Steam's console log) and quits
+    # ~15s after boot -- at the title menu, before any bridge traffic.
+    # steam_appid.txt beside the binary or in the cwd does NOT satisfy the
+    # check on macOS; only the env vars do (verified live, 2026-07-19).
+    env = dict(os.environ, HKRL_PORT=str(port),
+               SteamAppId="367520", SteamGameId="367520")
     return subprocess.Popen(
         [str(app)],
         env=env,
