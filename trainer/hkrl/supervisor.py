@@ -105,7 +105,14 @@ class SupervisedVecEnv(VecEnv):
         # call reads them.
         self._pending_seed = None
         self._pending_options = None
-        self._recovered_async = False
+        # The fallback step result a step_async-half recovery owes its
+        # step_wait, or None when nothing is owed. A result rather than a
+        # boolean so "recovered, result not yet delivered" cannot be confused
+        # with "a real step is in flight" -- see the pairing checks below.
+        self._pending_result = None
+        # Observation from the reset _build_vec runs on a rebuilt vec, so a
+        # reset() that had to recover has something to hand back.
+        self._reset_obs = None
         # No reset here: construction only opens the connections, leaving the
         # first reset to the caller the way a plain SubprocVecEnv does.
         self._build_vec(reset=False)
@@ -118,10 +125,22 @@ class SupervisedVecEnv(VecEnv):
     # -- VecEnv API --
 
     def reset(self):
-        vec = self._live()
-        self._recovered_async = False
-        self._apply_pending(vec)
-        obs = vec.reset()
+        # Guarded like the step halves: PPO.learn() -> _setup_learn() ->
+        # env.reset() is the first thing that touches an instance, and
+        # wait_for_port returning proves only that the bridge thread bound its
+        # listener (see _port_ready), so an instance still loading -- or one
+        # that died during load -- fails here more readily than anywhere else.
+        # Unguarded, that single slot ends the run at t=0.
+        self._require_no_pending("reset")
+        try:
+            vec = self._live()
+            self._apply_pending(vec)
+            obs = vec.reset()
+        except RECOVERABLE:
+            self._recover()
+            # _recover ends in a rebuilt, reset vec, so its reset is this
+            # reset; re-resetting would burn a second episode for nothing.
+            return self._reset_obs
         self._consume_pending(vec)
         return obs
 
@@ -132,20 +151,29 @@ class SupervisedVecEnv(VecEnv):
     # built for. Both halves are guarded because a broken slot can raise from
     # either, and recovery replaces the vec both were issued against, so an
     # attempt that recovers during step_async must not then wait on the dead
-    # vec's in-flight step: _recovered_async carries the fallback result to
-    # step_wait instead.
+    # vec's in-flight step: _pending_result carries the fallback to step_wait.
+    #
+    # Carrying a result across the halves only works if they alternate, which
+    # VecEnv.step and VecEnvWrapper.step both guarantee. _require_no_pending
+    # turns the two ways of violating that into an immediate error instead of
+    # silent corruption: a second step_async would queue a real step behind
+    # the undelivered fallback and leave every later result one step stale,
+    # and an interleaved reset would drop the fallback, sending step_wait to
+    # recv() on a vec with nothing in flight -- a permanent block, since
+    # SubprocVecEnv's pipe reads have no timeout.
 
     def step_async(self, actions):
+        self._require_no_pending("step_async")
         try:
             self._live().step_async(actions)
         except RECOVERABLE:
             self._recover()
-            self._recovered_async = True
+            self._pending_result = self._recovery_step_result()
 
     def step_wait(self):
-        if self._recovered_async:
-            self._recovered_async = False
-            return self._recovery_step_result()
+        pending, self._pending_result = self._pending_result, None
+        if pending is not None:
+            return pending
         try:
             vec = self._live()
             result = vec.step_wait()
@@ -154,6 +182,14 @@ class SupervisedVecEnv(VecEnv):
             return self._recovery_step_result()
         self.reset_infos = list(vec.reset_infos)
         return result
+
+    def _require_no_pending(self, caller: str) -> None:
+        if self._pending_result is not None:
+            raise RuntimeError(
+                f"{caller}() called while a recovery step result from an "
+                "earlier step_async is still undelivered; step_async must be "
+                "followed by step_wait before anything else"
+            )
 
     def seed(self, seed=None):
         # VecEnv.seed only records into self._seeds, but reset() runs on the
@@ -293,7 +329,7 @@ class SupervisedVecEnv(VecEnv):
             # verifies slot 0 alone.
             if reset:
                 self._apply_pending(vec)
-                vec.reset()
+                self._reset_obs = vec.reset()
                 self._consume_pending(vec)
         except Exception:
             _force_close(vec)
@@ -331,7 +367,10 @@ class SupervisedVecEnv(VecEnv):
         # terminal_observation is part of SB3's done-step contract: VecFrameStack
         # (and anything else that resets per-env buffers on done) reads it, and
         # warns when a wrapped vec omits it.
-        infos = [{"terminal_observation": obs[i]} for i in range(n)]
+        # .copy(): obs[i] is a row view, so handing it out unaliased would let
+        # a consumer that normalizes terminal_observation in place rewrite the
+        # observation this same call returns to the policy.
+        infos = [{"terminal_observation": obs[i].copy()} for i in range(n)]
         return obs, rewards, dones, infos
 
 

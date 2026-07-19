@@ -126,6 +126,96 @@ def test_a_dead_instance_is_relaunched_and_the_others_keep_running():
             fg.__exit__(None, None, None)
 
 
+def test_an_instance_dead_at_the_first_reset_is_recovered_not_fatal():
+    """reset() is where a half-loaded instance fails most readily.
+
+    wait_for_port returns as soon as the bridge thread binds, which says
+    nothing about the game being ready to serve a reset, and PPO.learn()'s
+    _setup_learn() resets before any step happens.
+    """
+    port_a, port_b = _free_port(), _free_port()
+    spawned = []
+
+    def relaunch(slot):
+        assert slot == 0
+        spawned.append(FakeGame([_episode()], port=port_a).__enter__())
+
+    a = FakeGame([_episode()], port=port_a).__enter__()
+    # Two episodes for the survivor: its first reset succeeds, then the
+    # rebuild resets every slot again.
+    b = FakeGame([_episode(), _episode()], port=port_b).__enter__()
+    try:
+        vec = SupervisedVecEnv([port_a, port_b], relaunch=relaunch, **FAST)
+        try:
+            a.__exit__(None, None, None)  # dies before the run's first reset
+
+            reset_obs = vec.reset()
+            assert spawned  # recovery ran from inside reset()
+            assert reset_obs.shape == (2, vec.observation_space.shape[0])
+
+            # The observation is usable, not a stand-in: stepping from it
+            # continues normally on both slots.
+            _, _, dones, _ = vec.step([0, 0])
+            assert dones.tolist() == [False, False]
+        finally:
+            vec.close()
+    finally:
+        b.__exit__(None, None, None)
+        for fg in spawned:
+            fg.__exit__(None, None, None)
+
+
+def test_a_failure_in_step_async_carries_its_recovery_to_step_wait():
+    """The broken-pipe half of recovery: the worker is already gone when
+    step_async sends, so the parent raises there and never reaches recv().
+    """
+    port_a, port_b = _free_port(), _free_port()
+    spawned = []
+
+    def relaunch(slot):
+        assert slot == 0
+        spawned.append(FakeGame([_episode()], port=port_a).__enter__())
+
+    a = FakeGame([_episode()], port=port_a).__enter__()
+    b = FakeGame([_episode(), _episode()], port=port_b).__enter__()
+    try:
+        vec = SupervisedVecEnv([port_a, port_b], relaunch=relaunch, **FAST)
+        try:
+            vec.reset()
+            a.__exit__(None, None, None)
+            # Closing the parent's ends makes the very next send raise
+            # instead of the recv that every other test hits first.
+            for remote in vec._vec.remotes:
+                remote.close()
+
+            vec.step_async([0, 0])
+            assert spawned  # recovery happened in the step_async half
+
+            # The undelivered fallback pins the halves together: anything
+            # other than step_wait next is an error, not a silent drop or a
+            # silently stale result.
+            with pytest.raises(RuntimeError, match="step_wait"):
+                vec.step_async([0, 0])
+            with pytest.raises(RuntimeError, match="step_wait"):
+                vec.reset()
+
+            step_obs, _, dones, infos = vec.step_wait()
+            assert dones.tolist() == [True, True]
+            # terminal_observation must not alias the returned observation, or
+            # a consumer normalizing it in place rewrites what the policy got.
+            infos[0]["terminal_observation"] += 1.0
+            assert step_obs[0].tolist() == [0.0] * step_obs.shape[1]
+
+            _, _, dones, _ = vec.step([0, 0])
+            assert dones.tolist() == [False, False]
+        finally:
+            vec.close()
+    finally:
+        b.__exit__(None, None, None)
+        for fg in spawned:
+            fg.__exit__(None, None, None)
+
+
 def test_a_slot_that_never_comes_back_raises_instance_down_once_retries_run_out():
     port_a, port_b = _free_port(), _free_port()
     attempts = []
