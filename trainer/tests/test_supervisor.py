@@ -66,10 +66,20 @@ class WedgedGame:
                     return
 
 
-def _episode(steps=50):
-    frames = [state(obs()) for _ in range(steps)]
+def _episode(steps=50, **first_frame):
+    """A scripted episode. **first_frame overrides fields of the reset frame,
+    which is how a test tells one instance's post-reset state from another's.
+    """
+    frames = [state(obs(**first_frame))]
+    frames += [state(obs()) for _ in range(steps - 1)]
     frames.append(state(obs(), done=True))
     return frames
+
+
+# Index of khp/9.0 in HornetEnv._flatten's vector. Tests script a distinct khp
+# per instance and read this column back to identify which reset produced an
+# observation.
+KHP = 4
 
 
 def _free_port():
@@ -92,7 +102,7 @@ def test_a_dead_instance_is_relaunched_and_the_others_keep_running():
     def relaunch(slot):
         assert slot == 0
         relaunched.append(slot)
-        fresh = FakeGame([_episode()], port=port_a)
+        fresh = FakeGame([_episode(khp=3)], port=port_a)
         fresh.__enter__()
         spawned.append(fresh)
 
@@ -100,7 +110,7 @@ def test_a_dead_instance_is_relaunched_and_the_others_keep_running():
     # Instance 1 needs a second scripted episode: recovery rebuilds the
     # whole vec (SubprocVecEnv can't isolate which slot failed), so the
     # still-alive instance is reset a second time even though it never dies.
-    b = FakeGame([_episode(), _episode()], port=port_b).__enter__()
+    b = FakeGame([_episode(), _episode(khp=7)], port=port_b).__enter__()
     try:
         vec = SupervisedVecEnv([port_a, port_b], relaunch=relaunch)
         try:
@@ -111,6 +121,17 @@ def test_a_dead_instance_is_relaunched_and_the_others_keep_running():
             assert relaunched == [0]
             assert step_obs.shape[0] == 2
             assert dones.tolist() == [True, True]
+
+            # The recovery frame carries the rebuilt vec's real post-reset
+            # observation, not a placeholder: each slot reports the distinct
+            # khp its own reset frame was scripted with -- the relaunched
+            # instance's and the survivor's, both from this rebuild.
+            assert step_obs[:, KHP] == pytest.approx([3 / 9, 7 / 9], abs=1e-6)
+            # terminal_observation stays zeros: the instance died before
+            # reporting the state it ended in, so that one is genuinely
+            # unknown.
+            for info in infos:
+                assert info["terminal_observation"].tolist() == [0.0] * step_obs.shape[1]
 
             # Both slots -- the relaunched one and the untouched survivor --
             # must now be producing real steps again, not just the one
@@ -138,12 +159,12 @@ def test_an_instance_dead_at_the_first_reset_is_recovered_not_fatal():
 
     def relaunch(slot):
         assert slot == 0
-        spawned.append(FakeGame([_episode()], port=port_a).__enter__())
+        spawned.append(FakeGame([_episode(khp=3)], port=port_a).__enter__())
 
     a = FakeGame([_episode()], port=port_a).__enter__()
     # Two episodes for the survivor: its first reset succeeds, then the
     # rebuild resets every slot again.
-    b = FakeGame([_episode(), _episode()], port=port_b).__enter__()
+    b = FakeGame([_episode(), _episode(khp=7)], port=port_b).__enter__()
     try:
         vec = SupervisedVecEnv([port_a, port_b], relaunch=relaunch, **FAST)
         try:
@@ -152,6 +173,9 @@ def test_an_instance_dead_at_the_first_reset_is_recovered_not_fatal():
             reset_obs = vec.reset()
             assert spawned  # recovery ran from inside reset()
             assert reset_obs.shape == (2, vec.observation_space.shape[0])
+            # It is the rebuild's own reset observation: each slot's scripted
+            # khp comes back on its own row.
+            assert reset_obs[:, KHP] == pytest.approx([3 / 9, 7 / 9], abs=1e-6)
 
             # The observation is usable, not a stand-in: stepping from it
             # continues normally on both slots.
@@ -174,10 +198,10 @@ def test_a_failure_in_step_async_carries_its_recovery_to_step_wait():
 
     def relaunch(slot):
         assert slot == 0
-        spawned.append(FakeGame([_episode()], port=port_a).__enter__())
+        spawned.append(FakeGame([_episode(khp=3)], port=port_a).__enter__())
 
     a = FakeGame([_episode()], port=port_a).__enter__()
-    b = FakeGame([_episode(), _episode()], port=port_b).__enter__()
+    b = FakeGame([_episode(), _episode(khp=7)], port=port_b).__enter__()
     try:
         vec = SupervisedVecEnv([port_a, port_b], relaunch=relaunch, **FAST)
         try:
@@ -201,10 +225,15 @@ def test_a_failure_in_step_async_carries_its_recovery_to_step_wait():
 
             step_obs, _, dones, infos = vec.step_wait()
             assert dones.tolist() == [True, True]
+            # Recovery from the step_async half hands back the same real
+            # post-reset observation the step_wait half does.
+            assert step_obs[:, KHP] == pytest.approx([3 / 9, 7 / 9], abs=1e-6)
+            assert infos[0]["terminal_observation"].tolist() == [0.0] * step_obs.shape[1]
             # terminal_observation must not alias the returned observation, or
             # a consumer normalizing it in place rewrites what the policy got.
+            handed_to_policy = step_obs[0].copy()
             infos[0]["terminal_observation"] += 1.0
-            assert step_obs[0].tolist() == [0.0] * step_obs.shape[1]
+            assert step_obs[0].tolist() == handed_to_policy.tolist()
 
             _, _, dones, _ = vec.step([0, 0])
             assert dones.tolist() == [False, False]

@@ -136,8 +136,12 @@ class SupervisedVecEnv(VecEnv):
         # boolean so "recovered, result not yet delivered" cannot be confused
         # with "a real step is in flight" -- see the pairing checks below.
         self._pending_result = None
-        # Observation from the reset _build_vec runs on a rebuilt vec, so a
-        # reset() that had to recover has something to hand back.
+        # Observation from the reset _build_vec runs on a rebuilt vec. Written
+        # only by _build_vec(reset=True), which runs only inside _recover(),
+        # and read only on the branch immediately after a _recover() that
+        # returned -- by reset() and by _recovery_step_result() alike. Since
+        # _recover() returns only once an attempt has completed that write, and
+        # raises otherwise, neither reader can see an earlier rebuild's value.
         self._reset_obs = None
         # No reset here: construction only opens the connections, leaving the
         # first reset to the caller the way a plain SubprocVecEnv does.
@@ -424,16 +428,27 @@ class SupervisedVecEnv(VecEnv):
 
     def _recovery_step_result(self):
         n = len(self.ports)
-        obs = np.zeros((n,) + self.observation_space.shape, dtype=np.float32)
+        # The rebuilt vec's own reset observation, the same one reset() hands
+        # back after recovering. SB3 stores this as _last_obs, picks the next
+        # action from it, and (once wrapped) feeds it to VecNormalize's running
+        # statistics and VecFrameStack's buffer, so it has to be a state the
+        # game can actually be in.
+        obs = self._reset_obs
         rewards = np.zeros(n, dtype=np.float32)
         dones = np.ones(n, dtype=bool)
         # terminal_observation is part of SB3's done-step contract: VecFrameStack
         # (and anything else that resets per-env buffers on done) reads it, and
-        # warns when a wrapped vec omits it.
-        # .copy(): obs[i] is a row view, so handing it out unaliased would let
-        # a consumer that normalizes terminal_observation in place rewrite the
-        # observation this same call returns to the policy.
-        infos = [{"terminal_observation": obs[i].copy()} for i in range(n)]
+        # warns when a wrapped vec omits it. Zeros rather than the reset
+        # observation: the instance died before reporting the state it ended
+        # in, so this one is genuinely unknown, and a placeholder no real
+        # observation can equal beats a plausible-looking fabrication.
+        # A fresh array per env, never a view of obs: a consumer that
+        # normalizes terminal_observation in place must not be able to rewrite
+        # the observation this same call returns to the policy.
+        infos = [
+            {"terminal_observation": np.zeros(self.observation_space.shape, dtype=np.float32)}
+            for _ in range(n)
+        ]
         return obs, rewards, dones, infos
 
 
