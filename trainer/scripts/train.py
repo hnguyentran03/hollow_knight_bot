@@ -36,7 +36,7 @@ GAMMA = 0.995
 N_STACK = 4
 
 
-def build_env(ports, relaunch, run_dir, **supervisor_kwargs):
+def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs):
     """SupervisedVecEnv -> VecMonitor -> VecFrameStack -> VecNormalize.
 
     Returns (env, supervisor): the outermost wrapper for PPO, plus the
@@ -64,12 +64,26 @@ def build_env(ports, relaunch, run_dir, **supervisor_kwargs):
     # truncating the previous session's.
     mon = VecMonitor(supervisor, filename=str(Path(run_dir) / f"monitor_{session}"))
     stacked = VecFrameStack(mon, n_stack=N_STACK)
-    env = VecNormalize(stacked, gamma=GAMMA, clip_obs=10.0)
+    if resume_vecnorm is not None:
+        # The saved statistics are the distribution the resumed weights were
+        # trained under; loading them together is what makes a resume a
+        # continuation. training stays on so they keep adapting.
+        env = VecNormalize.load(str(resume_vecnorm), stacked)
+        env.training = True
+    else:
+        env = VecNormalize(stacked, gamma=GAMMA, clip_obs=10.0)
     return env, supervisor
 
 
-def build_model(env, run_dir, seed=None, n_steps=2048, batch_size=64, n_epochs=10):
-    """A fresh PPO for this env."""
+def build_model(env, run_dir, resume_model=None, seed=None,
+                n_steps=2048, batch_size=64, n_epochs=10):
+    """A PPO for this env, fresh or loaded from a generation checkpoint.
+
+    On resume every hyperparameter comes from the checkpoint zip; the
+    keyword arguments here shape fresh models only.
+    """
+    if resume_model is not None:
+        return PPO.load(str(resume_model), env=env, device="cpu")
     return PPO(
         "MlpPolicy",
         env,
@@ -113,3 +127,126 @@ class StopOnFlag(BaseCallback):
 
     def _on_step(self) -> bool:
         return not self.flag.is_set()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--timesteps", type=int, default=500_000,
+                    help="env steps to collect this session (~54k/hour at "
+                         "15 Hz; adds onto a resumed run's count)")
+    ap.add_argument("--run-id", default=None,
+                    help="name for a NEW run under <root>/runs/ "
+                         "(default: timestamp)")
+    ap.add_argument("--resume", type=Path, default=None, metavar="RUN_DIR",
+                    help="continue an existing run from its latest generation")
+    ap.add_argument("--root", type=Path, default=Path("~/hkrl").expanduser())
+    ap.add_argument("--app", type=Path, default=DEFAULT_APP)
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--gen-every", type=int, default=15_000)
+    ap.add_argument("--n-steps", type=int, default=2048)
+    ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--n-epochs", type=int, default=10)
+    ap.add_argument("--seed", type=int, default=None)
+    args = ap.parse_args()
+
+    if args.resume is not None:
+        run_dir = args.resume.expanduser()
+        resume = latest_checkpoint(run_dir)  # (gen, weights, vecnorm)
+    else:
+        resume = None
+        run_dir = args.root / "runs" / (args.run_id or time.strftime("%Y%m%d_%H%M%S"))
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            sys.exit(f"{run_dir} already exists. Restarting into an existing "
+                     f"run is never implicit: pass --resume {run_dir} to "
+                     f"continue it, or a different --run-id to start fresh.")
+
+    # One JSON object per session, appended, so a resumed run's full history
+    # stays inspectable next to its checkpoints.
+    with (run_dir / "config.jsonl").open("a") as f:
+        f.write(json.dumps({
+            **{k: str(v) if isinstance(v, Path) else v
+               for k, v in vars(args).items()},
+            "gamma": GAMMA, "n_stack": N_STACK, "ent_coef": 0.01,
+            "resumed_from_gen": resume[0] if resume else None,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }) + "\n")
+
+    game = GameProcess(port=args.port, app=args.app)
+    env = None
+    exit_code = 0
+    try:
+        game.start()
+        print(f"game up on port {game.port}", flush=True)
+        print("Keep the game window visible for the whole run: macOS suspends a "
+              "fully occluded window (App Nap) with its port still open, and "
+              "every occurrence costs a full relaunch-and-reboot recovery.",
+              flush=True)
+        input("Bring the game to the Hall of Gods near the Hornet statue, then "
+              "press Enter. (A freshly booted game can also challenge itself in "
+              "via the boot macro; expect a few reset retries.) ")
+
+        stop = threading.Event()
+
+        def request_stop(signum, frame):
+            if stop.is_set():
+                raise KeyboardInterrupt  # second Ctrl-C: abandon the clean path
+            stop.set()
+            print("stop requested: finishing the current rollout, saving a final "
+                  "generation, then shutting the game down (Ctrl-C again to "
+                  "force)", file=sys.stderr, flush=True)
+
+        signal.signal(signal.SIGINT, request_stop)
+
+        env, supervisor = build_env(
+            [game.port], game.relaunch, run_dir,
+            resume_vecnorm=resume[2] if resume else None,
+            # Boot-to-fight spans several 22.5s reset budgets, so a single
+            # relaunch legitimately consumes a few attempts (see the
+            # boot-retry note in hkrl/supervisor.py); the default 3 would
+            # abandon a boot that was converging.
+            recover_attempts=8,
+        )
+        model = build_model(env, run_dir,
+                            resume_model=resume[1] if resume else None,
+                            seed=args.seed, n_steps=args.n_steps,
+                            batch_size=args.batch_size, n_epochs=args.n_epochs)
+        if resume:
+            print(f"resumed {run_dir} from generation {resume[0]} at timestep "
+                  f"{model.num_timesteps}; collecting {args.timesteps} more",
+                  flush=True)
+        callback = GenerationCallback(run_dir, vecnorm=env,
+                                      every_steps=args.gen_every,
+                                      supervisor=supervisor)
+        try:
+            model.learn(total_timesteps=args.timesteps,
+                        callback=[callback, StopOnFlag(stop)],
+                        reset_num_timesteps=resume is None)
+        except InstanceDown as exc:
+            print(f"!!! instance recovery exhausted: {exc}",
+                  file=sys.stderr, flush=True)
+            print(f"!!! this session ends here; continue it with:\n"
+                  f"!!!   ./.venv/bin/python scripts/train.py --resume {run_dir}",
+                  file=sys.stderr, flush=True)
+            exit_code = 1
+        except KeyboardInterrupt:
+            print("forced interrupt; attempting a final save",
+                  file=sys.stderr, flush=True)
+            exit_code = 130
+        if callback.model is not None:
+            final = callback.save_generation()
+            print(f"final checkpoint: {final}", flush=True)
+            print(f"manifest: {run_dir / 'generations.jsonl'}", flush=True)
+    finally:
+        # Cleanup must cover the pre-handler window: stop() is idempotent,
+        # so calling it here ensures the game is reaped even if Ctrl-C
+        # was pressed during start(), the startup prints, or the input() prompt.
+        if env is not None:
+            env.close()
+        game.stop()
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
