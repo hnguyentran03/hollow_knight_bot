@@ -21,10 +21,20 @@ namespace HKRLBot
 
         public void Start()
         {
-            listener = new TcpListener(IPAddress.Loopback, 9020);
+            int port = 9020;
+            var raw = Environment.GetEnvironmentVariable("HKRL_PORT");
+            // Fall back to the default on anything unparseable rather than throwing:
+            // a mistyped port must not prevent the game from starting, and the log
+            // line below is what reveals which port was actually taken.
+            if (!string.IsNullOrEmpty(raw) && int.TryParse(raw, out int parsed)
+                && parsed > 0 && parsed < 65536)
+            {
+                port = parsed;
+            }
+            listener = new TcpListener(IPAddress.Loopback, port);
             listener.Start();
             new Thread(AcceptLoop) { IsBackground = true }.Start();
-            HKRLBotMod.Instance.Log("Bridge listening on 127.0.0.1:9020");
+            HKRLBotMod.Instance.Log($"Bridge listening on 127.0.0.1:{port}");
         }
 
         private void AcceptLoop()
