@@ -7,18 +7,13 @@ namespace HKRLBot
 {
     public class EpisodeManager : MonoBehaviour
     {
-        // FrameSkip is not a literal rendered-frame count at runtime -- it is
-        // only the numerator used to derive ActionHoldSeconds below (the
-        // wall-clock duration a held action is intended to occupy at a
-        // reference rate of 60fps). Timing is measured against Time.unscaledTime,
-        // not counted rendered frames, specifically so this stays correct
-        // regardless of how fast the game actually renders -- see
-        // ActionHoldSeconds and the note above LateUpdate.
+        // Frames-at-60fps that one action is meant to span. Only a numerator
+        // for ActionHoldSeconds -- nothing counts rendered frames, since the
+        // game renders uncapped.
         private const int FrameSkip = 4;
-        // Wall-clock duration to hold each action: FrameSkip/60 seconds
-        // (~66.7ms), i.e. a 15 Hz decision rate. This is what HKEnv's
-        // max_steps=2700 (env.py) assumes a ~3-minute episode timeout against;
-        // changing this changes that timeout's real-world length.
+        // How long each action is held: ~66.7ms, a 15 Hz decision rate. HKEnv's
+        // max_steps=2700 (env.py) is a ~3-minute episode timeout against this
+        // rate; changing it changes that timeout's real-world length.
         private const float ActionHoldSeconds = FrameSkip / 60f;
         private const string BossScene = "GG_Hornet_1";
 
@@ -53,23 +48,11 @@ namespace HKRLBot
         // live-condition check alone is unsound.
         private bool sawNotLiveSinceReset;
 
-        // Wall-clock budget for the reset macro (ResetMacro.ElapsedSeconds,
-        // measured from Time.unscaledTime since ResetMacro.Reset()).
-        //
-        // This MUST stay strictly below the Python trainer's 30s socket
-        // timeout (trainer/hkrl/protocol.py's Connection(timeout=30.0)). If
-        // this budget reaches or exceeds 30s, the trainer's own reset() call
-        // times out and the client tears down the connection BEFORE the mod
-        // ever reaches the budget check in TickReset below -- so the
-        // stuck-macro diagnostic that check logs never gets written. Measuring
-        // this on the wall clock (not a frame- or tick-count proxy for it) is
-        // what keeps this guarantee true regardless of the game's actual
-        // render framerate: a frame- or tick-counted budget silently drifts
-        // off its intended real-world duration if the game ever renders
-        // faster or slower than the rate it was tuned against, and could
-        // creep past 30s (or fire too early) without any change to this
-        // constant. A future edit that raises this constant to 30s or above
-        // silently reintroduces that bug.
+        // Wall-clock budget for the reset macro. MUST stay strictly below the
+        // trainer's 30s socket timeout (Connection(timeout=30.0) in
+        // trainer/hkrl/protocol.py): at 30s or above the client times out and
+        // tears down the connection before TickReset's budget check runs, so
+        // the stuck-macro diagnostic never gets logged.
         private const float ResetMacroBudgetSeconds = 22.5f; // must stay below the 30s trainer socket timeout (trainer/hkrl/protocol.py)
 
         private string Scene => GameManager.instance != null
@@ -90,29 +73,16 @@ namespace HKRLBot
         // send). This way each SendState reflects exactly the action the
         // client is currently waiting on a reply for.
         //
-        // Holding is timed against Time.unscaledTime rather than a count of
-        // rendered frames. The mod's original frame-counted hold assumed the
-        // game renders at 60fps; a live run showed the installed game
-        // actually renders uncapped (~200fps observed), which made every
-        // frame-counted hold roughly a third of its intended duration --
-        // the decision rate came out near 50 Hz instead of 15 Hz, and
-        // HKEnv's max_steps=2700 (a ~3-minute timeout at the intended 15 Hz)
-        // came out to well under a minute. Measuring the hold in seconds
-        // makes the decision rate -- and therefore the max_steps timeout --
-        // identical at any render framerate.
+        // Holding is timed in seconds, not rendered frames: the game renders
+        // uncapped (~200fps observed), so a frame count would shrink the hold
+        // and inflate the decision rate on a fast machine.
         //
-        // Time.unscaledTime (not Time.time) is used deliberately: this hold
-        // is specified as a wall-clock duration, and the reset macro's budget
-        // below has to line up with the Python client's real (wall-clock)
-        // 30s socket timeout. Time.time is scaled by Time.timeScale, which
-        // Hollow Knight briefly drops during hit-pause on nail/needle
-        // impacts; measuring the hold against scaled time would make it
-        // stretch out in real time during a flurry of hits and could in
-        // principle stall a hold indefinitely if timeScale were ever driven
-        // to (near) zero for longer than expected -- a worse failure mode
-        // than the bug being fixed. Time.unscaledTime keeps both the action
-        // hold and the reset-macro budget on the same, predictable clock
-        // that always advances at one real second per real second.
+        // Time.unscaledTime, not Time.time: Hollow Knight drops timeScale
+        // during hit-pause on nail impacts, so a scaled clock would stretch
+        // holds in real time during a flurry of hits -- and would stall
+        // outright if timeScale ever reached zero. Unscaled time also keeps
+        // the reset-macro budget on the same clock as the client's socket
+        // timeout.
         //
         // Also folds in the boss-latch handling documented above ComputeWon.
         private void LateUpdate()
@@ -313,18 +283,10 @@ namespace HKRLBot
 
         // ---- reset handling ----
 
-        // nextMacroTickTime throttles ResetMacro.Tick() to run at its intended
-        // ~20 ticks/sec (ResetMacro.TickIntervalSeconds), measured against
-        // Time.unscaledTime rather than a count of rendered frames: each time
-        // this method actually reaches the bottom and calls Tick(), it sets
-        // nextMacroTickTime = Time.unscaledTime + ResetMacro.TickIntervalSeconds,
-        // and every call before that deadline hits the early-return above
-        // without checking fightLive or ticking the macro. Gating on wall-clock
-        // time (rather than "once every N rendered frames", which assumed a
-        // 60fps game) keeps the macro's pulse cadence -- and the diagnostic
-        // logging cadence inside ResetMacro -- at the same real-world rate
-        // regardless of how fast the game actually renders. See ResetMacro's
-        // own tick/pulse constants below for the macro-side half of this.
+        // nextMacroTickTime throttles ResetMacro.Tick() to ~20 ticks/sec on the
+        // wall clock, so the macro's pulse cadence and diagnostic logging hold
+        // their real-world rate no matter how fast the game renders. Calls
+        // before the deadline early-return without checking fightLive.
         //
         // The raw live-condition check below (Scene==BossScene && boss alive
         // && knight alive) is true not only for a freshly (re)started fight
@@ -463,15 +425,9 @@ namespace HKRLBot
     // BridgeServer's AcceptLoop thread never does either.
     public static class ResetMacro
     {
-        // Ticked by EpisodeManager.TickReset once every TickIntervalSeconds
-        // of wall-clock time (see the note above TickReset), so all timing
-        // below is computed from ElapsedSeconds -- real seconds since
-        // Reset() -- rather than a counted number of calls. This is what
-        // keeps every pulse's real-world duration correct regardless of how
-        // fast the game actually renders; a live run showed the installed
-        // game renders far faster than the 60fps this macro was originally
-        // (implicitly) tuned against, which made every pulse below run about
-        // a third of its intended real-world length.
+        // All timing below is computed from ElapsedSeconds -- real seconds
+        // since Reset() -- rather than a count of Tick() calls, so each pulse
+        // holds its intended real-world duration at any render framerate.
         private static float resetStartTime;
 
         // How often EpisodeManager.TickReset calls Tick(): ~20 times/sec.
