@@ -1,9 +1,11 @@
 """Gymnasium environment over the HKRLBot mod protocol (v1)."""
+import sys
+
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from hkrl.protocol import Connection
+from hkrl.protocol import Connection, ConnectionClosed
 
 # Hornet 1 FSM states, recorded from live play in Hall of Gods (Hornet 1,
 # Attuned), Godhome. See mod/DISCOVERED.md section 1 ("Hornet FSM state
@@ -86,10 +88,16 @@ class HKEnv(gym.Env):
     # `timeout` is the socket read deadline for every message, including the
     # `hello` read inside connect(). It bounds how long a wedged instance can
     # stall this env before the failure becomes visible to the supervisor.
+    # `reset_retries` bounds reset()'s reconnect-and-retry loop (see reset()
+    # below). Sized like the supervisor's recover_attempts=8 in
+    # scripts/train.py and for the same reason: a cold boot-to-fight spans
+    # several of the mod's 22.5s reset budgets, and each expiry costs one
+    # retry here.
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
-                 max_steps=2700, timeout=30.0):
+                 max_steps=2700, timeout=30.0, reset_retries=8):
         self.reward = dict(DEFAULT_REWARD, **(reward_config or {}))
         self.max_steps = max_steps
+        self.reset_retries = reset_retries
         self.conn = Connection(host=host, port=port, timeout=timeout)
         self.conn.connect()
         self._steps = 0
@@ -138,10 +146,39 @@ class HKEnv(gym.Env):
 
     # -- gym API --
 
+    # A reset the mod drops is retried by reconnecting, because those drops
+    # are part of the protocol's normal rhythm, not failures: the mod's
+    # reset macro has a 22.5s budget (deliberately under this socket's 30s
+    # timeout), a cold boot-to-fight -- title menu, standing up from the
+    # Hall of Gods bench, the walk to the statue, the challenge menu -- runs
+    # ~25s+, and menu/scene progress persists across drops, so successive
+    # resets ratchet forward until the fight is live. Handling the drop here
+    # keeps it invisible to the layers above; escaping instead would kill
+    # this env's vec worker and turn every boot budget expiry into a full
+    # supervisor recovery (observed live: a healthy mid-boot game "recovered"
+    # with a vec rebuild at t=0 of every cold-started run).
+    #
+    # Only the drop is retried. A socket timeout (wedged main thread) and a
+    # refused reconnect (dead game) still propagate: those are exactly the
+    # cases the supervisor's relaunch machinery exists for, and retrying
+    # them here would only delay it.
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.conn.send({"type": "reset"})
-        msg = self.conn.recv()
+        for retry in range(self.reset_retries + 1):
+            try:
+                self.conn.send({"type": "reset"})
+                msg = self.conn.recv()
+                break
+            except (ConnectionClosed, BrokenPipeError, ConnectionResetError):
+                if retry == self.reset_retries:
+                    raise
+                # stderr like the supervisor's lines: SB3's tables own stdout.
+                print(f"hkrl: mod dropped the connection during reset "
+                      f"(retry {retry + 1}/{self.reset_retries}; a reset-budget "
+                      f"expiry while the game boots or unwinds is normal) -- "
+                      f"reconnecting", file=sys.stderr, flush=True)
+                self.conn.close()
+                self.conn.connect()
         self._prev = msg["obs"]
         self._steps = 0
         self._max_bhp = None

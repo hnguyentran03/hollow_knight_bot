@@ -113,3 +113,35 @@ def test_truncation_reports_boss_damage_dealt_so_far():
         env.close()
     assert done is False and truncated is True
     assert info["boss_damage_frac"] == pytest.approx(0.5)
+
+
+def test_reset_reconnects_through_the_mods_budget_expiry_drops():
+    """The mod's 22.5s reset budget is deliberately smaller than a cold
+    boot-to-fight, so each expiry drops the connection and the NEXT reset
+    ratchets forward (title menu -> bench -> statue -> fight). Those drops
+    are part of the protocol's normal rhythm and must be absorbed here by
+    reconnecting and re-sending reset; if one escapes, the vec worker dies
+    and the supervisor spends a whole rebuild -- or a relaunch-and-reboot --
+    on a game that was healthy and mid-boot."""
+    episode = [state(obs(khp=3)), state(obs())]
+    with FakeGame([episode], fail_resets=2) as fg:
+        env = HKEnv(port=fg.port)
+        o, info = env.reset()
+        # It is the post-ratchet reset's own first frame, not a stand-in.
+        assert o[4] == pytest.approx(3 / 9)
+        _, _, terminated, truncated, _ = env.step(0)
+        assert not terminated and not truncated
+        env.close()
+
+
+def test_reset_retries_are_bounded_so_a_drop_loop_still_surfaces():
+    """A game that drops every reset forever (a genuinely broken boot) must
+    still escalate to the supervisor rather than retrying silently all
+    night."""
+    from hkrl.protocol import ConnectionClosed
+
+    with FakeGame([[state(obs())]], fail_resets=99) as fg:
+        env = HKEnv(port=fg.port, reset_retries=2)
+        with pytest.raises(ConnectionClosed):
+            env.reset()
+        env.close()

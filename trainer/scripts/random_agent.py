@@ -131,6 +131,15 @@ def run_episode(env, ep_num,
             f"episode {ep_num}: mod closed the connection during reset() "
             f"after {time.monotonic() - start:.1f}s -- check the in-game "
             f"console/log for an exception") from e
+    except ConnectionRefusedError as e:
+        # reset() reconnects through the mod's budget-expiry drops (see
+        # HKEnv.reset); a refused reconnect means the game process itself is
+        # gone, not just the connection.
+        raise Wedge(
+            f"episode {ep_num}: the game went away during reset() after "
+            f"{time.monotonic() - start:.1f}s (connection dropped, then the "
+            f"reconnect was refused) -- the game process has likely exited "
+            f"or crashed") from e
 
     total, steps = 0.0, 0
     min_bhp_frac = None

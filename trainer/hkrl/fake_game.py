@@ -19,12 +19,18 @@ def state(o, done=False, won=False):
 
 
 class FakeGame:
-    def __init__(self, episodes, port=0):
+    def __init__(self, episodes, port=0, fail_resets=0):
         self.episodes = [list(ep) for ep in episodes]
         # port=0 (default) binds an ephemeral port, same as before; a caller
         # that needs to stand a fresh fake back up on a specific port (e.g.
         # simulating a relaunch) passes that port explicitly.
         self._requested_port = port
+        # The first `fail_resets` reset requests end with the connection
+        # dropped instead of a state frame -- the mod's reset-budget expiry
+        # while its boot/reset macro is still ratcheting toward the fight.
+        # The listener stays up, so a reconnecting client's next reset
+        # proceeds, exactly like the real mod.
+        self.fail_resets = fail_resets
         self.port = None
         self._srv = None
         self._thread = None
@@ -90,6 +96,10 @@ class FakeGame:
                     return
                 msg = json.loads(line)
                 if msg["type"] == "reset":
+                    if self.fail_resets > 0:
+                        self.fail_resets -= 1
+                        conn.shutdown(socket.SHUT_RDWR)
+                        return
                     ep = self.episodes.pop(0)
                     send(ep.pop(0))
                 elif msg["type"] == "action":
