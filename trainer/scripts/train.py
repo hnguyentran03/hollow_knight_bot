@@ -181,7 +181,9 @@ def main() -> None:
         print(f"game up on port {game.port}", flush=True)
         print("Keep the game window visible for the whole run: macOS suspends a "
               "fully occluded window (App Nap) with its port still open, and "
-              "every occurrence costs a full relaunch-and-reboot recovery.",
+              "every occurrence costs a full relaunch-and-reboot recovery. "
+              "Suppress display sleep for the run: caffeinate -d (in another "
+              "terminal).",
               flush=True)
         input("Bring the game to the Hall of Gods near the Hornet statue, then "
               "press Enter. (A freshly booted game can also challenge itself in "
@@ -234,7 +236,13 @@ def main() -> None:
             print("forced interrupt; attempting a final save",
                   file=sys.stderr, flush=True)
             exit_code = 130
-        if callback.model is not None:
+        # Not callback.model: in the installed SB3, BaseCallback.model is a
+        # class-level annotation only, absent until init_callback() runs, and
+        # _setup_learn() resets the env before that -- so InstanceDown (or a
+        # second Ctrl-C) during the initial reset lands here with no .model
+        # attribute at all, and a plain attribute access would raise
+        # AttributeError instead of skipping the save as intended.
+        if getattr(callback, "model", None) is not None:
             final = callback.save_generation()
             print(f"final checkpoint: {final}", flush=True)
             print(f"manifest: {run_dir / 'generations.jsonl'}", flush=True)
