@@ -83,10 +83,14 @@ class HKEnv(gym.Env):
     # longer than 10s between messages, that ceiling has to be revisited on
     # the mod side instead.
 
-    def __init__(self, host="127.0.0.1", port=9020, reward_config=None, max_steps=2700):
+    # `timeout` is the socket read deadline for every message, including the
+    # `hello` read inside connect(). It bounds how long a wedged instance can
+    # stall this env before the failure becomes visible to the supervisor.
+    def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
+                 max_steps=2700, timeout=30.0):
         self.reward = dict(DEFAULT_REWARD, **(reward_config or {}))
         self.max_steps = max_steps
-        self.conn = Connection(host=host, port=port)
+        self.conn = Connection(host=host, port=port, timeout=timeout)
         self.conn.connect()
         self._steps = 0
         self._prev = None
