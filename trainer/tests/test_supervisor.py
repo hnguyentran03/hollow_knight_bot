@@ -85,7 +85,7 @@ KHP = 4
 def _free_port():
     """Reserve and release a port so a relaunch callback can rebind to the
     exact same number, the way the real launcher keeps one fixed port per
-    instance slot (see hkrl.instances.port_for).
+    instance slot.
     """
     s = socket.socket()
     s.bind(("127.0.0.1", 0))

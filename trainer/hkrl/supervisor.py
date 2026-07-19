@@ -77,11 +77,10 @@ class SupervisedVecEnv(VecEnv):
 
     `relaunch(slot)` must synchronously (or before `wait_for_port` gives up)
     cause a fresh game process to start listening on that slot's original
-    port -- e.g. trainer/scripts/launch_instances.launch() against
-    hkrl.instances.port_for(slot). SupervisedVecEnv itself only decides
-    *which* slot needs relaunching and waits for the result; it has no home
-    directory or app path to launch a replacement with, so that stays the
-    caller's job.
+    port -- e.g. trainer/scripts/launch_instances.launch() against the port
+    that slot was built with. SupervisedVecEnv itself only decides *which*
+    slot needs relaunching and waits for the result; it has no app path to
+    launch a replacement with, so that stays the caller's job.
 
     `relaunch(slot)` must also terminate and reap whatever currently holds
     that port BEFORE starting the replacement -- launch_instances.shutdown()

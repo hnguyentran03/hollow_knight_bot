@@ -1,4 +1,8 @@
-"""Vectorized environment over several game instances."""
+"""Vectorized environment over one game instance per port.
+
+Training runs a single instance today, so `ports` is normally one long; PPO
+needs a VecEnv either way.
+"""
 from typing import Callable, Sequence
 
 from stable_baselines3.common.vec_env import SubprocVecEnv
