@@ -66,6 +66,11 @@ def launch(port: int, app: Path, visible: bool) -> subprocess.Popen:
         env=env,
         stdout=subprocess.DEVNULL if not visible else None,
         stderr=subprocess.DEVNULL if not visible else None,
+        # A new session detaches the game from the terminal's process group:
+        # Ctrl-C at the trainer must interrupt the trainer alone, not kill
+        # the game out from under the supervisor and the final checkpoint
+        # save. shutdown() is the one intended kill path.
+        start_new_session=True,
     )
 
 

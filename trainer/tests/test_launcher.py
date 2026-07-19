@@ -1,3 +1,4 @@
+import os
 import pathlib
 import socket
 import subprocess
@@ -104,3 +105,17 @@ def test_shutdown_kills_a_child_that_ignores_sigterm():
         assert elapsed < 5.0
     finally:
         proc.stdout.close()
+
+
+def test_launch_starts_the_game_in_its_own_process_group(tmp_path):
+    # A game in the terminal's process group would receive the operator's
+    # Ctrl-C directly and die out from under the supervisor mid-save; the
+    # only intended kill path is shutdown().
+    app = tmp_path / "fake_game"
+    app.write_text("#!/bin/sh\nsleep 30\n")
+    app.chmod(0o755)
+    proc = launch_instances.launch(9020, app=app, visible=False)
+    try:
+        assert os.getpgid(proc.pid) != os.getpgid(os.getpid())
+    finally:
+        launch_instances.shutdown([proc])
