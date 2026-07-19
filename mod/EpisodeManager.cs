@@ -538,6 +538,22 @@ namespace HKRLBot
         // one-shot -- fired too early it is swallowed and never retried.
         private static float workshopEnteredAt = -1f;
 
+        // True once the knight is known to be outside the statue's trigger
+        // this reset, so walking back in will fire a trigger-enter.
+        //
+        // Returning from a death respawns the knight already standing on the
+        // statue. The interact prompt arms on trigger-enter, so a knight that
+        // never entered has no prompt for the challenge press to act on and the
+        // macro pulses into nothing until its budget expires. Stepping off and
+        // walking back in re-arms it -- the same path a reset that starts away
+        // from the statue takes, which is the case that has always worked.
+        private static bool statueTriggerRearmed;
+
+        // How far to step off before walking back in. Comfortably outside the
+        // deadband so the return walk is a real trigger-enter, short enough to
+        // cost well under a second at walking speed.
+        private const float StepOffDistance = 2.5f;
+
         // How long after entering GG_Workshop to wait before pressing Up.
         // Costs a fixed delay on every statue reset, well inside
         // ResetMacroBudgetSeconds, and buys immunity to the fade-in eating the
@@ -552,6 +568,7 @@ namespace HKRLBot
             statueMenuLatched = false;
             statueMenuEnteredAt = -1f;
             workshopEnteredAt = -1f;
+            statueTriggerRearmed = false;
         }
 
         // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
@@ -602,6 +619,7 @@ namespace HKRLBot
             {
                 statueMenuLatched = false;
                 workshopEnteredAt = -1f;
+                statueTriggerRearmed = false;
             }
             else if (workshopEnteredAt < 0f)
             {
@@ -659,7 +677,10 @@ namespace HKRLBot
                     // backstop gives up and logs branch='statue-menu' as the
                     // last attempted branch.
                     bool settled = elapsed - workshopEnteredAt >= WorkshopSettleSeconds;
-                    if (!statueMenuLatched && settled && Mathf.Abs(k.X - StatueX) <= 0.5f)
+                    if (Mathf.Abs(k.X - StatueX) >= StepOffDistance) statueTriggerRearmed = true;
+
+                    if (!statueMenuLatched && settled && statueTriggerRearmed
+                        && Mathf.Abs(k.X - StatueX) <= 0.5f)
                     {
                         statueMenuLatched = true;
                         statueMenuEnteredAt = elapsed;
@@ -671,6 +692,12 @@ namespace HKRLBot
                         // pressing Up now would be swallowed, and walking now
                         // can drift the knight off the statue.
                         branch = "workshop-settling";
+                    }
+                    else if (!statueTriggerRearmed)
+                    {
+                        // Walk away from the statue until clear of its trigger.
+                        branch = "step-off-statue";
+                        b.Left = true;
                     }
                     else if (!statueMenuLatched)
                     {
