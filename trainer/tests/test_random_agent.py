@@ -261,3 +261,19 @@ def test_no_heartbeat_for_normal_speed_episode(capsys):
 
     err = capsys.readouterr().err
     assert "still waiting" not in err
+
+
+def test_summaries_and_final_line_report_boss_damage(capsys):
+    ep1 = [state(obs(bhp=900), attempt=1), state(obs(bhp=675), done=True, attempt=1)]
+    ep2 = [state(obs(bhp=900), attempt=2), state(obs(bhp=450), done=True, attempt=2)]
+    with FakeGame([ep1, ep2]) as fg:
+        env = HKEnv(port=fg.port)
+        summaries = random_agent.run(env, episodes=2)
+        random_agent._print_final_summary(summaries, 2)
+        env.close()
+
+    assert summaries[0]["boss_damage_frac"] == pytest.approx(0.25)
+    assert summaries[1]["boss_damage_frac"] == pytest.approx(0.50)
+    out = capsys.readouterr().out
+    assert "boss_dmg=" in out
+    assert "mean boss damage: 37.5%" in out

@@ -156,6 +156,16 @@ class HKEnv(gym.Env):
         self._prev = cur
         self._steps += 1
         truncated = not done and self._steps >= self.max_steps
+        if done or truncated:
+            # Fraction of the boss's starting HP removed this episode. Lives
+            # in terminal info so the random-agent exploration gate and the
+            # per-generation training manifest read the same measurement.
+            # _max_bhp was pinned by reset()'s _flatten to the first frame's
+            # reading (the fight's starting HP); taking the max with the
+            # current frame keeps the fraction non-negative if a frame ever
+            # reports more than that baseline.
+            max_bhp = max(self._max_bhp or 1, cur["bhp"], 1)
+            info["boss_damage_frac"] = (max_bhp - cur["bhp"]) / max_bhp
         return self._flatten(cur), reward, done, truncated, info
 
     def close(self):

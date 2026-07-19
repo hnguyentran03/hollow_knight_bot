@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from hkrl.env import ACTIONS, DEFAULT_REWARD, HKEnv
 from hkrl.fake_game import FakeGame, obs, state
@@ -66,3 +67,49 @@ def test_truncation_at_max_steps():
         assert truncated is True, "truncated should be True when max_steps is reached"
         assert terminated is False, "terminated should be False for a truncation (not a real terminal state)"
         env.close()
+
+
+def test_terminal_step_reports_boss_damage_fraction():
+    episode = [state(obs(bhp=900)), state(obs(bhp=675), done=True)]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        _, _, done, _, info = env.step(0)
+        env.close()
+    assert done is True
+    assert info["boss_damage_frac"] == pytest.approx(0.25)
+
+
+def test_win_reports_full_boss_damage():
+    episode = [state(obs(bhp=900)), state(obs(bhp=0), done=True, won=True)]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        _, _, _, _, info = env.step(0)
+        env.close()
+    assert info["boss_damage_frac"] == pytest.approx(1.0)
+
+
+def test_mid_episode_steps_do_not_carry_boss_damage():
+    episode = [state(obs(bhp=900)), state(obs(bhp=800)), state(obs(bhp=700), done=True)]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        _, _, _, _, mid_info = env.step(0)
+        _, _, _, _, end_info = env.step(0)
+        env.close()
+    assert "boss_damage_frac" not in mid_info
+    assert end_info["boss_damage_frac"] == pytest.approx(200 / 900)
+
+
+def test_truncation_reports_boss_damage_dealt_so_far():
+    # No done=True frame: max_steps=1 forces truncation after one step, and
+    # the damage dealt up to that point must still be reported.
+    episode = [state(obs(bhp=900)), state(obs(bhp=450))]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, max_steps=1)
+        env.reset()
+        _, _, done, truncated, info = env.step(0)
+        env.close()
+    assert done is False and truncated is True
+    assert info["boss_damage_frac"] == pytest.approx(0.5)

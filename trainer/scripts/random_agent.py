@@ -162,12 +162,15 @@ def run_episode(env, ep_num,
     won = bool(info.get("won", False))
     result = "WIN" if won else ("TIMEOUT" if truncated else "loss")
     bhp_str = "?" if min_bhp_frac is None else f"{min_bhp_frac * 100:5.1f}%"
+    boss_damage_frac = float(info.get("boss_damage_frac", 0.0))
     summary = dict(episode=ep_num, attempt=info.get("attempt"), steps=steps,
                     reward=total, won=won, truncated=truncated,
                     terminated=terminated, min_bhp_frac=min_bhp_frac,
+                    boss_damage_frac=boss_damage_frac,
                     wall_s=elapsed, scene=info.get("scene"))
     print(f"episode {ep_num:3d} (attempt {info.get('attempt')}): "
           f"result={result:7s} steps={steps:4d} reward={total:8.2f} "
+          f"boss_dmg={boss_damage_frac * 100:5.1f}% "
           f"boss_hp_min={bhp_str} wall={elapsed:5.1f}s scene={info.get('scene')}",
           file=out, flush=True)
     return summary
@@ -212,6 +215,9 @@ def _print_final_summary(summaries, requested, out=None):
     attempts = [s["attempt"] for s in summaries]
     print(f"\n{n}/{requested} episodes completed, {wins} won, "
           f"attempts seen: {attempts}", file=out, flush=True)
+    damage = [s["boss_damage_frac"] for s in summaries]
+    mean_damage = sum(damage) / len(damage) if damage else 0.0
+    print(f"mean boss damage: {mean_damage * 100:.1f}%", file=out, flush=True)
 
 
 def main():
