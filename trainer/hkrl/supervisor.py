@@ -4,9 +4,10 @@ A wedged instance, a crashed instance process, and a game that launches but
 never accepts a connection are all indistinguishable from here: each one
 surfaces as a socket error (or, once a worker subprocess dies from an
 uncaught one, an EOFError on its pipe -- see the note on RECOVERABLE below).
-All three resolve the same way: relaunch that slot, wait for it to answer at
-the protocol layer, and rebuild the vec so training continues instead of the
-whole run dying with it.
+All three resolve the same way: relaunch that slot, wait for its bridge to
+greet a probe connection (see _port_ready for what that does and does not
+prove), and rebuild the vec so training continues instead of the whole run
+dying with it.
 
 Recovery itself can fail, so it is retried: each attempt relaunches whatever
 is not answering, rebuilds, and resets, and only once the attempt budget is
@@ -58,8 +59,8 @@ class SupervisedVecEnv(VecEnv):
 
     A VecEnv subclass, not a plain wrapper: BaseAlgorithm._wrap_env checks
     `isinstance(env, VecEnv)` and otherwise buries the object under
-    Monitor+DummyVecEnv, where this class's step() -- the only place recovery
-    happens -- would no longer be the one SB3 calls.
+    Monitor+DummyVecEnv, where this class's step_async/step_wait -- the only
+    place recovery happens -- would no longer be the ones SB3 calls.
 
     `relaunch(slot)` must synchronously (or before `wait_for_port` gives up)
     cause a fresh game process to start listening on that slot's original
@@ -74,10 +75,11 @@ class SupervisedVecEnv(VecEnv):
         self,
         ports: Sequence[int],
         relaunch: Callable[[int], None],
-        wait_for_port: Callable[[int], None] = _wait_for_port,
+        wait_for_port: Callable[..., None] = _wait_for_port,
         recover_attempts: int = 3,
         recover_delay: float = 2.0,
         probe_timeout: float = 2.0,
+        launch_timeout: float = 120.0,
         ready_timeout: float = 30.0,
         **env_kwargs,
     ):
@@ -87,9 +89,23 @@ class SupervisedVecEnv(VecEnv):
         self.recover_attempts = recover_attempts
         self.recover_delay = recover_delay
         self.probe_timeout = probe_timeout
+        # Two separate budgets, both per attempt: launch_timeout covers cold
+        # game start up to the bridge's first accept (a real Hollow Knight
+        # launch is tens of seconds, which is why it is far larger than the
+        # others), ready_timeout covers accept -> hello. Worst-case time for
+        # one abandoned recovery is recover_attempts * len(ports) *
+        # (launch_timeout + ready_timeout).
+        self.launch_timeout = launch_timeout
         self.ready_timeout = ready_timeout
         self.env_kwargs = env_kwargs
         self._vec = None
+        # Reset arguments live here rather than only on the inner vec, which
+        # recovery throws away and rebuilds; _apply_pending replays them onto
+        # whatever vec is current. Declared before _build_vec because that
+        # call reads them.
+        self._pending_seed = None
+        self._pending_options = None
+        self._recovered_async = False
         # No reset here: construction only opens the connections, leaving the
         # first reset to the caller the way a plain SubprocVecEnv does.
         self._build_vec(reset=False)
@@ -102,24 +118,60 @@ class SupervisedVecEnv(VecEnv):
     # -- VecEnv API --
 
     def reset(self):
-        return self._live().reset()
+        vec = self._live()
+        self._recovered_async = False
+        self._apply_pending(vec)
+        obs = vec.reset()
+        self._consume_pending(vec)
+        return obs
 
-    def step(self, actions):
-        # Overrides VecEnv.step (step_async + step_wait) rather than
-        # implementing recovery in step_wait: a broken slot can raise from
-        # either half, and recovery replaces the vec both were issued
-        # against, so the pair has to be recovered as one unit.
+    # Recovery lives in step_async/step_wait, not in an overridden step():
+    # VecEnvWrapper.step() is `step_async(); return self.venv.step_wait()`, so
+    # a step() override is bypassed entirely the moment this object is wrapped
+    # in VecFrameStack/VecNormalize/VecMonitor -- the configuration it is
+    # built for. Both halves are guarded because a broken slot can raise from
+    # either, and recovery replaces the vec both were issued against, so an
+    # attempt that recovers during step_async must not then wait on the dead
+    # vec's in-flight step: _recovered_async carries the fallback result to
+    # step_wait instead.
+
+    def step_async(self, actions):
         try:
-            return self._live().step(actions)
+            self._live().step_async(actions)
+        except RECOVERABLE:
+            self._recover()
+            self._recovered_async = True
+
+    def step_wait(self):
+        if self._recovered_async:
+            self._recovered_async = False
+            return self._recovery_step_result()
+        try:
+            vec = self._live()
+            result = vec.step_wait()
         except RECOVERABLE:
             self._recover()
             return self._recovery_step_result()
+        self.reset_infos = list(vec.reset_infos)
+        return result
 
-    def step_async(self, actions):
-        self._live().step_async(actions)
+    def seed(self, seed=None):
+        # VecEnv.seed only records into self._seeds, but reset() runs on the
+        # inner SubprocVecEnv, which reads its own -- so recording alone makes
+        # PPO(..., seed=N) a silent no-op. super() supplies the per-env
+        # seed+idx expansion, and passing seed back down reproduces the exact
+        # same list inside the inner vec (same formula, same num_envs).
+        seeds = super().seed(seed)
+        self._pending_seed = seeds[0]
+        self._live().seed(self._pending_seed)
+        return seeds
 
-    def step_wait(self):
-        return self._live().step_wait()
+    def set_options(self, options=None):
+        # Same split as seed(): recorded here for the VecEnv contract, pushed
+        # down because the inner vec's reset() is what actually reads them.
+        super().set_options(options)
+        self._pending_options = self._options
+        self._live().set_options(self._pending_options)
 
     def get_attr(self, attr_name, indices=None):
         return self._live().get_attr(attr_name, indices)
@@ -163,15 +215,21 @@ class SupervisedVecEnv(VecEnv):
         return self._vec
 
     def _recover(self) -> None:
-        # The old vec is torn down first: probing a port opens a connection,
-        # and the mod's AcceptLoop (mod/BridgeServer.cs) drops its previous
-        # client whenever a new one connects, so probing while the old vec
-        # still holds connections would break the very slots being tested.
-        self._drop_vec()
         forced: set = set()
         failure = None
         for attempt in range(1, self.recover_attempts + 1):
             try:
+                # Inside the loop, so a raise from _force_close's
+                # join/terminate is a failed attempt like any other rather
+                # than escaping recovery. Idempotent: a no-op once self._vec
+                # is None, which it is from the second attempt on.
+                #
+                # Runs before the probes because probing a port opens a
+                # connection, and the mod's AcceptLoop (mod/BridgeServer.cs)
+                # drops its previous client whenever a new one connects, so
+                # probing while the old vec still holds connections would
+                # break the very slots being tested.
+                self._drop_vec()
                 self._ensure_ready(forced)
                 self._build_vec(reset=True)
                 return
@@ -204,7 +262,7 @@ class SupervisedVecEnv(VecEnv):
             if slot in forced or not _port_ready(port, self.probe_timeout):
                 try:
                     self.relaunch(slot)
-                    self.wait_for_port(port)
+                    self.wait_for_port(port, timeout=self.launch_timeout)
                     _wait_until_ready(port, self.probe_timeout, self.ready_timeout)
                 except Exception as exc:
                     raise _RecoveryFailed(
@@ -234,11 +292,31 @@ class SupervisedVecEnv(VecEnv):
             # is also the only check that reaches every slot: the constructor
             # verifies slot 0 alone.
             if reset:
+                self._apply_pending(vec)
                 vec.reset()
+                self._consume_pending(vec)
         except Exception:
             _force_close(vec)
             raise
         self._vec = vec
+
+    def _apply_pending(self, vec: SubprocVecEnv) -> None:
+        # A rebuilt vec starts with no seed or options, so anything the caller
+        # set before the failure has to be replayed onto it before its reset.
+        if self._pending_seed is not None:
+            vec.seed(self._pending_seed)
+        if self._pending_options is not None:
+            vec.set_options(self._pending_options)
+
+    def _consume_pending(self, vec: SubprocVecEnv) -> None:
+        # VecEnv.reset() is defined to consume seed/options, so they are
+        # cleared on both objects at once; reset_infos is copied back up
+        # because callers read it off this object, not the inner vec.
+        self.reset_infos = list(vec.reset_infos)
+        self._reset_seeds()
+        self._reset_options()
+        self._pending_seed = None
+        self._pending_options = None
 
     def _drop_vec(self) -> None:
         if self._vec is not None:
@@ -250,17 +328,38 @@ class SupervisedVecEnv(VecEnv):
         obs = np.zeros((n,) + self.observation_space.shape, dtype=np.float32)
         rewards = np.zeros(n, dtype=np.float32)
         dones = np.ones(n, dtype=bool)
-        infos = [{} for _ in range(n)]
+        # terminal_observation is part of SB3's done-step contract: VecFrameStack
+        # (and anything else that resets per-env buffers on done) reads it, and
+        # warns when a wrapped vec omits it.
+        infos = [{"terminal_observation": obs[i]} for i in range(n)]
         return obs, rewards, dones, infos
 
 
 def _port_ready(port: int, timeout: float, host: str = "127.0.0.1") -> bool:
-    """True only if the instance answers at the protocol layer.
+    """True if the bridge's accept thread is alive enough to greet a client.
 
-    A TCP connect alone cannot tell a healthy instance from a wedged one: the
-    mod's AcceptLoop runs on its own thread and keeps accepting no matter what
-    the game is stuck on. The bridge sends its `hello` line immediately on
-    accept, so requiring that line is what separates the two.
+    This is a bridge-thread probe, NOT a game-liveness probe. In
+    mod/BridgeServer.cs the same background AcceptLoop that accepts also
+    writes `hello` inline under `gate`, before any game code runs, so the
+    line proves only that the process exists, the listener is up, and `gate`
+    is free. It says nothing about the Unity main thread: an instance whose
+    LateUpdate has stopped calling ReadMessage/SendState still greets this
+    probe and still fails every subsequent step.
+
+    What it does catch: a dead/absent process (no connect), a bridge that has
+    not finished starting (connect but no hello), and the gate-stalled
+    variant where an unbounded SendState write to a peer that stopped
+    draining blocks AcceptLoop (connect, hello never arrives).
+
+    A truthful main-thread probe is not reachable from here. The only wire
+    message the main thread answers is `reset` (EpisodeManager.LateUpdate);
+    driving one costs a full ResetMacro cycle (ResetMacroBudgetSeconds is
+    22.5s) and leaves the game mid-reset when the probe disconnects, so the
+    real reset that follows has to unwind a live fight. A cheap probe would
+    need a no-op ping the mod answers from LateUpdate, which is a mod-side
+    protocol change. Until then the frozen-main-thread case is detected one
+    layer up: _build_vec's reset fails, and _recover's generic handler
+    relaunches every slot because the failing one is not identifiable.
     """
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:

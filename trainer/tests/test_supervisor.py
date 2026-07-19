@@ -1,29 +1,39 @@
+import json
 import socket
 import threading
 
 import pytest
+from gymnasium.utils import seeding
 from stable_baselines3.common.base_class import BaseAlgorithm
-from stable_baselines3.common.vec_env import VecEnv
+from stable_baselines3.common.vec_env import VecEnv, VecFrameStack
 
 from hkrl.fake_game import FakeGame, obs, state
-from hkrl.supervisor import InstanceDown, SupervisedVecEnv
+from hkrl.supervisor import InstanceDown, SupervisedVecEnv, _port_ready
 
 # Every test drives real sockets. These keep a failed recovery bounded in
 # wall-clock time without stubbing out any of the code path under test.
-FAST = dict(recover_attempts=2, recover_delay=0.0,
-            probe_timeout=0.3, ready_timeout=1.0, timeout=0.5)
+FAST = dict(recover_attempts=2, recover_delay=0.0, probe_timeout=0.3,
+            launch_timeout=1.0, ready_timeout=1.0, timeout=0.5)
 
 
 class WedgedGame:
-    """A game that accepts TCP connections and then answers nothing.
+    """A game whose bridge thread still accepts while the game is stuck.
 
-    Models the failure the mod's threading makes possible: BridgeServer's
-    AcceptLoop runs independently of the game, so a wedged instance still
-    completes the TCP handshake while never producing a `hello` or a state.
+    Models both shapes the mod's threading makes possible, because they are
+    not equally detectable:
+
+    - hello=False: BridgeServer's AcceptLoop itself is stalled (an unbounded
+      SendState write holding `gate`), so a connection is accepted and then
+      nothing at all comes back -- not even the greeting.
+    - hello=True: the canonical wedge. The Unity main thread is frozen, so
+      EpisodeManager.LateUpdate never reads an action or sends a state, but
+      AcceptLoop is a separate thread that greets every client inline. This
+      one passes _port_ready and can only be caught by the failing rebuild.
     """
 
-    def __init__(self, port):
+    def __init__(self, port, hello=False):
         self._port = port
+        self._hello = hello
         self._conns = []
 
     def __enter__(self):
@@ -47,6 +57,13 @@ class WedgedGame:
             except OSError:
                 return
             self._conns.append(conn)  # held open, deliberately unanswered
+            if self._hello:
+                try:
+                    conn.sendall(
+                        json.dumps({"type": "hello", "version": 1}).encode() + b"\n"
+                    )
+                except OSError:
+                    return
 
 
 def _episode(steps=50):
@@ -212,6 +229,115 @@ def test_a_relaunch_that_fails_once_is_retried_rather_than_ending_the_run():
             fg.__exit__(None, None, None)
 
 
+def test_a_frozen_main_thread_passes_the_probe_and_is_caught_by_the_rebuild():
+    port_a, port_b = _free_port(), _free_port()
+    relaunched = []
+    live = {}
+
+    def relaunch(slot):
+        relaunched.append(slot)
+        port = (port_a, port_b)[slot]
+        live.pop(slot).__exit__(None, None, None)
+        live[slot] = FakeGame([_episode(), _episode()], port=port).__enter__()
+
+    live[0] = FakeGame([_episode()], port=port_a).__enter__()
+    live[1] = FakeGame([_episode(), _episode(), _episode()], port=port_b).__enter__()
+    try:
+        vec = SupervisedVecEnv([port_a, port_b], relaunch=relaunch, **FAST)
+        try:
+            vec.reset()
+            # Instance 0's Unity main thread freezes: EpisodeManager stops
+            # serving the protocol while BridgeServer's separate accept thread
+            # keeps greeting clients.
+            live.pop(0).__exit__(None, None, None)
+            live[0] = WedgedGame(port_a, hello=True).__enter__()
+            # The probe is a bridge-thread check, not a liveness check: this
+            # instance answers it and is therefore NOT singled out below.
+            assert _port_ready(port_a, 0.3) is True
+
+            _, _, dones, _ = vec.step([0, 0])
+            assert dones.tolist() == [True, True]
+            # First attempt relaunched nothing (both slots greeted the probe);
+            # its rebuild reset then failed on the frozen slot, and because
+            # SubprocVecEnv cannot say which slot died, the second attempt
+            # relaunched every slot -- including the healthy survivor.
+            assert relaunched == [0, 1]
+
+            _, _, dones, _ = vec.step([0, 0])
+            assert dones.tolist() == [False, False]
+        finally:
+            vec.close()
+    finally:
+        for game in live.values():
+            game.__exit__(None, None, None)
+
+
+def test_recovery_still_runs_when_wrapped_in_an_sb3_vec_wrapper():
+    """VecEnvWrapper.step() is step_async() + venv.step_wait(), so recovery
+    has to live in that pair, not in an overridden step() the wrapper skips.
+    """
+    port_a, port_b = _free_port(), _free_port()
+    spawned = []
+
+    def relaunch(slot):
+        assert slot == 0
+        spawned.append(FakeGame([_episode()], port=port_a).__enter__())
+
+    a = FakeGame([_episode()], port=port_a).__enter__()
+    b = FakeGame([_episode(), _episode()], port=port_b).__enter__()
+    try:
+        vec = SupervisedVecEnv([port_a, port_b], relaunch=relaunch, **FAST)
+        stacked = VecFrameStack(vec, n_stack=4)
+        try:
+            stacked.reset()
+            a.__exit__(None, None, None)
+
+            step_obs, _, dones, _ = stacked.step([0, 0])
+            assert spawned  # recovery ran through the wrapper's step path
+            assert dones.tolist() == [True, True]
+            assert step_obs.shape == (2, 4 * vec.observation_space.shape[0])
+
+            step_obs, _, dones, _ = stacked.step([0, 0])
+            assert dones.tolist() == [False, False]
+        finally:
+            stacked.close()
+    finally:
+        b.__exit__(None, None, None)
+        for fg in spawned:
+            fg.__exit__(None, None, None)
+
+
+def test_seed_and_options_reach_the_inner_envs():
+    port_a, port_b = _free_port(), _free_port()
+    a = FakeGame([_episode()], port=port_a).__enter__()
+    b = FakeGame([_episode()], port=port_b).__enter__()
+    try:
+        vec = SupervisedVecEnv([port_a, port_b], relaunch=lambda slot: None,
+                               **FAST)
+        try:
+            assert vec.seed(123) == [123, 124]
+            vec.set_options({"note": "x"})
+            vec.reset()
+
+            # Each env really was reset with its own seed: gym.Env.reset seeds
+            # self.np_random, so an identically seeded generator draws the
+            # same numbers.
+            expected = [seeding.np_random(s)[0].integers(0, 10 ** 9)
+                        for s in (123, 124)]
+            drawn = [rng.integers(0, 10 ** 9)
+                     for rng in vec.get_attr("np_random")]
+            assert drawn == expected
+            # Consumed by that reset, on this object and the inner vec alike.
+            assert vec._seeds == [None, None]
+            assert vec._vec._seeds == [None, None]
+            assert vec._vec._options == [{}, {}]
+        finally:
+            vec.close()
+    finally:
+        a.__exit__(None, None, None)
+        b.__exit__(None, None, None)
+
+
 def test_sb3_accepts_it_as_a_vec_env_and_keeps_the_recovery_step():
     port_a, port_b = _free_port(), _free_port()
     a = FakeGame([_episode()], port=port_a).__enter__()
@@ -223,10 +349,12 @@ def test_sb3_accepts_it_as_a_vec_env_and_keeps_the_recovery_step():
             assert isinstance(vec, VecEnv)
             # _wrap_env is what PPO(...) runs on whatever it is handed; it
             # must return this object untouched, or Monitor+DummyVecEnv would
-            # take over and step() below would no longer be the recovery one.
+            # take over and the stepping pair below would no longer be the
+            # recovering one.
             wrapped = BaseAlgorithm._wrap_env(vec, verbose=0)
             assert wrapped is vec
-            assert type(wrapped).step is SupervisedVecEnv.step
+            assert type(wrapped).step_async is SupervisedVecEnv.step_async
+            assert type(wrapped).step_wait is SupervisedVecEnv.step_wait
             assert wrapped.num_envs == 2
         finally:
             vec.close()
