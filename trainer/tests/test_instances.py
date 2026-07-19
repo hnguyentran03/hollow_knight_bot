@@ -37,3 +37,19 @@ def test_provision_is_idempotent_and_preserves_progress(tmp_path):
     # Re-provisioning must not clobber a save that has since diverged --
     # relaunching instances between training runs is routine.
     assert (saves / "user1_1.5.12620.dat").read_text() == "progressed"
+
+
+def test_provision_recovers_from_interrupted_first_seed(tmp_path):
+    seed = _seed(tmp_path)
+    home = instance_home(3, tmp_path)
+    saves = home / UNITY_SAVE_SUBPATH
+    saves.mkdir(parents=True)
+    (saves / "user1_1.5.12620.dat").write_text("save")
+    # shared.dat is absent -- this is the state a copy loop killed partway
+    # through leaves behind.
+
+    result = provision(3, root=tmp_path, seed_from=seed)
+
+    assert result == home
+    assert (saves / "user1_1.5.12620.dat").read_text() == "save"
+    assert (saves / "shared.dat").read_text() == "shared"
