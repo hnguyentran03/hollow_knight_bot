@@ -311,7 +311,16 @@ class SupervisedVecEnv(VecEnv):
                 # probing while the old vec still holds connections would
                 # break the very slots being tested.
                 self._drop_vec()
-                relaunched |= self._ensure_ready(forced)
+                newly = self._ensure_ready(forced)
+                relaunched |= newly
+                # A slot just relaunched is booting through multiple reset
+                # budgets (see the generic-failure branch below); forcing it
+                # again next attempt would restart that boot from the title
+                # screen every time, so recovery could never converge. Once
+                # relaunched this recovery, a slot is only retried, not
+                # re-forced -- until the generic handler re-forces every slot
+                # because the failing one is unidentifiable.
+                forced -= newly
                 self._build_vec(reset=True)
                 _log(f"attempt {attempt} succeeded; vec rebuilt and reset, training resumes")
                 self.recoveries += 1

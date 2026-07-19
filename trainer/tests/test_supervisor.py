@@ -584,6 +584,73 @@ def test_a_relaunched_game_still_booting_is_retried_without_another_relaunch():
             fg.__exit__(None, None, None)
 
 
+def test_a_relaunched_wedge_is_retried_through_its_boot_without_a_second_relaunch():
+    """Pins the `forced` set being pruned after a successful relaunch.
+
+    The wedge (frozen main thread) passes the readiness probe, so its first
+    failed attempt escalates to force-relaunching every slot (the failing one
+    is unidentifiable). If the relaunched slot stayed in `forced` afterward,
+    the next attempt would force-relaunch it again while it is still booting
+    through its reset-budget ratchet, which would restart the boot from the
+    title screen every time -- recovery could never converge, and this test
+    would end in InstanceDown instead of a second relaunch call."""
+    port = _free_port()
+    relaunched = []
+    spawned = []
+    wedged = {}
+
+    def relaunch(slot):
+        assert slot == 0
+        relaunched.append(slot)
+        if 0 in wedged:
+            wedged.pop(0).__exit__(None, None, None)
+        elif spawned:
+            spawned[-1].__exit__(None, None, None)
+        # The replacement behaves like a real relaunch: its first reset ends
+        # in a budget-expiry drop (still booting through menus), and only
+        # the next reset serves.
+        spawned.append(
+            BootingGame(port, [_episode(khp=3)], fail_resets=1).__enter__()
+        )
+
+    a = FakeGame([_episode()], port=port).__enter__()
+    try:
+        vec = SupervisedVecEnv([port], relaunch=relaunch,
+                                **{**FAST, "recover_attempts": 3})
+        try:
+            vec.reset()
+            # The Unity main thread freezes: the bridge's separate accept
+            # thread keeps greeting probes while reset/step go unanswered.
+            a.__exit__(None, None, None)
+            wedged[0] = WedgedGame(port, hello=True).__enter__()
+            assert _port_ready(port, 0.3) is True
+
+            step_obs, _, dones, _ = vec.step([0])
+            # Attempt 1: nothing forced yet (the wedge passes the probe);
+            # the rebuild's reset fails, and the unidentifiable failure
+            # escalates to force-relaunch every slot.
+            # Attempt 2: the forced relaunch replaces the wedge; the
+            # replacement's first reset fails (still booting) -- a generic
+            # failure with something relaunched this recovery, so it is
+            # retried WITHOUT forcing another relaunch.
+            # Attempt 3: the same replacement, past its budget expiry now,
+            # serves the reset for real.
+            assert relaunched == [0]
+            assert dones.tolist() == [True]
+            assert step_obs[0, KHP] == pytest.approx(3 / 9, abs=1e-6)
+            assert vec.recoveries == 1
+
+            _, _, dones, _ = vec.step([0])
+            assert dones.tolist() == [False]
+        finally:
+            vec.close()
+    finally:
+        for fg in spawned:
+            fg.__exit__(None, None, None)
+        if wedged:
+            wedged[0].__exit__(None, None, None)
+
+
 class SuspendedGame:
     """A game the OS has suspended (App Nap): the connection it was serving
     goes permanently silent without closing, and although the kernel keeps
