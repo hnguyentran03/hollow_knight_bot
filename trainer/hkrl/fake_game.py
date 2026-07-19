@@ -19,15 +19,24 @@ def state(o, done=False, won=False):
 
 
 class FakeGame:
-    def __init__(self, episodes):
+    def __init__(self, episodes, port=0):
         self.episodes = [list(ep) for ep in episodes]
+        # port=0 (default) binds an ephemeral port, same as before; a caller
+        # that needs to stand a fresh fake back up on a specific port (e.g.
+        # simulating a relaunch) passes that port explicitly.
+        self._requested_port = port
         self.port = None
         self._srv = None
         self._thread = None
+        self._conn = None
 
     def __enter__(self):
         self._srv = socket.socket()
-        self._srv.bind(("127.0.0.1", 0))
+        # Rebinding to the same port right after a previous FakeGame closed
+        # it (the relaunch-on-the-same-port scenario) would otherwise race
+        # the OS reclaiming the address.
+        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._srv.bind(("127.0.0.1", self._requested_port))
         self._srv.listen(1)
         self.port = self._srv.getsockname()[1]
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -35,10 +44,37 @@ class FakeGame:
         return self
 
     def __exit__(self, *exc):
+        # Closes the listener and, if one is currently accepted, the live
+        # connection too -- so a mid-episode __exit__ reproduces a real
+        # instance dying: the client's next send/recv fails immediately
+        # instead of after a 30s socket timeout. shutdown() is required, not
+        # just close(): _serve's makefile("rwb") holds its own reference to
+        # the same socket, so close() alone only drops our reference count
+        # and the fd stays open -- and the connection alive -- until the
+        # serving thread's file object is closed too. shutdown() acts on the
+        # OS socket directly, independent of that refcount.
         self._srv.close()
+        if self._conn is not None:
+            try:
+                self._conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            self._conn.close()
 
     def _run(self):
-        conn, _ = self._srv.accept()
+        # Mirrors mod/BridgeServer.cs's AcceptLoop: accept connections in a
+        # loop for as long as the listener is open, dropping the previous
+        # client whenever a new one connects, rather than serving exactly
+        # one connection for the fake's whole lifetime.
+        while True:
+            try:
+                conn, _ = self._srv.accept()
+            except OSError:
+                return  # listener closed; nothing left to accept
+            self._conn = conn
+            self._serve(conn)
+
+    def _serve(self, conn):
         try:
             f = conn.makefile("rwb")
 
@@ -58,5 +94,7 @@ class FakeGame:
                     send(ep.pop(0))
                 elif msg["type"] == "action":
                     send(ep.pop(0))
+        except OSError:
+            return
         finally:
             conn.close()
