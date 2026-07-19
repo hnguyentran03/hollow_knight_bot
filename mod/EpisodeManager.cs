@@ -531,6 +531,19 @@ namespace HKRLBot
         // only navigate away from it.
         private static float statueMenuEnteredAt = -1f;
 
+        // ElapsedSeconds timestamp at which GG_Workshop became the active
+        // scene; -1f means "not currently in Workshop". The challenge press is
+        // held off until WorkshopSettleSeconds past this, because the scene
+        // does not accept input during its load/fade-in and the press is a
+        // one-shot -- fired too early it is swallowed and never retried.
+        private static float workshopEnteredAt = -1f;
+
+        // How long after entering GG_Workshop to wait before pressing Up.
+        // Costs a fixed delay on every statue reset, well inside
+        // ResetMacroBudgetSeconds, and buys immunity to the fade-in eating the
+        // one press that opens the menu.
+        private const float WorkshopSettleSeconds = 1.5f;
+
         public static void Reset()
         {
             resetStartTime = Time.unscaledTime;
@@ -538,6 +551,7 @@ namespace HKRLBot
             lastHeartbeatElapsed = 0f;
             statueMenuLatched = false;
             statueMenuEnteredAt = -1f;
+            workshopEnteredAt = -1f;
         }
 
         // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
@@ -555,13 +569,17 @@ namespace HKRLBot
         private const float RetryPulseSeconds = 0.2f;
         private const float RetryPulsePeriodSeconds = 2.0f;
 
-        // Statue challenge-menu macro (GG_Workshop, at statue): a one-shot Up
-        // press opens the menu (Attuned is already highlighted -- see
-        // statueMenuEnteredAt above), then Jump pulses on a
-        // StatueMenuPeriodSeconds cycle to confirm, retrying the confirm each
-        // cycle until the fight actually starts. Both pulses are
-        // ConfirmPulseSeconds long; StatueConfirmOffsetSeconds is how far
-        // into the confirm cycle the Jump pulse starts.
+        // Statue challenge-menu macro (GG_Workshop, at statue). Game bindings:
+        // Up (W) challenges at the statue and opens the difficulty menu; Jump
+        // (Space) confirms the highlighted difficulty. So the order is fixed:
+        // one Up to challenge, then Jump to confirm -- never the reverse.
+        //
+        // Up is a one-shot (Attuned is already highlighted when the menu opens,
+        // and a second Up navigates away from it). Jump then pulses every
+        // StatueMenuPeriodSeconds, retrying the confirm until the fight starts.
+        // Both pulses are ConfirmPulseSeconds long; the whole sequence is timed
+        // from statueMenuEnteredAt rather than an absolute cycle, so a confirm
+        // can never land before the challenge press that opens the menu.
         private const float StatueMenuPeriodSeconds = 3.0f;
         private const float ConfirmPulseSeconds = 0.2f;
         private const float StatueConfirmOffsetSeconds = 1.5f;
@@ -580,7 +598,15 @@ namespace HKRLBot
             // fresh reset that lands back in GG_Hornet_1 first) starts the
             // walk-then-menu sequence over rather than resuming mid-confirm
             // against a menu that no longer exists.
-            if (scene != "GG_Workshop") statueMenuLatched = false;
+            if (scene != "GG_Workshop")
+            {
+                statueMenuLatched = false;
+                workshopEnteredAt = -1f;
+            }
+            else if (workshopEnteredAt < 0f)
+            {
+                workshopEnteredAt = elapsed;
+            }
 
             if (scene == "GG_Hornet_1")
             {
@@ -632,13 +658,21 @@ namespace HKRLBot
                     // EpisodeManager's ResetMacroBudgetSeconds wall-clock
                     // backstop gives up and logs branch='statue-menu' as the
                     // last attempted branch.
-                    if (!statueMenuLatched && Mathf.Abs(k.X - StatueX) <= 0.5f)
+                    bool settled = elapsed - workshopEnteredAt >= WorkshopSettleSeconds;
+                    if (!statueMenuLatched && settled && Mathf.Abs(k.X - StatueX) <= 0.5f)
                     {
                         statueMenuLatched = true;
                         statueMenuEnteredAt = elapsed;
                     }
 
-                    if (!statueMenuLatched)
+                    if (!statueMenuLatched && !settled)
+                    {
+                        // Hold everything until the scene finishes loading --
+                        // pressing Up now would be swallowed, and walking now
+                        // can drift the knight off the statue.
+                        branch = "workshop-settling";
+                    }
+                    else if (!statueMenuLatched)
                     {
                         branch = "walk-to-statue";
                         b.Left = k.X > StatueX;
@@ -646,17 +680,18 @@ namespace HKRLBot
                     }
                     else
                     {
-                        // At (or committed to) the statue: press Up once to
-                        // open the challenge menu (Attuned is already
-                        // highlighted, so no further Up/Down navigation is
-                        // performed), then pulse Jump on the confirm cycle to
-                        // select it, retrying the confirm every
+                        // At (or committed to) the statue: challenge once with
+                        // Up, then confirm the already-highlighted Attuned
+                        // difficulty with Jump, retrying the confirm every
                         // StatueMenuPeriodSeconds if the fight hasn't started.
+                        // Both are measured from the branch's own start so the
+                        // confirm always trails the challenge.
                         branch = "statue-menu";
-                        b.Up = (elapsed - statueMenuEnteredAt) < ConfirmPulseSeconds;
-                        float cyclePos = elapsed % StatueMenuPeriodSeconds;
-                        b.Jump = cyclePos >= StatueConfirmOffsetSeconds
-                                 && cyclePos < StatueConfirmOffsetSeconds + ConfirmPulseSeconds;
+                        float sinceMenu = elapsed - statueMenuEnteredAt;
+                        b.Up = sinceMenu < ConfirmPulseSeconds;
+                        float confirmPos = sinceMenu - StatueConfirmOffsetSeconds;
+                        b.Jump = confirmPos >= 0f
+                                 && (confirmPos % StatueMenuPeriodSeconds) < ConfirmPulseSeconds;
                     }
                 }
                 else
