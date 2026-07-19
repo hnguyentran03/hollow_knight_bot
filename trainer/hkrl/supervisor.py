@@ -42,6 +42,19 @@ from launch_instances import wait_for_port as _wait_for_port  # noqa: E402
 RECOVERABLE = (socket.timeout, ConnectionClosed, OSError, EOFError)
 
 
+def _log(message: str) -> None:
+    """One operator-facing line on stderr.
+
+    stderr and flush=True for the same reasons as
+    trainer/scripts/random_agent.py's heartbeats: SB3 writes its progress
+    tables to stdout, so recovery lines have to land on the other stream to
+    interleave legibly, and an unflushed line is invisible for however long
+    the block lasts when the run is piped to a file. The `supervisor:` prefix
+    is the grep handle after a twelve-hour run.
+    """
+    print(f"supervisor: {message}", file=sys.stderr, flush=True)
+
+
 class InstanceDown(Exception):
     """Recovery ran out of attempts; the run cannot continue."""
 
@@ -69,6 +82,19 @@ class SupervisedVecEnv(VecEnv):
     *which* slot needs relaunching and waits for the result; it has no home
     directory or app path to launch a replacement with, so that stays the
     caller's job.
+
+    `relaunch(slot)` must also terminate and reap whatever currently holds
+    that port BEFORE starting the replacement -- launch_instances.shutdown()
+    on the old Popen, then launch(). This is not optional cleanliness: a
+    wedged instance is relaunched precisely because its main thread is dead
+    while its bridge still accepts (see _port_ready), so it is still bound to
+    the port. Start the replacement without reaping and the new process's
+    TcpListener.Start() throws inside the mod on the in-use port, while
+    `wait_for_port` returns success immediately against the zombie that is
+    still accepting. Recovery then "succeeds" against the dead instance, the
+    rebuild's reset fails, every remaining attempt burns the same way, and
+    the run ends in InstanceDown with a second unmanaged game process left
+    running.
     """
 
     def __init__(
@@ -136,8 +162,8 @@ class SupervisedVecEnv(VecEnv):
             vec = self._live()
             self._apply_pending(vec)
             obs = vec.reset()
-        except RECOVERABLE:
-            self._recover()
+        except RECOVERABLE as exc:
+            self._recover("reset", exc)
             # _recover ends in a rebuilt, reset vec, so its reset is this
             # reset; re-resetting would burn a second episode for nothing.
             return self._reset_obs
@@ -166,8 +192,8 @@ class SupervisedVecEnv(VecEnv):
         self._require_no_pending("step_async")
         try:
             self._live().step_async(actions)
-        except RECOVERABLE:
-            self._recover()
+        except RECOVERABLE as exc:
+            self._recover("step_async", exc)
             self._pending_result = self._recovery_step_result()
 
     def step_wait(self):
@@ -177,8 +203,8 @@ class SupervisedVecEnv(VecEnv):
         try:
             vec = self._live()
             result = vec.step_wait()
-        except RECOVERABLE:
-            self._recover()
+        except RECOVERABLE as exc:
+            self._recover("step_wait", exc)
             return self._recovery_step_result()
         self.reset_infos = list(vec.reset_infos)
         return result
@@ -250,10 +276,19 @@ class SupervisedVecEnv(VecEnv):
             raise InstanceDown("no live vec: recovery was abandoned")
         return self._vec
 
-    def _recover(self) -> None:
+    def _recover(self, caller: str = "?", trigger: BaseException | None = None) -> None:
+        # caller/trigger are logging-only: which VecEnv call raised, and the
+        # exception that stood in for the failure (see RECOVERABLE -- a dead
+        # worker surfaces as a bare EOFError, so the type is often the only
+        # thing distinguishing a killed instance from a socket timeout).
+        _log(
+            f"recovery started from {caller}() "
+            f"(detected as {type(trigger).__name__}: {trigger})"
+        )
         forced: set = set()
         failure = None
         for attempt in range(1, self.recover_attempts + 1):
+            _log(f"attempt {attempt}/{self.recover_attempts}")
             try:
                 # Inside the loop, so a raise from _force_close's
                 # join/terminate is a failed attempt like any other rather
@@ -268,6 +303,7 @@ class SupervisedVecEnv(VecEnv):
                 self._drop_vec()
                 self._ensure_ready(forced)
                 self._build_vec(reset=True)
+                _log(f"attempt {attempt} succeeded; vec rebuilt and reset, training resumes")
                 return
             except _RecoveryFailed as exc:
                 # A slot that could not be brought back stays forced: its
@@ -275,6 +311,7 @@ class SupervisedVecEnv(VecEnv):
                 # it being the one this attempt asked for.
                 failure = exc
                 forced.add(exc.slot)
+                _log(f"attempt {attempt} failed: {exc}")
             except Exception as exc:
                 # Every slot passed the readiness probe yet the rebuild or its
                 # reset still failed, so at least one instance answers sockets
@@ -285,8 +322,18 @@ class SupervisedVecEnv(VecEnv):
                 # all of them rather than retrying against a wedged process.
                 failure = exc
                 forced = set(range(len(self.ports)))
+                _log(
+                    f"attempt {attempt} failed after every slot probed ready: "
+                    f"{type(exc).__name__}: {exc}; the failing slot is not "
+                    f"identifiable, so all {len(self.ports)} will be relaunched"
+                )
             if attempt < self.recover_attempts:
+                _log(f"waiting {self.recover_delay}s before the next attempt")
                 time.sleep(self.recover_delay)
+        _log(
+            f"EXHAUSTED after {self.recover_attempts} attempts; raising "
+            f"InstanceDown -- the run ends here"
+        )
         raise InstanceDown(
             f"recovery abandoned after {self.recover_attempts} attempts; "
             f"last failure: {type(failure).__name__}: {failure}"
@@ -295,16 +342,28 @@ class SupervisedVecEnv(VecEnv):
     def _ensure_ready(self, forced: Iterable[int]) -> None:
         forced = set(forced)
         for slot, port in enumerate(self.ports):
-            if slot in forced or not _port_ready(port, self.probe_timeout):
-                try:
-                    self.relaunch(slot)
-                    self.wait_for_port(port, timeout=self.launch_timeout)
-                    _wait_until_ready(port, self.probe_timeout, self.ready_timeout)
-                except Exception as exc:
-                    raise _RecoveryFailed(
-                        slot,
-                        f"slot {slot} (port {port}) did not come back up: {exc!r}",
-                    ) from exc
+            if slot in forced:
+                reason = "forced by an earlier failed attempt"
+            elif not _port_ready(port, self.probe_timeout):
+                reason = "failed its readiness probe"
+            else:
+                _log(f"slot {slot} (port {port}) is ready; not relaunching")
+                continue
+            _log(f"slot {slot} (port {port}) {reason}; relaunching")
+            try:
+                self.relaunch(slot)
+                self.wait_for_port(port, timeout=self.launch_timeout)
+                _log(
+                    f"slot {slot} (port {port}) accepted; waiting up to "
+                    f"{self.ready_timeout}s for the bridge to say hello"
+                )
+                _wait_until_ready(port, self.probe_timeout, self.ready_timeout)
+                _log(f"slot {slot} (port {port}) back up")
+            except Exception as exc:
+                raise _RecoveryFailed(
+                    slot,
+                    f"slot {slot} (port {port}) did not come back up: {exc!r}",
+                ) from exc
 
     def _build_vec(self, reset: bool) -> None:
         # __new__ then __init__ rather than SubprocVecEnv(...): the
@@ -314,6 +373,10 @@ class SupervisedVecEnv(VecEnv):
         # this way, the half-built object -- and its worker handles -- is
         # still in hand to be closed.
         vec = SubprocVecEnv.__new__(SubprocVecEnv)
+        if reset:
+            # reset=True is only ever the recovery path; construction passes
+            # False and stays silent so a normal startup logs nothing.
+            _log(f"all slots ready; rebuilding vec over {len(self.ports)} slots")
         try:
             vec.__init__([make_env(p, **self.env_kwargs) for p in self.ports])
             # On the recovery path every slot -- including survivors that were

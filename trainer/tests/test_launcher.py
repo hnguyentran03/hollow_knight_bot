@@ -42,6 +42,25 @@ def test_wait_for_port_times_out_on_a_dead_port():
         wait_for_port(port, timeout=0.5)
 
 
+def test_wait_for_port_fails_fast_when_its_process_already_exited():
+    # A real child that exits immediately with a distinctive code, standing in
+    # for a game that dies on a bad --app path or a mod load failure.
+    proc = subprocess.Popen([sys.executable, "-c", "raise SystemExit(17)"])
+    proc.wait()
+
+    # Reserved-but-dead port, so nothing can ever accept: without the process
+    # check this would block the whole timeout.
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.close()
+
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="exited with code 17"):
+        wait_for_port(port, timeout=30.0, proc=proc)
+    assert time.monotonic() - start < 5.0
+
+
 def _spawn_sleeper(ignore_sigterm: bool) -> subprocess.Popen:
     """Start a real child that sleeps, optionally ignoring SIGTERM.
 

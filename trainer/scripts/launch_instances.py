@@ -26,12 +26,24 @@ DEFAULT_SEED = Path(
 ).expanduser()
 
 
-def wait_for_port(port: int, timeout: float = 120.0, host: str = "127.0.0.1") -> None:
+def wait_for_port(
+    port: int,
+    timeout: float = 120.0,
+    host: str = "127.0.0.1",
+    proc: subprocess.Popen | None = None,
+) -> None:
     """Block until the port accepts a connection.
 
     The bridge only starts listening once the mod has loaded, which is well
     after the process itself exists -- so process liveness is not a usable
-    readiness signal.
+    *readiness* signal. It is a usable *failure* signal: a process that has
+    already exited will never listen, so with `proc` supplied this raises at
+    once naming the exit code instead of burning the full timeout. That
+    matters because the waits are sequential and instances 1..N-1 run with
+    stdout/stderr on DEVNULL, so a bad --app path or a mod that fails to load
+    is otherwise silent for timeout * instances before the first error.
+
+    `proc` is optional so callers holding only a port keep working.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -39,6 +51,15 @@ def wait_for_port(port: int, timeout: float = 120.0, host: str = "127.0.0.1") ->
             with socket.create_connection((host, port), timeout=1.0):
                 return
         except OSError:
+            # Checked after the connect attempt, not before: a process that
+            # exited *after* handing off a working bridge is not the case
+            # being caught here, and connecting first keeps that ordering
+            # from mattering.
+            if proc is not None and proc.poll() is not None:
+                raise RuntimeError(
+                    f"process for port {port} exited with code "
+                    f"{proc.returncode} before its bridge started listening"
+                )
             time.sleep(0.5)
     raise TimeoutError(f"port {port} never accepted a connection within {timeout}s")
 
@@ -89,12 +110,15 @@ def main() -> None:
         for n in range(args.instances):
             home = provision(n, root=args.root, seed_from=args.seed_from)
             port = port_for(n)
-            # Instance 0 stays visible as the human's window into the agent.
+            # All instances open a game window; `visible` only controls
+            # whether that instance's stdout/stderr reach this terminal.
+            # Instance 0 keeps them so the human sees mod output from one
+            # instance; the rest are silenced to keep the log readable.
             procs.append(launch(n, home, port, args.app, visible=(n == 0)))
             print(f"instance {n}: home={home} port={port}", flush=True)
 
         for n in range(args.instances):
-            wait_for_port(port_for(n))
+            wait_for_port(port_for(n), proc=procs[n])
             print(f"instance {n}: bridge ready on {port_for(n)}", flush=True)
 
         print(f"{args.instances} instances ready. Ctrl-C to stop.", flush=True)
