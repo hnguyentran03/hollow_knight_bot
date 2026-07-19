@@ -24,6 +24,10 @@ namespace HKRLBot
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged +=
                 (_, _2) => Reader.OnSceneChange();
             On.HeroController.Start += (orig, self) => { orig(self); Input.Attach(); };
+            // Unity pauses unfocused applications by default. Parallel training runs
+            // several instances at once and only one can hold focus, so without this
+            // every background instance freezes and its trainer socket times out.
+            Application.runInBackground = true;
             Server.Start();
             Log("HKRLBot initialized");
         }
