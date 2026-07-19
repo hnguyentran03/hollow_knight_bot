@@ -677,7 +677,15 @@ namespace HKRLBot
                     // backstop gives up and logs branch='statue-menu' as the
                     // last attempted branch.
                     bool settled = elapsed - workshopEnteredAt >= WorkshopSettleSeconds;
-                    if (Mathf.Abs(k.X - StatueX) >= StepOffDistance) statueTriggerRearmed = true;
+                    // Only count a far-from-statue reading as a step-off once
+                    // the scene has settled: during the workshop load the
+                    // knight's transform briefly reads a garbage position
+                    // (observed live: knightX=2.00 one tick, 62.21 the next)
+                    // before the game places him at the statue. Counting that
+                    // transient skips the step-off walk, so the statue's
+                    // interact trigger never re-arms and the Up/confirm
+                    // pulses press into a menu that cannot open.
+                    if (settled && Mathf.Abs(k.X - StatueX) >= StepOffDistance) statueTriggerRearmed = true;
 
                     if (!statueMenuLatched && settled && statueTriggerRearmed
                         && Mathf.Abs(k.X - StatueX) <= 0.5f)
