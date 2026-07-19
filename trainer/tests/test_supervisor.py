@@ -1,6 +1,9 @@
 import json
+import os
+import signal
 import socket
 import threading
+import time
 
 import pytest
 from gymnasium.utils import seeding
@@ -481,6 +484,40 @@ def test_sb3_accepts_it_as_a_vec_env_and_keeps_the_recovery_step():
     finally:
         a.__exit__(None, None, None)
         b.__exit__(None, None, None)
+
+
+def test_a_sigint_fanned_out_to_the_workers_does_not_trigger_recovery():
+    """Ctrl-C delivers SIGINT to the terminal's whole foreground process
+    group -- the trainer AND every SubprocVecEnv worker, because the workers
+    inherit the group and multiprocessing's worker bootstrap restores
+    Python's default SIGINT handler. A worker dying of that KeyboardInterrupt
+    surfaces upstairs as EOFError, which recovery misreads as an instance
+    crash: one observed Ctrl-C cost a full relaunch-and-reboot cycle against
+    a perfectly healthy game. Stopping is the main process's job (train.py's
+    request_stop handler); a worker's job is to shrug SIGINT off and keep
+    serving until told to close."""
+    port = _free_port()
+    # Two scripted episodes: if the worker wrongly dies, recovery's rebuild
+    # consumes the second with a fresh reset and the failure shows up as
+    # recoveries == 1 below, rather than as an unrelated FakeGame starvation.
+    a = FakeGame([_episode(), _episode()], port=port).__enter__()
+    try:
+        vec = SupervisedVecEnv([port], relaunch=lambda slot: None, **FAST)
+        try:
+            vec.reset()
+            for proc in vec._vec.processes:
+                os.kill(proc.pid, signal.SIGINT)
+            # Let the signal land while the worker idles in its pipe recv --
+            # the exact state a mid-rollout worker is in at a real Ctrl-C.
+            time.sleep(0.3)
+
+            _, _, dones, _ = vec.step([0])
+            assert vec.recoveries == 0
+            assert dones.tolist() == [False]
+        finally:
+            vec.close()
+    finally:
+        a.__exit__(None, None, None)
 
 
 class BootingGame:

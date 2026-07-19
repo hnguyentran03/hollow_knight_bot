@@ -13,6 +13,8 @@ Recovery itself can fail, so it is retried: each attempt relaunches whatever
 is not answering, rebuilds, and resets, and only once the attempt budget is
 spent does InstanceDown end the run.
 """
+import functools
+import signal
 import socket
 import sys
 import time
@@ -40,6 +42,29 @@ from launch_instances import wait_for_port as _wait_for_port  # noqa: E402
 # an EOFError reading the dead worker's pipe, so EOFError has to be treated
 # as recoverable too.
 RECOVERABLE = (socket.timeout, ConnectionClosed, OSError, EOFError)
+
+
+def _worker_env(port: int, env_kwargs: dict):
+    """Env factory that runs inside a SubprocVecEnv worker subprocess.
+
+    First act: ignore SIGINT. A terminal Ctrl-C delivers SIGINT to the whole
+    foreground process group -- these workers included, since they inherit
+    the group -- and multiprocessing's worker bootstrap restores Python's
+    default handler regardless of what the parent installed (forkserver's
+    _serve_one resets handlers in every child), so an unshielded worker dies
+    of KeyboardInterrupt. Its death surfaces upstairs as EOFError/
+    BrokenPipeError, which recovery misreads as an instance crash: the
+    observed cost of one Ctrl-C was a relaunch-and-reboot cycle against a
+    perfectly healthy game. Stopping is the main process's job (train.py's
+    request_stop handler ends the rollout via StopOnFlag); a worker's job is
+    to keep serving until its "close" command arrives.
+
+    Module-level (not a closure) so it pickles under any start method, and
+    set here rather than in hkrl.vec.make_env so in-process callers of that
+    factory never have their own SIGINT handling silently disabled.
+    """
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    return make_env(port, **env_kwargs)()
 
 
 def _log(message: str) -> None:
@@ -418,7 +443,8 @@ class SupervisedVecEnv(VecEnv):
             # False and stays silent so a normal startup logs nothing.
             _log(f"all slots ready; rebuilding vec over {len(self.ports)} slots")
         try:
-            vec.__init__([make_env(p, **self.env_kwargs) for p in self.ports])
+            vec.__init__([functools.partial(_worker_env, p, self.env_kwargs)
+                          for p in self.ports])
             # On the recovery path every slot -- including survivors that were
             # never relaunched -- gets a brand new subprocess and connection
             # here, so each one is unreset at this point. Reset here rather
