@@ -119,6 +119,7 @@ def test_a_dead_instance_is_relaunched_and_the_others_keep_running():
 
             step_obs, rewards, dones, infos = vec.step([0, 0])
             assert relaunched == [0]
+            assert vec.recoveries == 1
             assert step_obs.shape[0] == 2
             assert dones.tolist() == [True, True]
 
@@ -480,3 +481,179 @@ def test_sb3_accepts_it_as_a_vec_env_and_keeps_the_recovery_step():
     finally:
         a.__exit__(None, None, None)
         b.__exit__(None, None, None)
+
+
+class BootingGame:
+    """A relaunched game booting back into the fight: the bridge greets every
+    client, but the first `fail_resets` reset requests end with the connection
+    dropped (the mod's reset-budget expiry while the boot macro runs), after
+    which resets serve scripted episodes like FakeGame."""
+
+    def __init__(self, port, episodes, fail_resets=1):
+        self._port = port
+        self.episodes = [list(ep) for ep in episodes]
+        self.fail_resets = fail_resets
+
+    def __enter__(self):
+        self._srv = socket.socket()
+        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._srv.bind(("127.0.0.1", self._port))
+        self._srv.listen(4)
+        threading.Thread(target=self._run, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        self._srv.close()
+
+    def _run(self):
+        while True:
+            try:
+                conn, _ = self._srv.accept()
+            except OSError:
+                return
+            self._serve(conn)
+
+    def _serve(self, conn):
+        try:
+            f = conn.makefile("rwb")
+
+            def send(msg):
+                f.write(json.dumps(msg).encode() + b"\n")
+                f.flush()
+
+            send({"type": "hello", "version": 1})
+            ep = None
+            while True:
+                line = f.readline()
+                if not line:
+                    return
+                msg = json.loads(line)
+                if msg["type"] == "reset":
+                    if self.fail_resets > 0:
+                        self.fail_resets -= 1
+                        conn.shutdown(socket.SHUT_RDWR)
+                        return
+                    ep = self.episodes.pop(0)
+                    send(ep.pop(0))
+                elif msg["type"] == "action":
+                    send(ep.pop(0))
+        except OSError:
+            return
+        finally:
+            conn.close()
+
+
+def test_a_relaunched_game_still_booting_is_retried_without_another_relaunch():
+    port = _free_port()
+    relaunched = []
+    spawned = []
+
+    def relaunch(slot):
+        relaunched.append(slot)
+        # The replacement behaves like a real relaunch: its first reset ends
+        # in a budget-expiry drop (the game is still booting through menus),
+        # and only the next reset serves.
+        spawned.append(
+            BootingGame(port, [_episode(khp=3)], fail_resets=1).__enter__()
+        )
+
+    a = FakeGame([_episode()], port=port).__enter__()
+    try:
+        vec = SupervisedVecEnv([port], relaunch=relaunch, **FAST)
+        try:
+            vec.reset()
+            a.__exit__(None, None, None)  # the game dies mid-run
+
+            step_obs, _, dones, _ = vec.step([0])
+            # Exactly one relaunch: the replacement's first rebuild failed
+            # (its reset ended in a budget-expiry drop while the boot macro
+            # ran), and the generic handler retried against the same process
+            # instead of forcing a second relaunch that would have restarted
+            # the boot from the title screen.
+            assert relaunched == [0]
+            assert dones.tolist() == [True]
+            assert step_obs[0, KHP] == pytest.approx(3 / 9, abs=1e-6)
+            assert vec.recoveries == 1
+
+            _, _, dones, _ = vec.step([0])
+            assert dones.tolist() == [False]
+        finally:
+            vec.close()
+    finally:
+        for fg in spawned:
+            fg.__exit__(None, None, None)
+
+
+class SuspendedGame:
+    """A game the OS has suspended (App Nap): the connection it was serving
+    goes permanently silent without closing, and although the kernel keeps
+    the listening socket alive and completes new TCP handshakes into its
+    backlog, no thread runs to accept them -- so no hello ever arrives."""
+
+    def __init__(self, port):
+        self._port = port
+
+    def __enter__(self):
+        self._srv = socket.socket()
+        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._srv.bind(("127.0.0.1", self._port))
+        self._srv.listen(4)
+        threading.Thread(target=self._serve_once, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        self._srv.close()
+
+    def _serve_once(self):
+        # Serve exactly one connection up to the first action, then go
+        # silent: the connection stays open and the accept loop stops
+        # running, exactly as if the OS stopped scheduling the process.
+        try:
+            conn, _ = self._srv.accept()
+        except OSError:
+            return
+        f = conn.makefile("rwb")
+        f.write(json.dumps({"type": "hello", "version": 1}).encode() + b"\n")
+        f.flush()
+        f.readline()  # the reset
+        f.write(json.dumps(state(obs())).encode() + b"\n")
+        f.flush()
+        f.readline()  # the first action -- never answered
+
+
+def test_a_suspended_game_fails_the_probe_and_is_relaunched():
+    """App Nap: macOS suspends a fully occluded game. Its port stays open in
+    the kernel, so a TCP-connect probe would call it healthy forever -- but
+    the lockstep protocol notices (the step read times out), and the hello
+    requirement in _port_ready fails against a process that never runs, so
+    recovery relaunches it instead of retrying against the corpse."""
+    port = _free_port()
+    spawned = []
+    suspended = SuspendedGame(port).__enter__()
+
+    def relaunch(slot):
+        assert slot == 0
+        # Stands in for shutdown()'s SIGKILL escalation, which is what reaps
+        # a suspension for real (SIGTERM stays pending on a stopped process).
+        suspended.__exit__(None, None, None)
+        spawned.append(FakeGame([_episode(khp=3)], port=port).__enter__())
+
+    try:
+        vec = SupervisedVecEnv([port], relaunch=relaunch, **FAST)
+        try:
+            vec.reset()
+            step_obs, _, dones, _ = vec.step([0])  # read times out against silence
+            assert dones.tolist() == [True]
+            assert spawned  # the probe refused the suspended listener
+            assert step_obs[0, KHP] == pytest.approx(3 / 9, abs=1e-6)
+            assert vec.recoveries == 1
+
+            _, _, dones, _ = vec.step([0])
+            assert dones.tolist() == [False]
+        finally:
+            vec.close()
+    finally:
+        for fg in spawned:
+            fg.__exit__(None, None, None)
+        if not spawned:
+            suspended.__exit__(None, None, None)

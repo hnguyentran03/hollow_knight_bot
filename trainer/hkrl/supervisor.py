@@ -142,6 +142,12 @@ class SupervisedVecEnv(VecEnv):
         # _recover() returns only once an attempt has completed that write, and
         # raises otherwise, neither reader can see an earlier rebuild's value.
         self._reset_obs = None
+        # Cumulative successful recoveries. Read by the training manifest so
+        # an operator sees instability per generation without grepping this
+        # module's stderr lines -- a count climbing every generation is the
+        # App Nap relaunch-loop signature (an occluded window being suspended
+        # over and over).
+        self.recoveries = 0
         # No reset here: construction only opens the connections, leaving the
         # first reset to the caller the way a plain SubprocVecEnv does.
         self._build_vec(reset=False)
@@ -289,6 +295,7 @@ class SupervisedVecEnv(VecEnv):
             f"(detected as {type(trigger).__name__}: {trigger})"
         )
         forced: set = set()
+        relaunched: set = set()
         failure = None
         for attempt in range(1, self.recover_attempts + 1):
             _log(f"attempt {attempt}/{self.recover_attempts}")
@@ -304,9 +311,10 @@ class SupervisedVecEnv(VecEnv):
                 # probing while the old vec still holds connections would
                 # break the very slots being tested.
                 self._drop_vec()
-                self._ensure_ready(forced)
+                relaunched |= self._ensure_ready(forced)
                 self._build_vec(reset=True)
                 _log(f"attempt {attempt} succeeded; vec rebuilt and reset, training resumes")
+                self.recoveries += 1
                 return
             except _RecoveryFailed as exc:
                 # A slot that could not be brought back stays forced: its
@@ -316,20 +324,37 @@ class SupervisedVecEnv(VecEnv):
                 forced.add(exc.slot)
                 _log(f"attempt {attempt} failed: {exc}")
             except Exception as exc:
-                # Every slot passed the readiness probe yet the rebuild or its
-                # reset still failed, so at least one instance answers sockets
-                # without being able to serve the protocol. Which one is not
-                # observable from here (SubprocVecEnv round-trips only slot 0
-                # in its constructor and reports any other slot's death as an
-                # EOFError carrying no index), so the next attempt relaunches
-                # all of them rather than retrying against a wedged process.
+                # A slot relaunched during this recovery is expected to
+                # fail rebuilds for a while: a fresh boot rejoins the
+                # fight across several reset budgets (the boot-confirm
+                # macro in mod/EpisodeManager.cs), and each budget expiry
+                # surfaces here as a generic rebuild failure. Re-forcing
+                # it would restart the boot from the title screen every
+                # time, so recovery could never converge -- retry as-is
+                # and let the boot ratchet forward.
                 failure = exc
-                forced = set(range(len(self.ports)))
-                _log(
-                    f"attempt {attempt} failed after every slot probed ready: "
-                    f"{type(exc).__name__}: {exc}; the failing slot is not "
-                    f"identifiable, so all {len(self.ports)} will be relaunched"
-                )
+                if relaunched:
+                    _log(
+                        f"attempt {attempt} failed: {type(exc).__name__}: {exc}; "
+                        f"slots {sorted(relaunched)} were relaunched this recovery "
+                        f"and are likely still booting -- retrying without "
+                        f"forcing further relaunches"
+                    )
+                else:
+                    # Every slot passed the readiness probe yet the rebuild or
+                    # its reset still failed, so at least one instance answers
+                    # sockets without being able to serve the protocol. Which
+                    # one is not observable from here (SubprocVecEnv
+                    # round-trips only slot 0 in its constructor and reports
+                    # any other slot's death as an EOFError carrying no
+                    # index), so the next attempt relaunches all of them
+                    # rather than retrying against a wedged process.
+                    forced = set(range(len(self.ports)))
+                    _log(
+                        f"attempt {attempt} failed after every slot probed ready: "
+                        f"{type(exc).__name__}: {exc}; the failing slot is not "
+                        f"identifiable, so all {len(self.ports)} will be relaunched"
+                    )
             if attempt < self.recover_attempts:
                 _log(f"waiting {self.recover_delay}s before the next attempt")
                 time.sleep(self.recover_delay)
@@ -342,8 +367,9 @@ class SupervisedVecEnv(VecEnv):
             f"last failure: {type(failure).__name__}: {failure}"
         ) from failure
 
-    def _ensure_ready(self, forced: Iterable[int]) -> None:
+    def _ensure_ready(self, forced: Iterable[int]) -> set:
         forced = set(forced)
+        relaunched: set = set()
         for slot, port in enumerate(self.ports):
             if slot in forced:
                 reason = "forced by an earlier failed attempt"
@@ -362,11 +388,13 @@ class SupervisedVecEnv(VecEnv):
                 )
                 _wait_until_ready(port, self.probe_timeout, self.ready_timeout)
                 _log(f"slot {slot} (port {port}) back up")
+                relaunched.add(slot)
             except Exception as exc:
                 raise _RecoveryFailed(
                     slot,
                     f"slot {slot} (port {port}) did not come back up: {exc!r}",
                 ) from exc
+        return relaunched
 
     def _build_vec(self, reset: bool) -> None:
         # __new__ then __init__ rather than SubprocVecEnv(...): the
@@ -463,9 +491,12 @@ def _port_ready(port: int, timeout: float, host: str = "127.0.0.1") -> bool:
     probe and still fails every subsequent step.
 
     What it does catch: a dead/absent process (no connect), a bridge that has
-    not finished starting (connect but no hello), and the gate-stalled
-    variant where an unbounded SendState write to a peer that stopped
-    draining blocks AcceptLoop (connect, hello never arrives).
+    not finished starting (connect but no hello), the gate-stalled variant
+    where an unbounded SendState write to a peer that stopped draining blocks
+    AcceptLoop (connect, hello never arrives), and an App-Nap-suspended
+    process -- the kernel completes the handshake into the listener's backlog
+    even though no thread is scheduled to accept it, so the connect succeeds
+    and the hello never comes.
 
     A truthful main-thread probe is not reachable from here. The only wire
     message the main thread answers is `reset` (EpisodeManager.LateUpdate);
