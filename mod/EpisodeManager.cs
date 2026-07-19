@@ -79,6 +79,12 @@ namespace HKRLBot
         private void OnActiveSceneChanged(
             UnityEngine.SceneManagement.Scene from, UnityEngine.SceneManagement.Scene to)
         {
+            // Logged unconditionally: whether the Godhome death-retry reloads
+            // the arena scene (rather than resetting it in place) is the sole
+            // assumption sawSceneReentrySinceReset rests on. If a retry never
+            // produces a BossScene entry here, every death reset stalls until
+            // ResetMacroBudgetSeconds expires, and this line is the evidence.
+            HKRLBotMod.Instance.Log($"Scene change: '{from.name}' -> '{to.name}'");
             if (to.name == BossScene) sawSceneReentrySinceReset = true;
         }
 
