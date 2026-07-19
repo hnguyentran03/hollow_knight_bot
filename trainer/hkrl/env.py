@@ -69,19 +69,19 @@ DEFAULT_REWARD = {
 class HKEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    # Final-review fix (F5): the mod's socket read (BridgeServer.cs, the
-    # stream.ReadTimeout set in AcceptLoop) has a hard 10s ceiling: if this
-    # process doesn't send its next message ("action" or "reset") within 10s
-    # of the mod's last SendState, the mod's blocking ReadLine() times out and
-    # it drops the connection outright -- step()/reset() below then observe
-    # this as ConnectionClosed, not a retryable timeout. This means any
-    # blocking work performed between receiving a state and calling step()/
-    # reset() again -- e.g. a PPO policy update running synchronously on this
-    # thread between rollout steps -- must complete in well under 10s, or the
-    # connection (and the in-progress episode) will be silently killed. Do
-    # not change the mod's ReadTimeout to "fix" this here; if a training loop
-    # needs longer than 10s between messages, that ceiling has to be revisited
-    # on the mod side instead.
+    # The mod's socket read (BridgeServer.cs, the stream.ReadTimeout set in
+    # AcceptLoop) has a hard 10s ceiling: if this process doesn't send its
+    # next message ("action" or "reset") within 10s of the mod's last
+    # SendState, the mod's blocking ReadLine() times out and it drops the
+    # connection outright -- step()/reset() below then observe this as
+    # ConnectionClosed, not a retryable timeout. This means any blocking work
+    # performed between receiving a state and calling step()/reset() again --
+    # e.g. a PPO policy update running synchronously on this thread between
+    # rollout steps -- must complete in well under 10s, or the connection
+    # (and the in-progress episode) will be silently killed. Do not change
+    # the mod's ReadTimeout to "fix" this here; if a training loop needs
+    # longer than 10s between messages, that ceiling has to be revisited on
+    # the mod side instead.
 
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None, max_steps=2700):
         self.reward = dict(DEFAULT_REWARD, **(reward_config or {}))

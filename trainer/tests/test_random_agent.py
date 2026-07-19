@@ -45,7 +45,7 @@ def test_run_completes_scripted_episodes_and_reports_summaries(capsys):
     assert "episode   2 (attempt 2)" in out
     assert "result=WIN" in out
     assert "result=loss" in out
-    # required minimum fields per the task brief: attempt, steps, reward, won
+    # required minimum fields: attempt, steps, reward, won
     assert "steps=" in out and "reward=" in out
 
 
@@ -224,9 +224,9 @@ def _serve_one_episode_then_disconnect(episode_messages):
 
 
 def test_friendly_error_when_mod_not_reachable(capsys):
-    # F7: constructing HKEnv against a port nobody is listening on should
-    # print a clear, human-readable message naming the likely cause (game
-    # not running / mod not installed / wrong port) and exit(1), instead of
+    # Constructing HKEnv against a port nobody is listening on should print a
+    # clear, human-readable message naming the likely cause (game not
+    # running / mod not installed / wrong port) and exit(1), instead of
     # letting a raw ConnectionRefusedError traceback reach the user. Bind an
     # ephemeral port then immediately close it so nothing is listening --
     # this reproduces a real connection refusal without needing the game.

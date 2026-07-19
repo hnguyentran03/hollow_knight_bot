@@ -28,25 +28,23 @@ namespace HKRLBot
         private PlayMakerFSM bossFsm;
         private Rigidbody2D bossRb;
         private GameObject needleGo;
-        // Task 6: ReadBoss() became a hot path once EpisodeManager calls it every
-        // decision step (previously only OverlayUI called it, once per rendered
-        // frame). GameObject.Find is a full scene-hierarchy scan, so once the boss
-        // has been found in the current scene there is no need to re-scan on every
+        // ReadBoss() is a hot path: EpisodeManager calls it every decision step.
+        // GameObject.Find is a full scene-hierarchy scan, so once the boss has
+        // been found in the current scene there is no need to re-scan on every
         // call -- this flag latches to skip the scan for the rest of the scene.
         //
-        // Task 6 review (Critical): this must latch ONLY on a successful find, not
-        // on every attempt. If it latched unconditionally, a single miss (e.g. the
-        // boss GameObject not active yet on the very first frame after
-        // activeSceneChanged, due to scene-load ordering or a Godhome entry
-        // sequence) would permanently disable boss detection for the rest of the
-        // scene -- EpisodeManager.TickReset's fightLive gate could then never
-        // become true, so a reset would never complete. So while the boss is
-        // genuinely absent, ReadBoss() re-runs GameObject.Find on every call (a
-        // few wasted scans during the absent window is cheap and correct); the
-        // cache only kicks in once the boss is actually found, which is the
-        // steady-state case this optimization exists for. Cleared by
-        // OnSceneChange() alongside the other cached handles so a scene change
-        // always gets a fresh search.
+        // This must latch ONLY on a successful find, not on every attempt. If it
+        // latched unconditionally, a single miss (e.g. the boss GameObject not
+        // active yet on the very first frame after activeSceneChanged, due to
+        // scene-load ordering or a Godhome entry sequence) would permanently
+        // disable boss detection for the rest of the scene -- EpisodeManager.
+        // TickReset's fightLive gate could then never become true, so a reset
+        // would never complete. So while the boss is genuinely absent, ReadBoss()
+        // re-runs GameObject.Find on every call (a few wasted scans during the
+        // absent window is cheap and correct); the cache only kicks in once the
+        // boss is actually found, which is the steady-state case this
+        // optimization exists for. Cleared by OnSceneChange() alongside the
+        // other cached handles so a scene change always gets a fresh search.
         private bool bossSearchDone;
 
         public void OnSceneChange()
@@ -65,6 +63,11 @@ namespace HKRLBot
             return new KnightState
             {
                 X = p.x, Y = p.y,
+                // Rigidbody2D.velocity, not .linearVelocity: a Steam update to
+                // Hollow Knight replaced the game's Physics2D module and
+                // removed linearVelocity entirely. Switching this back to
+                // linearVelocity (e.g. to silence a deprecation warning on a
+                // newer Unity) breaks the build against the installed game.
                 Vx = rb != null ? rb.velocity.x : 0f,
                 Vy = rb != null ? rb.velocity.y : 0f,
                 Hp = pd.health, Soul = pd.MPCharge,
@@ -97,6 +100,7 @@ namespace HKRLBot
             {
                 Present = true,
                 X = bp.x, Y = bp.y,
+                // .velocity, not .linearVelocity -- see the note in ReadKnight above.
                 Vx = bossRb != null ? bossRb.velocity.x : 0f,
                 Vy = bossRb != null ? bossRb.velocity.y : 0f,
                 Hp = bossHm != null ? ReflectionHelper.GetField<HealthManager, int>(bossHm, "hp") : 0,

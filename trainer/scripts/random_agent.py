@@ -223,10 +223,10 @@ def main():
                      help="seed the random action sampler for a reproducible run")
     args = ap.parse_args()
 
-    # Final-review fix (F7): this is the most likely first-run failure --
-    # game not running, mod not installed/loaded, or a wrong --port -- and
-    # without this it surfaces as a raw ConnectionRefusedError traceback with
-    # nothing pointing the human at the actual cause.
+    # This is the most likely first-run failure -- game not running, mod not
+    # installed/loaded, or a wrong --port -- and without this it surfaces as
+    # a raw ConnectionRefusedError traceback with nothing pointing the human
+    # at the actual cause.
     try:
         env = HKEnv(host=args.host, port=args.port)
     except ConnectionRefusedError:

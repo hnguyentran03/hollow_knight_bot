@@ -37,18 +37,18 @@ namespace HKRLBot
                     DropLocked();
                     client = c;
                     var stream = c.GetStream();
-                    // Final-review fix (F5): this is an undocumented ceiling on
-                    // trainer think-time, not just a dead-peer detector.
-                    // ReadMessage's reader.ReadLine() (called synchronously from
-                    // EpisodeManager.LateUpdate on the Unity main thread) throws
-                    // IOException on timeout, which DropIfCurrent turns into an
-                    // unconditional dropped connection -- NOT a null/"try again"
-                    // return. So if the trainer takes longer than 10s to send its
-                    // next message for ANY reason (e.g. a PPO policy update
-                    // running synchronously between step() calls), the mod drops
-                    // the connection out from under it, potentially mid-episode.
-                    // See the matching note in trainer/hkrl/env.py. Do not change
-                    // this value without also reconsidering that call site.
+                    // This is a hard ceiling on trainer think-time, not just a
+                    // dead-peer detector. ReadMessage's reader.ReadLine() (called
+                    // synchronously from EpisodeManager.LateUpdate on the Unity
+                    // main thread) throws IOException on timeout, which
+                    // DropIfCurrent turns into an unconditional dropped
+                    // connection -- NOT a null/"try again" return. So if the
+                    // trainer takes longer than 10s to send its next message for
+                    // ANY reason (e.g. a PPO policy update running synchronously
+                    // between step() calls), the mod drops the connection out
+                    // from under it, potentially mid-episode. See the matching
+                    // note in trainer/hkrl/env.py. Do not change this value
+                    // without also reconsidering that call site.
                     stream.ReadTimeout = 10000;
                     reader = new StreamReader(stream);
                     writer = new StreamWriter(stream) { AutoFlush = true };
@@ -78,18 +78,18 @@ namespace HKRLBot
                 ["info"] = new JObject { ["won"] = won, ["scene"] = scene, ["attempt"] = attempt }
             };
             var text = msg.ToString(Formatting.None);
-            // Final-review fix (F6): this write is fast in the common case (a
-            // few hundred bytes into a loopback socket send buffer) but is
-            // NOT bounded: no stream.WriteTimeout is ever set on this stream,
-            // so if the peer stops draining its receive buffer (e.g. a
-            // wedged/blocked trainer), this WriteLine (AutoFlush) can block
-            // indefinitely -- and it does so while holding `gate`, which
-            // stalls AcceptLoop's ability to accept/install a reconnecting
-            // client for as long as the write is stuck. If the peer has gone
-            // away outright (broken pipe / reset) this throws IOException
-            // instead; treat that the same as a read failure so a dead writer
-            // can never surface as an unhandled exception on the Unity main
-            // thread. See DEVIATION note on ReadMessage for why this matters.
+            // This write is fast in the common case (a few hundred bytes into
+            // a loopback socket send buffer) but is NOT bounded: no
+            // stream.WriteTimeout is ever set on this stream, so if the peer
+            // stops draining its receive buffer (e.g. a wedged/blocked
+            // trainer), this WriteLine (AutoFlush) can block indefinitely --
+            // and it does so while holding `gate`, which stalls AcceptLoop's
+            // ability to accept/install a reconnecting client for as long as
+            // the write is stuck. If the peer has gone away outright (broken
+            // pipe / reset) this throws IOException instead; treat that the
+            // same as a read failure so a dead writer can never surface as an
+            // unhandled exception on the Unity main thread. See the note on
+            // ReadMessage below for the related reconnect-race handling.
             lock (gate)
             {
                 try { writer?.WriteLine(text); }
@@ -97,11 +97,9 @@ namespace HKRLBot
             }
         }
 
-        // DEVIATION from the brief's listing: the brief's ReadMessage held `gate` for
-        // the entire blocking reader.ReadLine() call (up to the 10s ReadTimeout). That
-        // was empirically confirmed (via a standalone harness driving this exact file,
-        // not the game) to cause two bugs, both only visible under the reconnect race
-        // the task brief specifically asked to check for:
+        // ReadMessage must not hold `gate` for the entire blocking
+        // reader.ReadLine() call (up to the 10s ReadTimeout), or two bugs
+        // follow, both only visible under a reconnect race:
         //   1. AcceptLoop cannot acquire `gate` to install a newly-accepted client
         //      until the in-flight ReadMessage() releases it, so a trainer that
         //      reconnects while a stale ReadMessage() is still blocked on the old,
@@ -113,10 +111,10 @@ namespace HKRLBot
         //      healthy client), the stale ReadMessage()'s unconditional Drop() then
         //      runs and blows away the FIELDS THAT NOW BELONG TO THE NEW CLIENT --
         //      nulling `reader`/`writer`/`client` and closing the brand-new socket
-        //      milliseconds after it connected. This was reproduced directly: the
-        //      reconnected client's hello sent fine, but the server's `Connected`
-        //      getter never observed true and the reconnected client's own message
-        //      was lost (read as EOF) because `reader` had already been nulled out
+        //      milliseconds after it connected. The observable symptom: the
+        //      reconnected client's hello sends fine, but the server's `Connected`
+        //      getter never observes true and the reconnected client's own message
+        //      is lost (read as EOF) because `reader` has already been nulled out
         //      from under it.
         // Fix: capture the specific StreamReader this call is reading from, do the
         // blocking read OUTSIDE the lock (so AcceptLoop is never stalled by it), and
