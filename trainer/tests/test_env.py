@@ -10,7 +10,7 @@ def test_action_space_and_obs_shape():
     with FakeGame([episode]) as fg:
         env = HKEnv(port=fg.port)
         o, info = env.reset()
-        assert env.action_space.n == len(ACTIONS) == 15
+        assert env.action_space.n == len(ACTIONS) == 21
         assert o.shape == env.observation_space.shape
         assert o.dtype == np.float32
         env.close()

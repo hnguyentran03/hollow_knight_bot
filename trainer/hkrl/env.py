@@ -40,7 +40,8 @@ OBS_KEYS = [  # scalar block order (before the boss-state one-hot)
     "needle_active", "nx", "ny",
 ]
 
-_BUTTONS = ["left", "right", "up", "down", "jump", "attack", "dash"]
+_BUTTONS = ["left", "right", "up", "down", "jump", "attack", "dash",
+            "cast", "focus"]
 
 
 def _b(**kw):
@@ -49,6 +50,16 @@ def _b(**kw):
     return d
 
 
+# Each entry is one executable move, not a raw button: the directional
+# attack/cast variants exist so the Knight can keep moving while it swings
+# or casts, and up/down variants are distinct moves in their own right
+# (up-slash, pogo, Wraiths, Dive). Temporally extended moves are not listed
+# separately -- buttons stay held for the whole 67ms tick and across
+# consecutive steps that repeat them, so jump height comes from how many
+# steps in a row hold jump, and a heal is `focus` held ~20 consecutive
+# steps standing still. `cast` maps to the game's Quick Cast (spell fires
+# on press, direction picks Vengeful Spirit / Wraiths / Dive); `focus`
+# maps to Focus/Cast, whose hold is what channels healing.
 ACTIONS = [
     _b(),
     _b(left=True), _b(right=True),
@@ -57,6 +68,9 @@ ACTIONS = [
     _b(dash=True), _b(left=True, dash=True), _b(right=True, dash=True),
     _b(up=True, attack=True), _b(down=True, attack=True),
     _b(jump=True, attack=True),
+    _b(cast=True), _b(left=True, cast=True), _b(right=True, cast=True),
+    _b(up=True, cast=True), _b(down=True, cast=True),
+    _b(focus=True),
 ]
 
 DEFAULT_REWARD = {

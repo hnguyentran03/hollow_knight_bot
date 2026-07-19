@@ -299,7 +299,8 @@ namespace HKRLBot
                     Left = (bool)bt["left"], Right = (bool)bt["right"],
                     Up = (bool)bt["up"], Down = (bool)bt["down"],
                     Jump = (bool)bt["jump"], Attack = (bool)bt["attack"],
-                    Dash = (bool)bt["dash"]
+                    Dash = (bool)bt["dash"],
+                    Cast = (bool)bt["cast"], Focus = (bool)bt["focus"]
                 });
                 return true;
             }

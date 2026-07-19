@@ -5,7 +5,7 @@ namespace HKRLBot
 {
     public struct ActionButtons
     {
-        public bool Left, Right, Up, Down, Jump, Attack, Dash;
+        public bool Left, Right, Up, Down, Jump, Attack, Dash, Cast, Focus;
     }
 
     public class VirtualDevice : InputDevice
@@ -21,6 +21,8 @@ namespace HKRLBot
             AddControl(InputControlType.Action1, "Jump");
             AddControl(InputControlType.Action3, "Attack");
             AddControl(InputControlType.RightTrigger, "Dash");
+            AddControl(InputControlType.Action2, "Cast");
+            AddControl(InputControlType.Action4, "Focus");
         }
 
         public override void Update(ulong updateTick, float deltaTime)
@@ -32,6 +34,8 @@ namespace HKRLBot
             UpdateWithState(InputControlType.Action1, State.Jump, updateTick, deltaTime);
             UpdateWithState(InputControlType.Action3, State.Attack, updateTick, deltaTime);
             UpdateWithState(InputControlType.RightTrigger, State.Dash, updateTick, deltaTime);
+            UpdateWithState(InputControlType.Action2, State.Cast, updateTick, deltaTime);
+            UpdateWithState(InputControlType.Action4, State.Focus, updateTick, deltaTime);
             Commit(updateTick, deltaTime);
         }
     }
@@ -58,6 +62,15 @@ namespace HKRLBot
             a.jump.AddBinding(new DeviceBindingSource(InputControlType.Action1));
             a.attack.AddBinding(new DeviceBindingSource(InputControlType.Action3));
             a.dash.AddBinding(new DeviceBindingSource(InputControlType.RightTrigger));
+            // Spells and healing are split across two game actions on purpose.
+            // quickCast fires a spell on press with no delay; the Focus/Cast
+            // action ("cast") tap-casts only after the game's tap-vs-hold
+            // disambiguation window and focuses when held. One shared button
+            // would make spell timing mushy at 67ms action ticks and make
+            // Focus unreachable (every press would spend the SOUL on a spell
+            // first), so Cast -> quickCast and Focus -> cast, held to heal.
+            a.quickCast.AddBinding(new DeviceBindingSource(InputControlType.Action2));
+            a.cast.AddBinding(new DeviceBindingSource(InputControlType.Action4));
             // Menus (the title screen, the save-profile select, the statue's
             // challenge menu) read menuSubmit, not jump. Bound to the same
             // control as Jump so every confirm pulse in ResetMacro doubles as
