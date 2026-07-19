@@ -44,6 +44,11 @@ namespace HKRLBot
         public void Attach()
         {
             if (attached) return;
+            // GameManager and its InputHandler exist from the title menu
+            // onward, but Attach can be called before either is up (the boot
+            // path calls it every macro tick); returning without setting
+            // `attached` keeps the call retryable until they exist.
+            if (GameManager.instance == null || GameManager.instance.inputHandler == null) return;
             InputManager.AttachDevice(Device);
             var a = GameManager.instance.inputHandler.inputActions;
             a.left.AddBinding(new DeviceBindingSource(InputControlType.DPadLeft));
@@ -53,6 +58,12 @@ namespace HKRLBot
             a.jump.AddBinding(new DeviceBindingSource(InputControlType.Action1));
             a.attack.AddBinding(new DeviceBindingSource(InputControlType.Action3));
             a.dash.AddBinding(new DeviceBindingSource(InputControlType.RightTrigger));
+            // Menus (the title screen, the save-profile select, the statue's
+            // challenge menu) read menuSubmit, not jump. Bound to the same
+            // control as Jump so every confirm pulse in ResetMacro doubles as
+            // a UI submit -- this is what lets a freshly booted game walk
+            // itself through the main menu into the save.
+            a.menuSubmit.AddBinding(new DeviceBindingSource(InputControlType.Action1));
             attached = true;
         }
 

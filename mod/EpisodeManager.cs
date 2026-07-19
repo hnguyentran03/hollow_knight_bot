@@ -728,7 +728,25 @@ namespace HKRLBot
             }
             else
             {
-                branch = "unexpected-scene";
+                // Neither the fight nor the workshop: the boot path. A
+                // relaunched instance starts at the title menu (Menu_Title,
+                // plus transient pre-menu scenes), where the only move that
+                // makes progress is confirm -- through the title screen and
+                // the save-profile select into the save. The save's respawn
+                // point must be the Hall of Gods bench, so loading it lands
+                // in GG_Workshop and the statue branch above takes over.
+                // Boot-to-fight takes longer than one reset's
+                // ResetMacroBudgetSeconds: each budget expiry drops the
+                // connection, the trainer reconnects and resets again, and
+                // because menu/load progress persists across drops the
+                // successive resets ratchet forward until the fight is live.
+                branch = "boot-confirm-pulse";
+                // On a fresh boot no HeroController has started, so the usual
+                // attach hook (HKRLBotMod.Initialize's On.HeroController.Start)
+                // has not fired yet; without this the pulses below never reach
+                // the menu. Attach() is a no-op once attached.
+                mod.Input.Attach();
+                b.Jump = (elapsed % RetryPulsePeriodSeconds) < RetryPulseSeconds;
             }
 
             // Log on every branch transition (immediate visibility into what
