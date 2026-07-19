@@ -560,6 +560,24 @@ namespace HKRLBot
         // one press that opens the menu.
         private const float WorkshopSettleSeconds = 1.5f;
 
+        // A held direction fires exactly one press event, and a press that
+        // lands while the scene still has control locked is swallowed with
+        // nothing to retry it. Loading the save at the Hall of Gods bench is
+        // the observed case: the knight spawns SEATED on the bench, standing
+        // up takes a fresh directional press, and the macro's one press
+        // landed during the save-load fade -- so it held Right against a
+        // seated knight for an entire reset budget (ModLog 2026-07-19:
+        // branch=walk-to-statue, knightX pinned at 11.18 for 22.5s, budget
+        // expiry; the next connection's fresh press stood him up at once).
+        // Releasing the walk hold for one tick each period turns the hold
+        // into a train of presses, so a swallowed press costs one period,
+        // not the whole reset. The 50ms gap per second costs ~5% walking
+        // speed, noise against the budget.
+        private const float WalkRepressPeriodSeconds = 1.0f;
+
+        private static bool WalkHold(float elapsed) =>
+            (elapsed % WalkRepressPeriodSeconds) >= TickIntervalSeconds;
+
         public static void Reset()
         {
             resetStartTime = Time.unscaledTime;
@@ -705,13 +723,14 @@ namespace HKRLBot
                     {
                         // Walk away from the statue until clear of its trigger.
                         branch = "step-off-statue";
-                        b.Left = true;
+                        b.Left = WalkHold(elapsed);
                     }
                     else if (!statueMenuLatched)
                     {
                         branch = "walk-to-statue";
-                        b.Left = k.X > StatueX;
-                        b.Right = k.X < StatueX;
+                        bool hold = WalkHold(elapsed);
+                        b.Left = hold && k.X > StatueX;
+                        b.Right = hold && k.X < StatueX;
                     }
                     else
                     {
