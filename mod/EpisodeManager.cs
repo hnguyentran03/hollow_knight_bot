@@ -48,6 +48,16 @@ namespace HKRLBot
         // live-condition check alone is unsound.
         private bool sawNotLiveSinceReset;
 
+        // True once a SceneManager.activeSceneChanged event has fired for a
+        // fresh entry into BossScene since the current reset was requested.
+        // Cleared at the same two "reset accepted" sites as
+        // sawNotLiveSinceReset, so the two flags stay in lockstep. Set by
+        // OnActiveSceneChanged below. fightLive in TickReset requires this in
+        // addition to sawNotLiveSinceReset: only an actual scene reload both
+        // recreates the boss's GameObject (StateReader.OnSceneChange) and
+        // restores its HP to a fresh max -- see the note above TickReset.
+        private bool sawSceneReentrySinceReset;
+
         // Wall-clock budget for the reset macro. MUST stay strictly below the
         // trainer's 30s socket timeout (Connection(timeout=30.0) in
         // trainer/hkrl/protocol.py): at 30s or above the client times out and
@@ -57,6 +67,20 @@ namespace HKRLBot
 
         private string Scene => GameManager.instance != null
             ? GameManager.instance.sceneName : "";
+
+        // Reuses the same SceneManager.activeSceneChanged plumbing
+        // HKRLBotMod.Initialize already subscribes StateReader.OnSceneChange
+        // to, rather than a second parallel scene-tracking mechanism.
+        private void Awake()
+        {
+            UnityEngine.SceneManagement.SceneManager.activeSceneChanged += OnActiveSceneChanged;
+        }
+
+        private void OnActiveSceneChanged(
+            UnityEngine.SceneManagement.Scene from, UnityEngine.SceneManagement.Scene to)
+        {
+            if (to.name == BossScene) sawSceneReentrySinceReset = true;
+        }
 
         // Decision-cycle ordering: a naive single-phase loop that reads
         // state, sends it, then blocks for the next action and applies it --
@@ -130,7 +154,8 @@ namespace HKRLBot
                 if ((string)msg["type"] == "reset")
                 {
                     awaitingReset = true;
-                    sawNotLiveSinceReset = false;   // require a fresh not-live observation before the next reset is accepted
+                    sawNotLiveSinceReset = false;      // require a fresh not-live observation before the next reset is accepted
+                    sawSceneReentrySinceReset = false; // require a fresh BossScene entry before the next reset is accepted
                     ResetMacro.Reset();
                 }
                 return;
@@ -177,7 +202,8 @@ namespace HKRLBot
                     case "reset":
                         episodeActive = false;
                         awaitingReset = true;
-                        sawNotLiveSinceReset = false;   // require a fresh not-live observation before the next reset is accepted
+                        sawNotLiveSinceReset = false;      // require a fresh not-live observation before the next reset is accepted
+                        sawSceneReentrySinceReset = false; // require a fresh BossScene entry before the next reset is accepted
                         ResetMacro.Reset();
                         HKRLBotMod.Instance.Input.Clear();
                         break;
@@ -292,24 +318,39 @@ namespace HKRLBot
         // && knight alive) is true not only for a freshly (re)started fight
         // but also for a fight that is simply STILL GOING when a "reset"
         // arrives -- e.g. the trainer truncating an episode client-side
-        // (HKEnv's max_steps) without the fight actually having ended.
-        // Accepting the raw condition there would silently continue the same
-        // fight as "episode N+1" (wrong _max_bhp baseline, reward computed
-        // against a half-finished fight, `attempt` bumped so nothing
-        // downstream notices). Fix: `fightLive` additionally requires
-        // `sawNotLiveSinceReset`, which only becomes true once this method
-        // has observed a NOT-live frame (fight over, wrong scene, or boss not
-        // yet respawned) since the reset was requested -- see the field's
-        // comment above. This holds for all three reset origins:
+        // (HKEnv's max_steps) without the fight actually having ended -- and
+        // also true for a brief window during the death-to-retry transition,
+        // where the knight's Hp/Dead fields flip back to "alive" before the
+        // arena has actually reloaded and restored the boss's HP to a fresh
+        // max. Accepting the raw condition in either case would silently
+        // declare "episode N+1" against a fight that never really restarted
+        // (wrong _max_bhp baseline, reward computed against a half-finished
+        // or stale-HP fight, `attempt` bumped so nothing downstream notices).
+        // Fix: `fightLive` additionally requires both `sawNotLiveSinceReset`
+        // (a NOT-live frame observed since the reset was requested) and
+        // `sawSceneReentrySinceReset` (a genuine BossScene re-entry observed
+        // since the reset was requested) -- see both fields' comments above.
+        // Only an actual scene reload both recreates the boss's GameObject
+        // and restores its HP to a fresh max, so gating on it closes the
+        // death-path gap the raw condition and sawNotLiveSinceReset alone
+        // leave open. This holds for all three reset origins:
         //   - Death: the knight is already dead the instant the client's
         //     reset arrives (that's why `lost` was true), so the very first
-        //     TickReset tick observes not-live and sets the flag immediately
-        //     -- unaffected in practice.
+        //     TickReset tick observes not-live and sets sawNotLiveSinceReset
+        //     immediately. sawSceneReentrySinceReset lags behind it by the
+        //     handful of frames the actual arena reload takes, so fightLive
+        //     stays false until the reload completes and the boss's HP
+        //     reading is trustworthy -- this is the gap that used to let a
+        //     mid-fight HP reading masquerade as a fresh max.
         //   - Win: the boss is already dead (or the scene has already started
-        //     leaving GG_Hornet_1) the instant the reset arrives, so likewise
-        //     the flag is set on the first tick -- unaffected in practice.
-        //   - Truncation while the fight is genuinely still live: the flag is
-        //     NOT set yet, so fightLive stays false even though the raw
+        //     leaving GG_Hornet_1) the instant the reset arrives, so
+        //     sawNotLiveSinceReset is set on the first tick; the subsequent
+        //     walk-to-statue and menu confirm both take well over a tick, and
+        //     confirming the challenge itself triggers a GG_Hornet_1 scene
+        //     load, setting sawSceneReentrySinceReset before the fight is
+        //     live again -- unaffected in practice.
+        //   - Truncation while the fight is genuinely still live: neither
+        //     flag is set yet, so fightLive stays false even though the raw
         //     condition is true. ResetMacro.Tick() still runs every grace
         //     cycle (below) and -- because this method already called
         //     Input.Clear() when the "reset" was accepted -- the knight is no
@@ -317,12 +358,13 @@ namespace HKRLBot
         //     Jump pulse (ResetMacro's GG_Hornet_1 branch does not
         //     conditionalize on k.Dead, so it runs unconditionally). Against
         //     an aggressive, un-dodged Hornet this reliably lets the fight
-        //     actually end (a real death), which flips the raw condition to
-        //     not-live, sets the flag, and lets the existing death-retry
-        //     macro carry the rest of the way to a genuine fresh fight -- so
-        //     "episode N+1" really is a new attempt, not a continuation.
-        //     ResetMacroBudgetSeconds below is the backstop for the (unlikely
-        //     but possible) case where the passive knight never gets hit.
+        //     actually end (a real death), which sets sawNotLiveSinceReset and
+        //     lets the existing death-retry macro (including its own scene
+        //     reload) carry the rest of the way to a genuine fresh fight,
+        //     setting sawSceneReentrySinceReset too -- so "episode N+1" really
+        //     is a new attempt, not a continuation. ResetMacroBudgetSeconds
+        //     below is the backstop for the (unlikely but possible) case
+        //     where the passive knight never gets hit.
         private void TickReset(BridgeServer server)
         {
             if (Time.unscaledTime < nextMacroTickTime) return;
@@ -332,7 +374,7 @@ namespace HKRLBot
             bool live = Scene == BossScene && b.Present && b.Hp > 0
                         && k != null && k.Hp > 0 && !k.Dead;
             if (!live) sawNotLiveSinceReset = true;
-            bool fightLive = live && sawNotLiveSinceReset;
+            bool fightLive = live && sawNotLiveSinceReset && sawSceneReentrySinceReset;
             if (fightLive)
             {
                 awaitingReset = false;
@@ -348,10 +390,13 @@ namespace HKRLBot
                 // up to ActionHoldSeconds later.
                 HKRLBotMod.Instance.Input.Clear();
                 // Log the boss's HP the instant the fight is confirmed live
-                // again. Because `live` just flipped false->true this very
-                // tick (a fresh (re)spawn -- see sawNotLiveSinceReset above),
-                // b.Hp here IS the fight's max HP, before any damage has been
-                // dealt. Hornet 1 Attuned has a known/expected HP pool; an
+                // again. Because fightLive required both a genuine not-live
+                // observation and a genuine BossScene re-entry since the
+                // reset (sawNotLiveSinceReset / sawSceneReentrySinceReset
+                // above), this is a fresh (re)spawn's HP, not a stale
+                // mid-fight reading, so b.Hp here IS the fight's max HP,
+                // before any damage has been dealt. Hornet 1 Attuned has a
+                // known/expected HP pool; an
                 // Ascended or Radiant tier being accepted by mistake (the
                 // statue macro cannot see which tier is highlighted) would
                 // show up here as an unexpectedly large number, which is
@@ -472,12 +517,21 @@ namespace HKRLBot
         // note above the GG_Workshop branch in Tick() for why this exists.
         private static bool statueMenuLatched;
 
+        // ElapsedSeconds timestamp at which statueMenuLatched flipped true
+        // this reset; -1f means "not yet latched". Lets the statue-menu
+        // branch below press Up exactly once for this reset (to open the
+        // menu) instead of on every StatueMenuPeriodSeconds cycle -- the menu
+        // opens with Attuned already highlighted, so repeated Up presses
+        // only navigate away from it.
+        private static float statueMenuEnteredAt = -1f;
+
         public static void Reset()
         {
             resetStartTime = Time.unscaledTime;
             lastLoggedBranch = "";
             lastHeartbeatElapsed = 0f;
             statueMenuLatched = false;
+            statueMenuEnteredAt = -1f;
         }
 
         // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
@@ -495,11 +549,13 @@ namespace HKRLBot
         private const float RetryPulseSeconds = 0.2f;
         private const float RetryPulsePeriodSeconds = 2.0f;
 
-        // Statue challenge-menu macro (GG_Workshop, at statue): pulse Up to open
-        // the menu, then pulse Jump partway through the same cycle to confirm.
-        // Both pulses are ConfirmPulseSeconds long; StatueMenuPeriodSeconds is the
-        // full cycle, and StatueConfirmOffsetSeconds is how far into the cycle the
-        // Jump confirm pulse starts.
+        // Statue challenge-menu macro (GG_Workshop, at statue): a one-shot Up
+        // press opens the menu (Attuned is already highlighted -- see
+        // statueMenuEnteredAt above), then Jump pulses on a
+        // StatueMenuPeriodSeconds cycle to confirm, retrying the confirm each
+        // cycle until the fight actually starts. Both pulses are
+        // ConfirmPulseSeconds long; StatueConfirmOffsetSeconds is how far
+        // into the confirm cycle the Jump pulse starts.
         private const float StatueMenuPeriodSeconds = 3.0f;
         private const float ConfirmPulseSeconds = 0.2f;
         private const float StatueConfirmOffsetSeconds = 1.5f;
@@ -564,14 +620,16 @@ namespace HKRLBot
                     // stateful signal to get wrong. Latching on entry is
                     // simple, matches the observed failure exactly, and is
                     // self-limiting: if the menu somehow doesn't open, the
-                    // macro just keeps retrying the Up/Jump cycle every
-                    // StatueMenuPeriodSeconds until EpisodeManager's
-                    // ResetMacroBudgetSeconds wall-clock backstop gives up
-                    // and logs branch='statue-menu' as the last attempted
-                    // branch.
+                    // macro just keeps retrying the Jump confirm every
+                    // StatueMenuPeriodSeconds (the Up press only ever fires
+                    // once -- see statueMenuEnteredAt above) until
+                    // EpisodeManager's ResetMacroBudgetSeconds wall-clock
+                    // backstop gives up and logs branch='statue-menu' as the
+                    // last attempted branch.
                     if (!statueMenuLatched && Mathf.Abs(k.X - StatueX) <= 0.5f)
                     {
                         statueMenuLatched = true;
+                        statueMenuEnteredAt = elapsed;
                     }
 
                     if (!statueMenuLatched)
@@ -582,12 +640,15 @@ namespace HKRLBot
                     }
                     else
                     {
-                        // At (or committed to) the statue: pulse Up to open
-                        // the challenge menu, then a confirm pulse to select
-                        // Attuned and begin.
+                        // At (or committed to) the statue: press Up once to
+                        // open the challenge menu (Attuned is already
+                        // highlighted, so no further Up/Down navigation is
+                        // performed), then pulse Jump on the confirm cycle to
+                        // select it, retrying the confirm every
+                        // StatueMenuPeriodSeconds if the fight hasn't started.
                         branch = "statue-menu";
+                        b.Up = (elapsed - statueMenuEnteredAt) < ConfirmPulseSeconds;
                         float cyclePos = elapsed % StatueMenuPeriodSeconds;
-                        b.Up = cyclePos < ConfirmPulseSeconds;
                         b.Jump = cyclePos >= StatueConfirmOffsetSeconds
                                  && cyclePos < StatueConfirmOffsetSeconds + ConfirmPulseSeconds;
                     }
