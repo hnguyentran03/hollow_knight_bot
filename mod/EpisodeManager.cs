@@ -7,7 +7,19 @@ namespace HKRLBot
 {
     public class EpisodeManager : MonoBehaviour
     {
+        // FrameSkip is not a literal rendered-frame count at runtime -- it is
+        // only the numerator used to derive ActionHoldSeconds below (the
+        // wall-clock duration a held action is intended to occupy at a
+        // reference rate of 60fps). Timing is measured against Time.unscaledTime,
+        // not counted rendered frames, specifically so this stays correct
+        // regardless of how fast the game actually renders -- see
+        // ActionHoldSeconds and the note above LateUpdate.
         private const int FrameSkip = 4;
+        // Wall-clock duration to hold each action: FrameSkip/60 seconds
+        // (~66.7ms), i.e. a 15 Hz decision rate. This is what HKEnv's
+        // max_steps=2700 (env.py) assumes a ~3-minute episode timeout against;
+        // changing this changes that timeout's real-world length.
+        private const float ActionHoldSeconds = FrameSkip / 60f;
         private const string BossScene = "GG_Hornet_1";
 
         // Decision-cycle state machine for an active episode. See the note
@@ -16,14 +28,18 @@ namespace HKRLBot
         private enum Phase { AwaitingAction, Holding }
 
         private Phase phase;
-        private int holdFramesLeft;
+        // Time.unscaledTime deadline at which the current Holding phase ends
+        // and the held-for-ActionHoldSeconds action's resulting state is
+        // sampled and sent. See the note above LateUpdate.
+        private float holdEndTime;
         private int attempt;
         private bool episodeActive;
         private bool awaitingReset;     // trainer asked for reset; waiting for fight to be live
-        // Throttles ResetMacro.Tick() to run once every 3 real (rendered) frames
-        // instead of every frame -- see the note above TickReset for how this
-        // relates to ResetMacro's own macro-tick constants.
-        private int resetGraceFrames;
+        // Time.unscaledTime deadline for the next ResetMacro.Tick() call --
+        // throttles the macro to run at its intended ~20 ticks/sec
+        // (ResetMacro.TickIntervalSeconds) regardless of the game's actual
+        // render framerate. See the note above TickReset.
+        private float nextMacroTickTime;
         // Sticky "boss confirmed dead" flag for the current episode. See the
         // note above ComputeWon for why this exists.
         private bool wonLatched;
@@ -37,29 +53,32 @@ namespace HKRLBot
         // live-condition check alone is unsound.
         private bool sawNotLiveSinceReset;
 
-        // Macro-tick budget for the reset macro (ResetMacro.Tick, ticked once
-        // per resetGraceFrames cycle -- i.e. once per 3 real frames, ~20
-        // macro-ticks/sec). See the note above TickReset for the
-        // justification of the exact number.
+        // Wall-clock budget for the reset macro (ResetMacro.ElapsedSeconds,
+        // measured from Time.unscaledTime since ResetMacro.Reset()).
         //
         // This MUST stay strictly below the Python trainer's 30s socket
         // timeout (trainer/hkrl/protocol.py's Connection(timeout=30.0)). If
-        // this budget's tick-equivalent seconds reach or exceed 30s, the
-        // trainer's own reset() call times out and the client tears down the
-        // connection BEFORE the mod ever reaches the budget check in
-        // TickReset below -- so the stuck-macro diagnostic that check logs
-        // never gets written. A future edit that raises this constant past
-        // 30s worth of ticks (600 at this cadence) silently reintroduces
-        // that bug.
-        private const int ResetMacroBudgetTicks = 450; // 22.5s @ 20 macro-ticks/sec -- must stay below the 30s trainer socket timeout (trainer/hkrl/protocol.py)
+        // this budget reaches or exceeds 30s, the trainer's own reset() call
+        // times out and the client tears down the connection BEFORE the mod
+        // ever reaches the budget check in TickReset below -- so the
+        // stuck-macro diagnostic that check logs never gets written. Measuring
+        // this on the wall clock (not a frame- or tick-count proxy for it) is
+        // what keeps this guarantee true regardless of the game's actual
+        // render framerate: a frame- or tick-counted budget silently drifts
+        // off its intended real-world duration if the game ever renders
+        // faster or slower than the rate it was tuned against, and could
+        // creep past 30s (or fire too early) without any change to this
+        // constant. A future edit that raises this constant to 30s or above
+        // silently reintroduces that bug.
+        private const float ResetMacroBudgetSeconds = 22.5f; // must stay below the 30s trainer socket timeout (trainer/hkrl/protocol.py)
 
         private string Scene => GameManager.instance != null
             ? GameManager.instance.sceneName : "";
 
         // Decision-cycle ordering: a naive single-phase loop that reads
         // state, sends it, then blocks for the next action and applies it --
-        // all in that order every FrameSkip'th frame -- pairs the state sent
-        // in reply to the client's Nth action with the (N-1)th action's held
+        // all in that order every decision cycle -- pairs the state sent in
+        // reply to the client's Nth action with the (N-1)th action's held
         // effect, because the state is computed and sent BEFORE the Nth
         // action is even read off the socket. The effect of the Nth action
         // wouldn't be reported until the reply to the (N+1)th action -- a
@@ -67,22 +86,33 @@ namespace HKRLBot
         // (each step()'s returned state must reflect the action just taken).
         // Fix: split each decision cycle into two phases -- AwaitingAction
         // (block for the next action, apply it immediately) and Holding (let
-        // FrameSkip frames elapse under that action, THEN sample state and
+        // ActionHoldSeconds elapse under that action, THEN sample state and
         // send). This way each SendState reflects exactly the action the
         // client is currently waiting on a reply for.
         //
-        // The AwaitingAction frame itself already holds the action (Apply()
-        // happens on that frame, via TryApplyButtons in the "action" case
-        // below), so it already counts as 1 of the FrameSkip=4 held frames.
-        // Only FrameSkip-1 further Holding frames are needed to reach a true
-        // total of 4 rendered frames per decision (15 Hz at 60 fps) -- see
-        // where holdFramesLeft is assigned below. Getting this wrong (holding
-        // FrameSkip further frames on top of the already-held AwaitingAction
-        // frame) makes the real cycle 5 frames (~12 Hz) instead of 4, which
-        // matters beyond raw rate: HKEnv's max_steps=2700 is a ~3-minute
-        // episode timeout expressed in decision steps, and is only correct at
-        // 15 Hz -- at 12 Hz the same 2700 steps is 3.75 minutes, so a rate
-        // error here silently corrupts the episode timeout too.
+        // Holding is timed against Time.unscaledTime rather than a count of
+        // rendered frames. The mod's original frame-counted hold assumed the
+        // game renders at 60fps; a live run showed the installed game
+        // actually renders uncapped (~200fps observed), which made every
+        // frame-counted hold roughly a third of its intended duration --
+        // the decision rate came out near 50 Hz instead of 15 Hz, and
+        // HKEnv's max_steps=2700 (a ~3-minute timeout at the intended 15 Hz)
+        // came out to well under a minute. Measuring the hold in seconds
+        // makes the decision rate -- and therefore the max_steps timeout --
+        // identical at any render framerate.
+        //
+        // Time.unscaledTime (not Time.time) is used deliberately: this hold
+        // is specified as a wall-clock duration, and the reset macro's budget
+        // below has to line up with the Python client's real (wall-clock)
+        // 30s socket timeout. Time.time is scaled by Time.timeScale, which
+        // Hollow Knight briefly drops during hit-pause on nail/needle
+        // impacts; measuring the hold against scaled time would make it
+        // stretch out in real time during a flurry of hits and could in
+        // principle stall a hold indefinitely if timeScale were ever driven
+        // to (near) zero for longer than expected -- a worse failure mode
+        // than the bug being fixed. Time.unscaledTime keeps both the action
+        // hold and the reset-macro budget on the same, predictable clock
+        // that always advances at one real second per real second.
         //
         // Also folds in the boss-latch handling documented above ComputeWon.
         private void LateUpdate()
@@ -102,7 +132,7 @@ namespace HKRLBot
                 if (episodeActive || awaitingReset) HKRLBotMod.Instance.Input.Clear();
                 episodeActive = false;
                 awaitingReset = false;
-                resetGraceFrames = 0;
+                nextMacroTickTime = 0f;
                 return;
             }
 
@@ -167,11 +197,12 @@ namespace HKRLBot
                             return;
                         }
                         phase = Phase.Holding;
-                        // FrameSkip - 1: this AwaitingAction frame already held
-                        // the action (Apply() just above), so it counts as the
-                        // first of FrameSkip held frames -- see the note above
-                        // LateUpdate on the decision-cycle ordering.
-                        holdFramesLeft = FrameSkip - 1;
+                        // The action was just applied above, on this very frame --
+                        // start the hold window from now, so the total time the
+                        // action is held before the resulting state is sampled is
+                        // exactly ActionHoldSeconds, regardless of the render
+                        // framerate. See the note above LateUpdate.
+                        holdEndTime = Time.unscaledTime + ActionHoldSeconds;
                         break;
                     case "reset":
                         episodeActive = false;
@@ -191,9 +222,8 @@ namespace HKRLBot
             }
 
             // phase == Phase.Holding: let the just-applied action play out for
-            // FrameSkip frames before sampling/reporting the resulting state.
-            holdFramesLeft--;
-            if (holdFramesLeft > 0) return;
+            // ActionHoldSeconds before sampling/reporting the resulting state.
+            if (Time.unscaledTime < holdEndTime) return;
 
             var k = HKRLBotMod.Instance.Reader.ReadKnight();
             var b = HKRLBotMod.Instance.Reader.ReadBoss();
@@ -216,19 +246,19 @@ namespace HKRLBot
 
         // A one-shot `b.Present && b.Hp <= 0` check on whatever frame the
         // decision cycle happened to land on is not enough: because state is
-        // only sampled once every FrameSkip frames, it's possible for the
-        // boss's GameObject to be torn down by its death sequence (Present
-        // flips to false) in the same FrameSkip window in which its HP
-        // reading crossed to <=0, without this loop ever observing a frame
-        // where both were true simultaneously. A one-shot check would then
-        // report won=false forever, and the episode would only end later via
-        // the `Scene != BossScene` fallback once the game transitions to
-        // GG_Workshop -- reporting a real win as a loss/timeout to the
-        // trainer, corrupting the reward signal. Fix: latch `wonLatched` the
-        // first time we ever observe (Present && Hp<=0) in a given episode,
-        // and keep reporting won=true for the rest of that episode even if
-        // the boss object later disappears. Reset on every fresh episode
-        // start (TickReset's fightLive branch).
+        // only sampled once per hold window, it's possible for the boss's
+        // GameObject to be torn down by its death sequence (Present flips to
+        // false) in the same window in which its HP reading crossed to <=0,
+        // without this loop ever observing a frame where both were true
+        // simultaneously. A one-shot check would then report won=false
+        // forever, and the episode would only end later via the `Scene !=
+        // BossScene` fallback once the game transitions to GG_Workshop --
+        // reporting a real win as a loss/timeout to the trainer, corrupting
+        // the reward signal. Fix: latch `wonLatched` the first time we ever
+        // observe (Present && Hp<=0) in a given episode, and keep reporting
+        // won=true for the rest of that episode even if the boss object
+        // later disappears. Reset on every fresh episode start (TickReset's
+        // fightLive branch).
         private bool ComputeWon(BossState b)
         {
             if (b.Present && b.Hp <= 0) wonLatched = true;
@@ -283,17 +313,18 @@ namespace HKRLBot
 
         // ---- reset handling ----
 
-        // resetGraceFrames throttles ResetMacro.Tick() to run once every 3
-        // real (rendered) frames, not every frame: each time this method
-        // actually reaches the bottom and calls Tick(), it sets
-        // resetGraceFrames = 2, which burns the next 2 LateUpdate calls (they
-        // hit the early-return above without checking fightLive or ticking
-        // the macro) before the 3rd call ticks again. This means ResetMacro's
-        // own `t` counter advances once per 3 real frames (~50ms at 60 FPS),
-        // NOT once per rendered frame -- so its modulo constants are
-        // macro-ticks, not frames. See the named *Ticks constants and
-        // comments in ResetMacro below, which spell out both the macro-tick
-        // counts and their real-frame/real-time equivalents.
+        // nextMacroTickTime throttles ResetMacro.Tick() to run at its intended
+        // ~20 ticks/sec (ResetMacro.TickIntervalSeconds), measured against
+        // Time.unscaledTime rather than a count of rendered frames: each time
+        // this method actually reaches the bottom and calls Tick(), it sets
+        // nextMacroTickTime = Time.unscaledTime + ResetMacro.TickIntervalSeconds,
+        // and every call before that deadline hits the early-return above
+        // without checking fightLive or ticking the macro. Gating on wall-clock
+        // time (rather than "once every N rendered frames", which assumed a
+        // 60fps game) keeps the macro's pulse cadence -- and the diagnostic
+        // logging cadence inside ResetMacro -- at the same real-world rate
+        // regardless of how fast the game actually renders. See ResetMacro's
+        // own tick/pulse constants below for the macro-side half of this.
         //
         // The raw live-condition check below (Scene==BossScene && boss alive
         // && knight alive) is true not only for a freshly (re)started fight
@@ -328,11 +359,11 @@ namespace HKRLBot
         //     not-live, sets the flag, and lets the existing death-retry
         //     macro carry the rest of the way to a genuine fresh fight -- so
         //     "episode N+1" really is a new attempt, not a continuation.
-        //     ResetMacroBudgetTicks below is the backstop for the (unlikely
+        //     ResetMacroBudgetSeconds below is the backstop for the (unlikely
         //     but possible) case where the passive knight never gets hit.
         private void TickReset(BridgeServer server)
         {
-            if (resetGraceFrames > 0) { resetGraceFrames--; return; }
+            if (Time.unscaledTime < nextMacroTickTime) return;
 
             var b = HKRLBotMod.Instance.Reader.ReadBoss();
             var k = HKRLBotMod.Instance.Reader.ReadKnight();
@@ -352,7 +383,7 @@ namespace HKRLBot
                 // don't clear it here, whatever button the macro last happened to
                 // be pressing (e.g. a Jump confirm pulse) stays held into the start
                 // of the new episode until the client's first action overwrites it
-                // up to FrameSkip frames later.
+                // up to ActionHoldSeconds later.
                 HKRLBotMod.Instance.Input.Clear();
                 // Log the boss's HP the instant the fight is confirmed live
                 // again. Because `live` just flipped false->true this very
@@ -378,32 +409,27 @@ namespace HKRLBot
             // awaitingReset, this loop never reads the socket (see the note
             // above LateUpdate's idle branch) -- so a stuck macro would
             // otherwise drive virtual buttons in-game forever with no
-            // detector. Budget: ResetMacroBudgetTicks (450 macro-ticks ==
-            // 22.5s @ ~20 macro-ticks/sec, since one macro-tick == 3 rendered
-            // frames == 50ms @ 60fps). This must be, and is, below the Python
-            // trainer's 30s socket timeout (hkrl.protocol.Connection): if it
-            // weren't, the trainer's own reset() call times out and the
-            // client tears down the connection before the mod ever reaches
-            // this check, so the diagnostic log just below -- the entire
-            // point of this budget -- would never get written (see the
-            // constant's own comment above). At 22.5s the mod gives up, logs
-            // where the macro got stuck, and drops the connection with 7.5s
-            // of margin to spare before the trainer's own timeout would
-            // otherwise fire. Sized against the macro's own real timings: the
-            // retry-confirm cycle is RetryPulsePeriodTicks=40 ticks (2.0s)
-            // and the statue menu/confirm cycle is StatueMenuPeriodTicks=60
-            // ticks (3.0s) -- any legitimate reset (death-retry, or win-path
-            // walk-to-statue plus at most a couple of menu cycles) should
-            // complete within a handful of those cycles, comfortably inside
-            // 22.5s.
-            if (ResetMacro.Ticks >= ResetMacroBudgetTicks)
+            // detector. Budget: ResetMacroBudgetSeconds (22.5s of wall-clock
+            // time). This must be, and is, below the Python trainer's 30s
+            // socket timeout (hkrl.protocol.Connection): if it weren't, the
+            // trainer's own reset() call times out and the client tears down
+            // the connection before the mod ever reaches this check, so the
+            // diagnostic log just below -- the entire point of this budget --
+            // would never get written (see the constant's own comment above).
+            // At 22.5s the mod gives up, logs where the macro got stuck, and
+            // drops the connection with 7.5s of margin to spare before the
+            // trainer's own timeout would otherwise fire. Sized against the
+            // macro's own real timings: the retry-confirm cycle is
+            // RetryPulsePeriodSeconds=2.0s and the statue menu/confirm cycle
+            // is StatueMenuPeriodSeconds=3.0s -- any legitimate reset
+            // (death-retry, or win-path walk-to-statue plus at most a couple
+            // of menu cycles) should complete within a handful of those
+            // cycles, comfortably inside 22.5s.
+            if (ResetMacro.ElapsedSeconds >= ResetMacroBudgetSeconds)
             {
                 HKRLBotMod.Instance.Log(
-                    $"EpisodeManager: reset macro exceeded its {ResetMacroBudgetTicks}-tick "
-                    // Note: ResetMacroBudgetTicks / 20 here must stay a
-                    // floating-point division -- integer division silently
-                    // truncates 450/20's true 22.5s down to 22s.
-                    + $"(~{ResetMacroBudgetTicks / 20.0:F1}s) budget -- giving up. "
+                    $"EpisodeManager: reset macro exceeded its {ResetMacroBudgetSeconds:F1}s "
+                    + $"budget -- giving up. "
                     + $"Last attempted branch='{ResetMacro.LastBranch}', scene={Scene}, "
                     + $"knightX={(k != null ? k.X.ToString("F2") : "?")}. Clearing input and "
                     + "dropping the connection.");
@@ -411,12 +437,12 @@ namespace HKRLBot
                 server.Drop();
                 awaitingReset = false;
                 episodeActive = false;
-                resetGraceFrames = 0;
+                nextMacroTickTime = 0f;
                 return;
             }
 
             ResetMacro.Tick();          // drive retry prompt / statue macro
-            resetGraceFrames = 2;
+            nextMacroTickTime = Time.unscaledTime + ResetMacro.TickIntervalSeconds;
         }
     }
 
@@ -437,48 +463,66 @@ namespace HKRLBot
     // BridgeServer's AcceptLoop thread never does either.
     public static class ResetMacro
     {
-        // `t` is driven by EpisodeManager.TickReset, which calls Tick() once
-        // every 3 real (rendered) frames (see the note above TickReset) -- so
-        // `t` counts MACRO-TICKS, not rendered frames: 1 macro-tick == 3 real
-        // frames == ~50ms at 60 FPS. All pulse-timing constants below are
-        // named/commented in macro-ticks with their real-frame/real-time
-        // equivalents spelled out, since these are the values that get tuned
-        // against the live game and need an unambiguous unit.
-        //
-        // `t` is static, so without Reset() each attempt would resume
-        // mid-cycle from wherever the last attempt left off. Reset() gives
-        // each attempt a deterministic start; called by EpisodeManager
-        // whenever a fresh "reset" request is accepted (both the idle-poll
-        // and mid-episode "reset" message paths).
-        private static int t;
+        // Ticked by EpisodeManager.TickReset once every TickIntervalSeconds
+        // of wall-clock time (see the note above TickReset), so all timing
+        // below is computed from ElapsedSeconds -- real seconds since
+        // Reset() -- rather than a counted number of calls. This is what
+        // keeps every pulse's real-world duration correct regardless of how
+        // fast the game actually renders; a live run showed the installed
+        // game renders far faster than the 60fps this macro was originally
+        // (implicitly) tuned against, which made every pulse below run about
+        // a third of its intended real-world length.
+        private static float resetStartTime;
 
-        // Exposes the macro-tick counter and the most recently logged branch
-        // name so EpisodeManager can (a) enforce ResetMacroBudgetTicks
-        // without duplicating a counter, and (b) report which branch the
-        // macro was stuck in when that budget expires.
-        public static int Ticks => t;
+        // How often EpisodeManager.TickReset calls Tick(): ~20 times/sec.
+        // This is a resolution/logging-rate choice, not a correctness
+        // requirement -- the pulse math below is computed from ElapsedSeconds
+        // directly, so it stays correct even if a particular Tick() call
+        // lands a few milliseconds early or late.
+        public const float TickIntervalSeconds = 0.05f; // 20 ticks/sec
+
+        // Seconds elapsed (wall-clock, Time.unscaledTime) since the current
+        // reset macro run started. Exposed so EpisodeManager can enforce
+        // ResetMacroBudgetSeconds without duplicating a clock.
+        public static float ElapsedSeconds => Time.unscaledTime - resetStartTime;
+
+        // Most recently logged branch name, so EpisodeManager can report
+        // which branch the macro was stuck in when its budget expires.
         public static string LastBranch => lastLoggedBranch;
 
         // The reset macro (death-retry auto-confirm, win-path statue walk)
         // drives virtual input with no other diagnostic surface besides the
         // F1 debug overlay and the driver's "still waiting on reset()"
         // heartbeat, neither of which can distinguish "walking to the statue"
-        // from "stuck in a menu" from "in the wrong scene entirely". So: log
-        // the scene, knight X, active branch, and macro tick on (a) every branch
-        // transition, so a human sees immediately when the macro moves from
-        // one phase to the next, and (b) a periodic heartbeat every
-        // HeartbeatIntervalTicks ticks so a macro that's stuck WITHOUT
-        // transitioning branches (e.g. stalled mid-walk) still produces
-        // regular evidence of what it's doing instead of going silent. Chosen
-        // interval: HeartbeatIntervalTicks=40 macro-ticks (2.0s) -- the same
-        // cadence as RetryPulsePeriodTicks, so a heartbeat lands roughly once
-        // per retry-confirm cycle. Logging every tick (20/sec) would be far
-        // too noisy for a human watching ModLog.txt live; 2s is frequent
-        // enough to see progress without drowning the log.
-        private const int HeartbeatIntervalTicks = 40; // ~2.0s @ 20 macro-ticks/sec
+        // from "in the menu confirming" from "stuck in the wrong scene
+        // entirely". So: log the scene, knight X, active branch, and elapsed
+        // time on (a) every branch transition, so a human sees immediately
+        // when the macro moves from one phase to the next, and (b) a
+        // periodic heartbeat every HeartbeatIntervalSeconds even if the
+        // branch hasn't changed, so a macro that's stuck WITHOUT
+        // transitioning branches (e.g. stalled mid-walk, or endlessly
+        // retrying a menu confirm) still produces regular evidence of what
+        // it's doing instead of going silent. Chosen interval:
+        // HeartbeatIntervalSeconds=2.0s -- the same cadence as
+        // RetryPulsePeriodSeconds, so a heartbeat lands roughly once per
+        // retry-confirm cycle. Logging every tick (20/sec) would be far too
+        // noisy for a human watching ModLog.txt live; 2s is frequent enough
+        // to see progress without drowning the log.
+        private const float HeartbeatIntervalSeconds = 2.0f;
         private static string lastLoggedBranch = "";
+        private static float lastHeartbeatElapsed;
 
-        public static void Reset() { t = 0; lastLoggedBranch = ""; }
+        // Sticky "the statue challenge menu has been opened" latch. See the
+        // note above the GG_Workshop branch in Tick() for why this exists.
+        private static bool statueMenuLatched;
+
+        public static void Reset()
+        {
+            resetStartTime = Time.unscaledTime;
+            lastLoggedBranch = "";
+            lastHeartbeatElapsed = 0f;
+            statueMenuLatched = false;
+        }
 
         // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
         // recorded from a live play session with the F1 overlay on 2026-07-18:
@@ -491,33 +535,40 @@ namespace HKRLBot
         private const float StatueX = 62.21f;
 
         // Retry-prompt confirm pulse (GG_Hornet_1, dead): hold Jump for
-        // RetryPulseTicks out of every RetryPulsePeriodTicks macro-ticks.
-        private const int RetryPulseTicks = 4;         // ~12 real frames, ~200ms @ 60fps
-        private const int RetryPulsePeriodTicks = 40;   // ~120 real frames, ~2.0s @ 60fps
+        // RetryPulseSeconds out of every RetryPulsePeriodSeconds.
+        private const float RetryPulseSeconds = 0.2f;
+        private const float RetryPulsePeriodSeconds = 2.0f;
 
         // Statue challenge-menu macro (GG_Workshop, at statue): pulse Up to open
         // the menu, then pulse Jump partway through the same cycle to confirm.
-        // Both pulses are ConfirmPulseTicks long; StatueMenuPeriodTicks is the
-        // full cycle, and StatueConfirmOffsetTicks is how far into the cycle the
+        // Both pulses are ConfirmPulseSeconds long; StatueMenuPeriodSeconds is the
+        // full cycle, and StatueConfirmOffsetSeconds is how far into the cycle the
         // Jump confirm pulse starts.
-        private const int StatueMenuPeriodTicks = 60;     // ~180 real frames, ~3.0s @ 60fps
-        private const int ConfirmPulseTicks = 4;          // ~12 real frames, ~200ms @ 60fps
-        private const int StatueConfirmOffsetTicks = 30;  // ~90 real frames, ~1.5s @ 60fps
+        private const float StatueMenuPeriodSeconds = 3.0f;
+        private const float ConfirmPulseSeconds = 0.2f;
+        private const float StatueConfirmOffsetSeconds = 1.5f;
 
         public static void Tick()
         {
             var mod = HKRLBotMod.Instance;
             string scene = GameManager.instance != null ? GameManager.instance.sceneName : "";
-            t++;
+            float elapsed = ElapsedSeconds;
             var b = new ActionButtons();
             string branch;
             float knightX = float.NaN;
+
+            // The latch only ever means anything inside GG_Workshop; clear it
+            // whenever the scene isn't Workshop so a later re-entry (e.g. a
+            // fresh reset that lands back in GG_Hornet_1 first) starts the
+            // walk-then-menu sequence over rather than resuming mid-confirm
+            // against a menu that no longer exists.
+            if (scene != "GG_Workshop") statueMenuLatched = false;
 
             if (scene == "GG_Hornet_1")
             {
                 // Dead in the boss scene: pulse confirm (jump button) at the retry prompt.
                 branch = "dead-retry-pulse";
-                b.Jump = (t % RetryPulsePeriodTicks) < RetryPulseTicks;
+                b.Jump = (elapsed % RetryPulsePeriodSeconds) < RetryPulseSeconds;
             }
             else if (scene == "GG_Workshop")
             {
@@ -530,7 +581,44 @@ namespace HKRLBot
                 if (k != null)
                 {
                     knightX = k.X;
-                    if (Mathf.Abs(k.X - StatueX) > 0.5f)
+                    // Latch onto the statue-menu branch the first time the
+                    // knight is within the deadband, and never re-check
+                    // position again for the rest of this reset. A live run
+                    // showed why: the Up pulse below opens the challenge
+                    // menu, which takes over player control -- but the
+                    // position check used to be re-evaluated every tick, so
+                    // the knight drifting even slightly outside the deadband
+                    // (whether from residual momentum or the menu itself)
+                    // flipped the branch back to walk-to-statue. That branch
+                    // never sends the Jump confirm, so the macro pressed
+                    // Left/Right into a menu that no longer reads movement
+                    // and never confirmed -- exactly the frozen-at-60.66
+                    // stall observed in ModLog.txt. Latching on entry means
+                    // once the menu is (assumed) open, the macro commits to
+                    // the confirm sequence to completion instead of
+                    // re-deriving "am I still at the statue" from a position
+                    // reading the menu itself can invalidate. This is chosen
+                    // over latching on a detected "input stopped moving the
+                    // knight" condition: that would need tracking recent
+                    // position deltas against which directional buttons were
+                    // held, which is more precise about *why* the knight
+                    // stopped responding but also more fragile (a legitimate
+                    // brief stall against a wall, or a frame of stale
+                    // physics data, would look identical) and adds a second
+                    // stateful signal to get wrong. Latching on entry is
+                    // simple, matches the observed failure exactly, and is
+                    // self-limiting: if the menu somehow doesn't open, the
+                    // macro just keeps retrying the Up/Jump cycle every
+                    // StatueMenuPeriodSeconds until EpisodeManager's
+                    // ResetMacroBudgetSeconds wall-clock backstop gives up
+                    // and logs branch='statue-menu' as the last attempted
+                    // branch.
+                    if (!statueMenuLatched && Mathf.Abs(k.X - StatueX) <= 0.5f)
+                    {
+                        statueMenuLatched = true;
+                    }
+
+                    if (!statueMenuLatched)
                     {
                         branch = "walk-to-statue";
                         b.Left = k.X > StatueX;
@@ -538,12 +626,14 @@ namespace HKRLBot
                     }
                     else
                     {
-                        // At the statue: pulse Up to open the challenge menu,
-                        // then confirm pulses to select Attuned and begin.
+                        // At (or committed to) the statue: pulse Up to open
+                        // the challenge menu, then a confirm pulse to select
+                        // Attuned and begin.
                         branch = "statue-menu";
-                        b.Up = (t % StatueMenuPeriodTicks) < ConfirmPulseTicks;
-                        b.Jump = (t % StatueMenuPeriodTicks) >= StatueConfirmOffsetTicks
-                                 && (t % StatueMenuPeriodTicks) < StatueConfirmOffsetTicks + ConfirmPulseTicks;
+                        float cyclePos = elapsed % StatueMenuPeriodSeconds;
+                        b.Up = cyclePos < ConfirmPulseSeconds;
+                        b.Jump = cyclePos >= StatueConfirmOffsetSeconds
+                                 && cyclePos < StatueConfirmOffsetSeconds + ConfirmPulseSeconds;
                     }
                 }
                 else
@@ -558,14 +648,22 @@ namespace HKRLBot
 
             // Log on every branch transition (immediate visibility into what
             // the macro just started doing) plus a periodic heartbeat every
-            // HeartbeatIntervalTicks ticks even if the branch hasn't changed
+            // HeartbeatIntervalSeconds even if the branch hasn't changed
             // (visibility into a macro stuck mid-branch, e.g. stalled
-            // mid-walk). See the field/const comments above for why this rate.
-            if (branch != lastLoggedBranch || t % HeartbeatIntervalTicks == 0)
+            // mid-walk, or endlessly retrying a menu confirm that never
+            // takes). See the field/const comments above for why this rate.
+            // Together with EpisodeManager's own "exceeded budget -- giving
+            // up" log, a human reading ModLog.txt can always distinguish
+            // walking (branch transitions/heartbeats showing
+            // walk-to-statue), confirming (branch transitions/heartbeats
+            // showing statue-menu or dead-retry-pulse), and giving up (the
+            // budget-exceeded log naming the last attempted branch).
+            if (branch != lastLoggedBranch || elapsed - lastHeartbeatElapsed >= HeartbeatIntervalSeconds)
             {
                 string xStr = float.IsNaN(knightX) ? "?" : knightX.ToString("F2");
-                mod.Log($"ResetMacro: tick={t} scene={scene} branch={branch} knightX={xStr}");
+                mod.Log($"ResetMacro: elapsed={elapsed:F2}s scene={scene} branch={branch} knightX={xStr}");
                 lastLoggedBranch = branch;
+                lastHeartbeatElapsed = elapsed;
             }
 
             mod.Input.Apply(b);

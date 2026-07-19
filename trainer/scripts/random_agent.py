@@ -44,7 +44,7 @@ from hkrl.protocol import ConnectionClosed
 # A reset() that truncates a still-live fight (HKEnv's max_steps) waits for
 # that fight to actually end before the mod will accept the reset as fresh
 # -- this can legitimately take tens of seconds, bounded only by the mod's
-# own ResetMacroBudgetTicks backstop (mod/EpisodeManager.cs; 22.5s as of
+# own ResetMacroBudgetSeconds backstop (mod/EpisodeManager.cs; 22.5s as of
 # this writing), which is itself kept below hkrl.protocol.Connection's 30s
 # socket timeout so the mod always gives up and logs first. A real stall
 # still prints several heartbeats before that timeout could fire.
