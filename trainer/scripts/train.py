@@ -116,17 +116,30 @@ def build_model(env, run_dir, resume_model=None, seed=None,
 
 
 class StopOnFlag(BaseCallback):
-    """Ends learn() cleanly when the flag is set: rollout collection stops at
-    the next step boundary and learn() returns, so the final checkpoint save
-    and game shutdown run on the normal path instead of unwinding through a
-    KeyboardInterrupt raised inside a socket read or a recovery."""
+    """Ends learn() cleanly when the flag is set: collection continues to the
+    end of the episode in progress, then learn() returns, so the final
+    checkpoint save and game shutdown run on the normal path instead of
+    unwinding through a KeyboardInterrupt raised inside a socket read or a
+    recovery.
+
+    The episode boundary, not the next step: cutting the fight off mid-swing
+    leaves the game mid-fight, where the next session's first reset has to
+    unwind a live Hornet through the truncation path -- the slowest,
+    budget-hungriest branch of the reset macro. Waiting for done costs at
+    most one episode (~3 minutes at the env's max_steps ceiling, usually far
+    less), and a second Ctrl-C still forces an immediate abort via
+    request_stop's KeyboardInterrupt."""
 
     def __init__(self, flag: threading.Event):
         super().__init__()
         self.flag = flag
 
     def _on_step(self) -> bool:
-        return not self.flag.is_set()
+        if not self.flag.is_set():
+            return True
+        # collect_rollouts publishes its locals (including this step's
+        # `dones`) via update_locals before each on_step call.
+        return not any(self.locals["dones"])
 
 
 def main() -> None:
@@ -195,7 +208,7 @@ def main() -> None:
             if stop.is_set():
                 raise KeyboardInterrupt  # second Ctrl-C: abandon the clean path
             stop.set()
-            print("stop requested: finishing the current rollout, saving a final "
+            print("stop requested: finishing the current episode, saving a final "
                   "generation, then shutting the game down (Ctrl-C again to "
                   "force)", file=sys.stderr, flush=True)
 

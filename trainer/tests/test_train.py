@@ -51,7 +51,11 @@ def test_a_short_training_run_writes_generations_and_a_manifest(tmp_path):
     assert list(tmp_path.glob("monitor_*")) != []  # VecMonitor session file
 
 
-def test_stop_flag_ends_training_at_the_next_step(tmp_path):
+def test_stop_flag_ends_training_at_the_current_episodes_end(tmp_path):
+    """A stop request finishes the attempt in progress rather than cutting
+    the fight off mid-swing: stopping at the episode boundary also leaves
+    the game in a state the next session's reset handles cheaply, instead
+    of a mid-fight truncation the reset macro has to unwind."""
     flag = threading.Event()
     flag.set()
     with FakeGame(_episodes(5)) as fg:
@@ -62,7 +66,9 @@ def test_stop_flag_ends_training_at_the_next_step(tmp_path):
             model.learn(total_timesteps=16, callback=train.StopOnFlag(flag))
         finally:
             env.close()
-    assert model.num_timesteps <= 2
+    # The flag was set before the first step, so training ran exactly one
+    # scripted 6-step episode -- not zero steps, and not the full rollout.
+    assert model.num_timesteps == 6
 
 
 def test_resume_continues_timesteps_norm_stats_and_generation_numbering(tmp_path):
