@@ -1,5 +1,6 @@
 import pathlib
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -13,6 +14,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import launch_instances  # noqa: E402  (path insert must precede this import)
 
 wait_for_port = launch_instances.wait_for_port
+shutdown = launch_instances.shutdown
 
 
 def test_wait_for_port_returns_once_the_port_accepts():
@@ -38,3 +40,48 @@ def test_wait_for_port_times_out_on_a_dead_port():
 
     with pytest.raises(TimeoutError):
         wait_for_port(port, timeout=0.5)
+
+
+def _spawn_sleeper(ignore_sigterm: bool) -> subprocess.Popen:
+    """Start a real child that sleeps, optionally ignoring SIGTERM.
+
+    The child prints once its signal handler (or lack thereof) is in place
+    and the parent blocks on that line, so the terminate() below can never
+    race the handler installation.
+    """
+    code = (
+        "import signal, time\n"
+        + ("signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if ignore_sigterm else "")
+        + "print('ready', flush=True)\n"
+        + "time.sleep(60)\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    proc.stdout.readline()
+    return proc
+
+
+def test_shutdown_reaps_a_cooperative_child_promptly():
+    proc = _spawn_sleeper(ignore_sigterm=False)
+    try:
+        start = time.monotonic()
+        shutdown([proc], grace=5.0)
+        elapsed = time.monotonic() - start
+
+        assert proc.poll() is not None
+        assert elapsed < 5.0
+    finally:
+        proc.stdout.close()
+
+
+def test_shutdown_kills_a_child_that_ignores_sigterm():
+    proc = _spawn_sleeper(ignore_sigterm=True)
+    try:
+        start = time.monotonic()
+        shutdown([proc], grace=0.3)
+        elapsed = time.monotonic() - start
+
+        # Reaped via SIGKILL escalation, not left to run out its 60s sleep.
+        assert proc.poll() is not None
+        assert elapsed < 5.0
+    finally:
+        proc.stdout.close()

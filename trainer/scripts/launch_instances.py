@@ -53,6 +53,29 @@ def launch(n: int, home: Path, port: int, app: Path, visible: bool) -> subproces
     )
 
 
+def shutdown(procs: list, grace: float = 15.0) -> None:
+    """Terminate every process and block until each has actually exited.
+
+    A game process runs its own Unity/Mono save-on-exit routine after
+    SIGTERM, which can take several seconds; 15s is generous enough to let
+    that finish under normal conditions. Any process still alive once the
+    shared deadline passes is SIGKILLed and reaped, so a hung or
+    signal-ignoring process can never outlive this call and be left holding
+    the instance's HOME or bridge port for a subsequent launch to collide
+    with.
+    """
+    for p in procs:
+        p.terminate()
+    deadline = time.monotonic() + grace
+    for p in procs:
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            p.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--instances", type=int, default=4)
@@ -80,8 +103,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        for p in procs:
-            p.terminate()
+        shutdown(procs)
 
 
 if __name__ == "__main__":
