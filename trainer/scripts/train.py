@@ -31,9 +31,22 @@ from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
 from hkrl.supervisor import InstanceDown, SupervisedVecEnv  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from launch_instances import DEFAULT_APP, DEFAULT_PORT  # noqa: E402
+from launch_instances import (  # noqa: E402
+    DEFAULT_APP, DEFAULT_PORT, SAVE_ISOLATION_SUPPORTED, prepare_instance,
+)
 
 GAMMA = 0.995
+
+
+def default_n_steps(instances: int) -> int:
+    """Per-instance rollout length for --n-steps when not given explicitly.
+
+    Divides so the total batch per update -- and with it the update's
+    wall-clock time, which must stay inside the mod's 10s idle-disconnect
+    ceiling -- holds at ~2048 whatever the fleet size. Floored at 128 so an
+    absurd fleet still collects a usable sequence per instance.
+    """
+    return max(128, 2048 // instances)
 
 
 def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs):
@@ -98,10 +111,11 @@ def build_model(env, run_dir, resume_model=None, seed=None,
         # minutes of play at 15 Hz) however many games collect it.
         n_steps=n_steps,
         batch_size=batch_size,
-        # The whole gradient update runs while the game connection idles,
-        # and the mod drops any connection idle for 10s (see the ceiling
-        # note in hkrl/env.py) -- so the update must finish well inside 10s
-        # or every rollout boundary severs the connection. This bites HARDER
+        # The whole gradient update runs while the games play on in real
+        # time -- the keepalive pinger (hkrl/protocol.py) keeps the
+        # connections alive through it, but every Knight stands in a live
+        # fight for the duration, so the update should still finish in a
+        # few seconds. This bites HARDER
         # with the recurrent 256x256+LSTM policy than the old tiny MLP:
         # measured on CPU at n_steps=2048, n_epochs=10 takes ~13s (over the
         # ceiling), n_epochs=6 ~7.8s, n_epochs=5 ~6.7s -- update time scales
@@ -185,14 +199,16 @@ def main() -> None:
                          "2048 // instances). The default divides so the "
                          "total batch -- and with it the update's wall-clock "
                          "time -- stays constant as --instances grows: the "
-                         "update runs while every game connection idles, and "
-                         "the mod drops connections idle for 10s")
+                         "games run on in real time while the update "
+                         "computes, every Knight standing in a live fight")
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--n-epochs", type=int, default=5,
                     help="PPO epochs per update. Kept at 5 so the recurrent "
-                         "256x256+LSTM update finishes under the mod's 10s "
-                         "socket idle ceiling (~6.7s on CPU); 10 overruns it "
-                         "(~13s). Raise only if the net moves off CPU.")
+                         "256x256+LSTM update stays short (~6.7s on CPU): "
+                         "the keepalive pinger keeps connections alive "
+                         "through longer updates, but the Knights stand in "
+                         "their live fights for the whole update. Raise "
+                         "only if the net moves off CPU.")
     ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args()
     if args.instances < 1:
@@ -200,7 +216,7 @@ def main() -> None:
     # Resolved before the config dump below so config.jsonl records the
     # value actually used, not None.
     if args.n_steps is None:
-        args.n_steps = max(128, 2048 // args.instances)
+        args.n_steps = default_n_steps(args.instances)
 
     if args.resume is not None:
         run_dir = args.resume.expanduser()
@@ -228,8 +244,28 @@ def main() -> None:
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }) + "\n")
 
-    game = GameFleet([args.port + i for i in range(args.instances)],
-                     app=args.app)
+    ports = [args.port + i for i in range(args.instances)]
+    # At N>1 the instances must not share the game's save directory: they
+    # all autosave the same slot throughout a run (observed corrupting the
+    # master save live, 2026-07-20 -- see seed_save_dir). Each slot gets
+    # its own app clone with a per-port bundle id (own save dir, own
+    # ModLog), refreshed from the master app and save at every start. N=1
+    # keeps the historical behavior: the single game plays the master save
+    # directly.
+    apps = None
+    if args.instances > 1:
+        if SAVE_ISOLATION_SUPPORTED:
+            print(f"preparing {args.instances} isolated game copies under "
+                  f"{args.root / 'instances'} (APFS clones; instant, "
+                  f"near-zero disk)", flush=True)
+            apps = [prepare_instance(p, args.app, args.root / "instances")
+                    for p in ports]
+        else:
+            print("WARNING: save isolation is not implemented on this "
+                  "platform; all instances will share one save slot and "
+                  "concurrent autosaves can corrupt it. Back up the save "
+                  "directory first.", file=sys.stderr, flush=True)
+    game = GameFleet(ports, app=args.app, apps=apps)
     env = None
     exit_code = 0
     try:

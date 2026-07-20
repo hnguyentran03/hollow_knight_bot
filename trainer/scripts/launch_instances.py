@@ -9,6 +9,7 @@ Also the library the supervisor and the training script import: `launch`,
 """
 import argparse
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -27,6 +28,83 @@ else:
     ).expanduser()
 
 DEFAULT_PORT = 9020
+
+# Unity's persistentDataPath on macOS is ~/Library/Application Support/
+# <CFBundleIdentifier> -- for the stock game, "unity.Team Cherry.Hollow
+# Knight". HOME redirection does NOT move it (disproven live 2026-07-20:
+# a game launched with a redirected HOME still wrote the master ModLog),
+# so isolation instead clones the whole .app per instance with a per-port
+# bundle id, which moves that instance's save dir and ModLog wholesale.
+# Windows resolves its equivalent (AppData/LocalLow/<company>/<product>)
+# from values baked into the build, not the environment -- no isolation
+# there yet.
+MASTER_BUNDLE_ID = "unity.Team Cherry.Hollow Knight"
+APP_SUPPORT = Path("~/Library/Application Support").expanduser()
+
+SAVE_ISOLATION_SUPPORTED = sys.platform == "darwin"
+
+
+def seed_save_dir(bundle_id: str, source: Path = None,
+                  app_support: Path = None) -> Path:
+    """Refresh <app_support>/<bundle_id> from the master save directory.
+
+    Two game instances sharing one save directory autosave the same slot
+    concurrently throughout a run (every bench/statue interaction), which
+    corrupted the master save live (2026-07-20: both games save-on-exit in
+    the same second; the next boot read slot 1 as empty and the boot macro
+    started a new game -- the game's own .bakNNN rotation recovered it).
+
+    Always refreshed from the master: whatever save churn a run produces in
+    the clone is disposable, and every run starts from the parked-at-bench
+    state the master holds.
+    """
+    # Module attribute resolved at call time, not bound as a default, so
+    # tests can point APP_SUPPORT at a sandbox.
+    if app_support is None:
+        app_support = APP_SUPPORT
+    src = source if source is not None else app_support / MASTER_BUNDLE_ID
+    dst = app_support / bundle_id
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+    return dst
+
+
+def prepare_instance(port: int, app: Path = None,
+                     root: Path = None, sign: bool = True) -> Path:
+    """Build this port's isolated game copy; returns its binary to launch.
+
+    An APFS copy-on-write clone (cp -c: instant, near-zero disk) of the
+    whole .app, its CFBundleIdentifier suffixed with the port so Unity
+    derives a per-instance persistentDataPath -- own saves, own ModLog --
+    then ad-hoc re-signed (the plist edit invalidates the signature, and
+    unsigned launches die instantly with exit code 138). The instance's
+    save dir is seeded from the master save on every call.
+
+    The clone is rebuilt from the master app every time, so a mod rebuild
+    (build.sh + codesign on the master) propagates on the next start.
+    """
+    app = Path(app) if app is not None else DEFAULT_APP
+    bundle = app.parents[2]  # .../hollow_knight.app/Contents/MacOS/<bin>
+    root = Path(root).expanduser() if root is not None \
+        else Path("~/hkrl/instances").expanduser()
+    clone = root / f"port-{port}" / bundle.name
+    clone.parent.mkdir(parents=True, exist_ok=True)
+    if clone.exists():
+        shutil.rmtree(clone)
+    subprocess.run(["cp", "-Rc", str(bundle), str(clone)], check=True)
+    bundle_id = f"{MASTER_BUNDLE_ID}.hkrl{port}"
+    subprocess.run(
+        ["/usr/libexec/PlistBuddy", "-c",
+         f"Set :CFBundleIdentifier {bundle_id}",
+         str(clone / "Contents" / "Info.plist")],
+        check=True)
+    if sign:
+        subprocess.run(
+            ["codesign", "--force", "--deep", "--sign", "-", str(clone)],
+            check=True, capture_output=True)
+    seed_save_dir(bundle_id)
+    return clone / "Contents" / "MacOS" / app.name
 
 
 def wait_for_port(
@@ -152,12 +230,25 @@ def main() -> None:
             f"pick a different --port range."
         )
 
+    # Same save-isolation rule as train.py: instances sharing one save slot
+    # autosave over each other. Manual multi-instance gates get the same
+    # per-port app clones a training fleet would.
+    apps = [args.app] * args.instances
+    if args.instances > 1:
+        if SAVE_ISOLATION_SUPPORTED:
+            apps = [prepare_instance(args.port + i, args.app)
+                    for i in range(args.instances)]
+        else:
+            print("WARNING: save isolation is not implemented on this "
+                  "platform; all instances share one save slot and "
+                  "concurrent autosaves can corrupt it.", flush=True)
+
     procs = []
     try:
         # Launch all, then wait all, so the games boot in parallel (a cold
         # boot is tens of seconds each) -- same shape as GameFleet.start().
         for i in range(args.instances):
-            procs.append(launch(args.port + i, args.app, visible=True))
+            procs.append(launch(args.port + i, apps[i], visible=True))
             print(f"launched: port={args.port + i}", flush=True)
         for i, proc in enumerate(procs):
             wait_for_port(args.port + i, proc=proc)

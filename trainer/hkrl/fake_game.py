@@ -31,6 +31,9 @@ class FakeGame:
         # The listener stays up, so a reconnecting client's next reset
         # proceeds, exactly like the real mod.
         self.fail_resets = fail_resets
+        # Keepalive pings answered so far, for tests asserting the pinger
+        # actually ran (hkrl/protocol.py's Connection keepalive thread).
+        self.pings = 0
         self.port = None
         self._srv = None
         self._thread = None
@@ -104,6 +107,11 @@ class FakeGame:
                     send(ep.pop(0))
                 elif msg["type"] == "action":
                     send(ep.pop(0))
+                elif msg["type"] == "ping":
+                    # Mirrors the mod's liveness ping handling: answered in
+                    # the read slot, never treated as a protocol violation.
+                    self.pings += 1
+                    send({"type": "pong"})
         except OSError:
             return
         finally:

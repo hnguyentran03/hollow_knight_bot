@@ -147,13 +147,31 @@ What to know before trying it:
   stack them.
 - **`--n-steps` is per instance and its default divides by N** (2048 → 1024
   at N=2) so the total batch, and with it the PPO update's wall-clock time,
-  stays constant — the update runs while every game connection idles, and
-  the mod drops connections idle for 10 s. If you override `--n-steps`,
-  keep `n_steps × instances` around 2048.
-- **All instances share one save directory and one `ModLog.txt`.** The mod
-  never writes game saves, so sharing is safe, but log lines from different
-  instances interleave; on Windows the Modding API's log-file handling with
-  concurrent writers is unverified.
+  stays constant. The keepalive pinger keeps connections alive through the
+  update, but the games keep running in real time while it computes — every
+  Knight stands in a live fight for the duration — so if you override
+  `--n-steps`, keep `n_steps × instances` around 2048.
+- **One slot's episode reset blocks the whole lockstep step** (the mod's
+  reset macro can run its full 22.5 s budget). The other instances' Knights
+  stand in their live fights for that long; their connections survive it
+  via the keepalive pinger. Expect episode throughput somewhat below N× for
+  this reason.
+- **Each instance gets its own save/log sandbox (macOS).** Instances
+  sharing one save directory autosave the same slot concurrently, which
+  corrupted the master save in live testing (both games saved in the same
+  second; the next boot read the slot as empty and started a new game — the
+  game's own `user1.dat.bakNNN` rotation recovered it). At `--instances` >
+  1 the trainer clones the whole `.app` per port under
+  `<root>/instances/port-<port>/` (APFS copy-on-write: instant, near-zero
+  disk) with a per-port bundle identifier, which moves that instance's
+  Unity save directory and `ModLog.txt` wholesale; each clone's save dir is
+  seeded from the master save at every start. Training never opens the
+  master save or app, in-run save churn is disposable, and a mod rebuild on
+  the master propagates to the clones on the next start. Keep the master
+  save parked at the Hall of Gods bench; it is copied, not played. (`HOME`
+  redirection was tried first and disproven live — Unity ignores it.)
+  **Windows has no save isolation yet** — multi-instance there shares one
+  slot at your own risk, and the trainer warns accordingly.
 - **Two direct-exec Steam instances at once is verified live on macOS**
   (2026-07-20: both processes survive the DRM window and both bridges serve
   the protocol simultaneously). Windows multi-instance is unverified; if an
@@ -220,5 +238,5 @@ Comparing an early generation against the latest is the quickest way to *see* wh
 - **Forgot to re-sign after a mod build (macOS)** → game exits immediately with code 138. Run the `codesign` command above.
 - **Occluded game window (macOS) / minimized window (Windows)** → the OS suspends or deprioritizes the game; the trainer sees a wedge and burns a recovery. Keep it visible, even if small.
 - **Old checkpoints after changing the action/observation space** → not resumable or replayable; the policy network's shape changed. Start a fresh run.
-- **The mod drops idle connections after 10 s** → anything that blocks the trainer between messages for ~10 s (including a slow PPO update) severs the connection. If updates get slow, lower `--n-epochs` first; don't raise the mod's `ReadTimeout`.
+- **The mod drops connections that go silent for 10 s** → the trainer's keepalive pinger (`hkrl/protocol.py`) keeps every connection chatty through lockstep gaps (another instance's reset, a PPO update), so this no longer severs connections. The game still runs in real time while the trainer thinks, though — a slow update leaves the Knight standing in a live fight — so still lower `--n-epochs` if updates get slow; don't raise the mod's `ReadTimeout`.
 - **Something else holds a bridge port** → the mod's listener silently fails and the game runs bridgeless, while port probes greet the squatter. `train.py` and `launch_instances.py` both fail fast on this before launching; if they name a port you recognize, it's probably an old dashboard (its default was 9021 — the second instance's bridge port — before it moved to 9700).

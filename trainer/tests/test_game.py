@@ -191,3 +191,26 @@ def test_fleet_start_reaps_the_partial_fleet_when_a_later_port_is_squatted():
         assert launched[0][1].poll() is not None
     finally:
         squatter.close()
+
+
+def test_fleet_binds_each_slot_to_its_own_app_across_relaunches(tmp_path):
+    """Save isolation contract: slot i always launches apps[i] -- on the
+    first start AND on every relaunch, or a recovery would point a
+    replacement game at the master app and with it the master save
+    directory."""
+    seen = []
+
+    def launch(port, app, visible):
+        seen.append((port, app))
+        return _spawn_port_listener(port)
+
+    ports = _free_ports(2)
+    apps = [tmp_path / "clone0", tmp_path / "clone1"]
+    fleet = GameFleet(ports, apps=apps, launch=launch)
+    try:
+        fleet.start()
+        fleet.relaunch(1)
+        assert seen == [(ports[0], apps[0]), (ports[1], apps[1]),
+                        (ports[1], apps[1])]
+    finally:
+        fleet.stop()

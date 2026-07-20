@@ -95,18 +95,15 @@ class HKEnv(gym.Env):
     metadata = {"render_modes": []}
 
     # The mod's socket read (BridgeServer.cs, the stream.ReadTimeout set in
-    # AcceptLoop) has a hard 10s ceiling: if this process doesn't send its
-    # next message ("action" or "reset") within 10s of the mod's last
-    # SendState, the mod's blocking ReadLine() times out and it drops the
-    # connection outright -- step()/reset() below then observe this as
-    # ConnectionClosed, not a retryable timeout. This means any blocking work
-    # performed between receiving a state and calling step()/reset() again --
-    # e.g. a PPO policy update running synchronously on this thread between
-    # rollout steps -- must complete in well under 10s, or the connection
-    # (and the in-progress episode) will be silently killed. Do not change
-    # the mod's ReadTimeout to "fix" this here; if a training loop needs
-    # longer than 10s between messages, that ceiling has to be revisited on
-    # the mod side instead.
+    # AcceptLoop) has a hard 10s ceiling per read. The Connection's keepalive
+    # pinger (hkrl/protocol.py) keeps this connection under that ceiling
+    # through any lockstep gap -- another slot's multi-second episode reset,
+    # a slow PPO update -- so idle time no longer silently kills the
+    # connection and the in-progress episode. What the pinger does NOT
+    # change: the game keeps running in real time while the trainer thinks,
+    # so long think-time still means the Knight stands in a live boss fight
+    # eating hits. Keep updates short (see the --n-epochs note in
+    # scripts/train.py) for the fight's sake, not the socket's.
 
     # `timeout` is the socket read deadline for every message, including the
     # `hello` read inside connect(). It bounds how long a wedged instance can
@@ -117,11 +114,13 @@ class HKEnv(gym.Env):
     # several of the mod's 22.5s reset budgets, and each expiry costs one
     # retry here.
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
-                 max_steps=2700, timeout=30.0, reset_retries=8):
+                 max_steps=2700, timeout=30.0, reset_retries=8,
+                 keepalive=3.0):
         self.reward = dict(DEFAULT_REWARD, **(reward_config or {}))
         self.max_steps = max_steps
         self.reset_retries = reset_retries
-        self.conn = Connection(host=host, port=port, timeout=timeout)
+        self.conn = Connection(host=host, port=port, timeout=timeout,
+                               keepalive=keepalive)
         self.conn.connect()
         self._steps = 0
         self._prev = None

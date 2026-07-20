@@ -188,3 +188,67 @@ def test_launch_supplies_steam_launch_context(tmp_path):
         assert out.read_text().strip() == "367520 367520"
     finally:
         launch_instances.shutdown([proc])
+
+
+def test_seed_save_dir_seeds_and_refreshes_the_instance_save_clone(tmp_path):
+    master = tmp_path / "unity.Team Cherry.Hollow Knight"
+    master.mkdir()
+    (master / "user1.dat").write_text("godhome, parked at bench")
+    bundle_id = "unity.Team Cherry.Hollow Knight.hkrl9030"
+
+    launch_instances.seed_save_dir(bundle_id, source=master,
+                                   app_support=tmp_path)
+    clone = tmp_path / bundle_id
+    assert (clone / "user1.dat").read_text() == "godhome, parked at bench"
+
+    # A later run must start from the master again: in-run churn in the
+    # clone (new files, modified saves) is disposable by design.
+    (clone / "user1.dat").write_text("mid-run churn")
+    (clone / "user2.dat").write_text("stray new-game slot")
+    launch_instances.seed_save_dir(bundle_id, source=master,
+                                   app_support=tmp_path)
+    assert (clone / "user1.dat").read_text() == "godhome, parked at bench"
+    assert not (clone / "user2.dat").exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin",
+                    reason="app-clone isolation is macOS-only (cp -c, "
+                           "PlistBuddy); other platforms have none yet")
+def test_prepare_instance_clones_the_app_with_a_per_port_bundle_id(
+        tmp_path, monkeypatch):
+    # A miniature .app bundle standing in for the real 7.5G one; sign=False
+    # because an ad-hoc codesign of a fake bundle fails, and the plist edit
+    # is the part under test.
+    bundle = tmp_path / "game" / "hollow_knight.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    binary = bundle / "Contents" / "MacOS" / "Hollow Knight"
+    binary.write_text("#!/bin/sh\n")
+    (bundle / "Contents" / "Info.plist").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0"><dict>'
+        "<key>CFBundleIdentifier</key>"
+        "<string>unity.Team Cherry.Hollow Knight</string>"
+        "</dict></plist>\n")
+    # seed_save_dir inside prepare_instance reads the real master save dir;
+    # point it at a stand-in.
+    master_save = tmp_path / "unity.Team Cherry.Hollow Knight"
+    master_save.mkdir()
+    (master_save / "user1.dat").write_text("save")
+    monkeypatch.setattr(launch_instances, "APP_SUPPORT", tmp_path)
+
+    out = launch_instances.prepare_instance(9030, app=binary,
+                                            root=tmp_path / "instances",
+                                            sign=False)
+
+    assert out == (tmp_path / "instances" / "port-9030" /
+                   "hollow_knight.app" / "Contents" / "MacOS" / "Hollow Knight")
+    assert out.exists()
+    plist = out.parents[1] / "Info.plist"
+    got = subprocess.run(
+        ["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleIdentifier",
+         str(plist)], capture_output=True, text=True, check=True)
+    assert got.stdout.strip() == "unity.Team Cherry.Hollow Knight.hkrl9030"
+    assert (tmp_path / "unity.Team Cherry.Hollow Knight.hkrl9030" /
+            "user1.dat").read_text() == "save"

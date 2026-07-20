@@ -119,12 +119,25 @@ class GameFleet:
     the all-or-nothing start (no half-started fleet survives a collision or
     a launch timeout) and the slot -> process routing for the supervisor's
     relaunch callback.
+
+    `apps`, when given, is one game binary per port (see
+    launch_instances.prepare_instance): each slot launches -- and, crucially,
+    RELAUNCHES -- its own isolated app clone, so a recovery never points a
+    replacement game at the master save directory.
     """
 
-    def __init__(self, ports, app: Path = None, **process_kwargs):
-        if app is not None:
-            process_kwargs["app"] = app
-        self.games = [GameProcess(port=p, **process_kwargs) for p in ports]
+    def __init__(self, ports, app: Path = None, apps=None, **process_kwargs):
+        ports = list(ports)
+        if apps is not None and len(apps) != len(ports):
+            raise ValueError("apps must match ports one to one")
+        if apps is None:
+            apps = [app] * len(ports)
+        self.games = []
+        for p, a in zip(ports, apps):
+            kwargs = dict(process_kwargs)
+            if a is not None:
+                kwargs["app"] = a
+            self.games.append(GameProcess(port=p, **kwargs))
 
     @property
     def ports(self) -> list:
