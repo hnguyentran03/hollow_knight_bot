@@ -2,6 +2,7 @@ import json
 import os
 import signal
 import socket
+import sys
 import threading
 import time
 
@@ -486,6 +487,12 @@ def test_sb3_accepts_it_as_a_vec_env_and_keeps_the_recovery_step():
         b.__exit__(None, None, None)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="os.kill(pid, SIGINT) on Windows is TerminateProcess, not a "
+           "signal, so the fan-out cannot be simulated; the SIG_IGN shield "
+           "under test is installed on all platforms (hkrl/supervisor.py "
+           "_worker_env) and covers Windows' CTRL_C_EVENT broadcast too")
 def test_a_sigint_fanned_out_to_the_workers_does_not_trigger_recovery():
     """Ctrl-C delivers SIGINT to the terminal's whole foreground process
     group -- the trainer AND every SubprocVecEnv worker, because the workers

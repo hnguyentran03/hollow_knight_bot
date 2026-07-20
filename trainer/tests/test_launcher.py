@@ -62,12 +62,35 @@ def test_wait_for_port_fails_fast_when_its_process_already_exited():
     assert time.monotonic() - start < 5.0
 
 
+def _fake_game(tmp_path: pathlib.Path, posix_body: str,
+               windows_body: str) -> pathlib.Path:
+    """Write a directly-executable fake game for the current platform.
+
+    launch() execs its app path as-is, so the stand-in must be something the
+    OS itself can run: a shell script on POSIX, a .cmd batch file on Windows
+    (CreateProcess runs those via cmd.exe on its own).
+    """
+    if sys.platform == "win32":
+        app = tmp_path / "fake_game.cmd"
+        app.write_text(windows_body)
+    else:
+        app = tmp_path / "fake_game"
+        app.write_text(posix_body)
+        app.chmod(0o755)
+    return app
+
+
 def _spawn_sleeper(ignore_sigterm: bool) -> subprocess.Popen:
     """Start a real child that sleeps, optionally ignoring SIGTERM.
 
     The child prints once its signal handler (or lack thereof) is in place
     and the parent blocks on that line, so the terminate() below can never
     race the handler installation.
+
+    On Windows the SIG_IGN registration is accepted but moot -- terminate()
+    is TerminateProcess, which nothing can ignore -- so the escalation test
+    below passes trivially there; the wait-and-reap contract it asserts is
+    the same.
     """
     code = (
         "import signal, time\n"
@@ -107,16 +130,40 @@ def test_shutdown_kills_a_child_that_ignores_sigterm():
         proc.stdout.close()
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="process groups are not observable via getpgid "
+                           "on Windows; see the win32 test below")
 def test_launch_starts_the_game_in_its_own_process_group(tmp_path):
     # A game in the terminal's process group would receive the operator's
     # Ctrl-C directly and die out from under the supervisor mid-save; the
     # only intended kill path is shutdown().
-    app = tmp_path / "fake_game"
-    app.write_text("#!/bin/sh\nsleep 30\n")
-    app.chmod(0o755)
+    app = _fake_game(tmp_path, "#!/bin/sh\nsleep 30\n", "")
     proc = launch_instances.launch(9020, app=app, visible=False)
     try:
         assert os.getpgid(proc.pid) != os.getpgid(os.getpid())
+    finally:
+        launch_instances.shutdown([proc])
+
+
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="POSIX runs the real-process test above")
+def test_launch_detaches_from_console_ctrl_c_on_windows(monkeypatch, tmp_path):
+    # Same intent as the POSIX process-group test: the console's CTRL_C_EVENT
+    # broadcast must not reach the game. Group membership of a live process
+    # has no cheap observable on Windows, so this asserts the creation flag
+    # instead -- the suite's one departure from its no-mocks rule.
+    captured = {}
+    real_popen = subprocess.Popen
+
+    def capture(*args, **kwargs):
+        captured.update(kwargs)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(launch_instances.subprocess, "Popen", capture)
+    app = _fake_game(tmp_path, "", "@echo off\r\nping -n 30 127.0.0.1 > NUL\r\n")
+    proc = launch_instances.launch(9020, app=app, visible=False)
+    try:
+        assert captured["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
     finally:
         launch_instances.shutdown([proc])
 
@@ -126,10 +173,13 @@ def test_launch_supplies_steam_launch_context(tmp_path):
     # launch context, asks Steam to relaunch the game, and quits ~15s after
     # boot -- observed live as exit 0 (or SIGBUS during Mono shutdown) at the
     # title menu. SteamAppId/SteamGameId in the child env is that context.
-    app = tmp_path / "fake_game"
     out = tmp_path / "env_seen"
-    app.write_text(f'#!/bin/sh\necho "$SteamAppId $SteamGameId" > "{out}"\nsleep 30\n')
-    app.chmod(0o755)
+    app = _fake_game(
+        tmp_path,
+        f'#!/bin/sh\necho "$SteamAppId $SteamGameId" > "{out}"\nsleep 30\n',
+        f'@echo off\r\necho %SteamAppId% %SteamGameId%> "{out}"\r\n'
+        f'ping -n 30 127.0.0.1 > NUL\r\n',
+    )
     proc = launch_instances.launch(9020, app=app, visible=False)
     try:
         deadline = time.monotonic() + 5.0

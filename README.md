@@ -30,7 +30,8 @@ mod/                    C# mod source
   StateReader.cs          reads Knight/Hornet state from the live game
   VirtualInput.cs         virtual controller the agent's buttons drive
   DISCOVERED.md           measured game facts (FSM state names, arena bounds, ...)
-  build.sh                builds and installs the mod into the game
+  build.sh                builds and installs the mod into the game (macOS)
+  build.ps1               the same, for Windows
 trainer/
   hkrl/                   the Python package
     env.py                  Gymnasium env: actions, observations, reward
@@ -52,21 +53,31 @@ trainer/
 
 ## Prerequisites
 
-- macOS with Hollow Knight installed via Steam at the default location
-  (`~/Library/Application Support/Steam/steamapps/common/Hollow Knight/`)
+- macOS or Windows with Hollow Knight installed via Steam at the default location:
+  - macOS: `~/Library/Application Support/Steam/steamapps/common/Hollow Knight/`
+  - Windows: `C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight\`
 - The [Hollow Knight Modding API](https://github.com/hk-modding/api) installed (the mod links against `MMHOOK_Assembly-CSharp.dll`)
 - .NET SDK (for `dotnet build`)
 - Python 3.11+
+
+Shell commands below are written for macOS. On Windows they work the same
+from PowerShell with the venv paths swapped: `.venv\Scripts\python` instead
+of `./.venv/bin/python` (and likewise for `pip` and `tensorboard`). The
+trainer's `--app`/`--root` flags accept Windows paths directly.
 
 ## Setup
 
 **1. Build and install the mod:**
 
 ```bash
-bash mod/build.sh
+bash mod/build.sh                                      # macOS
+powershell -ExecutionPolicy Bypass -File mod\build.ps1 # Windows
 ```
 
-**2. Re-sign the game** (required after *every* mod build — copying the DLL into the app bundle invalidates its code signature, and unsigned launches die instantly with exit code 138):
+Both assume the default Steam location; for a different Steam library pass
+`-HKManaged <path>` to build.ps1 or edit `HK_MANAGED` in build.sh.
+
+**2. Re-sign the game — macOS only** (required after *every* mod build — copying the DLL into the app bundle invalidates its code signature, and unsigned launches die instantly with exit code 138). Windows has no code-signing step:
 
 ```bash
 codesign --force --deep --sign - \
@@ -105,8 +116,8 @@ You should see the fight start on its own and one summary line per episode (step
 
 ### Before you start
 
-- Keep the **game window visible** for the entire run. macOS suspends fully occluded windows (App Nap) even with their port open; every occurrence costs a full relaunch-and-recovery.
-- Set screen saver and display-off to **Never** (or rely on `caffeinate` below).
+- Keep the **game window visible** for the entire run (on Windows: not minimized). macOS suspends fully occluded windows (App Nap) even with their port open; every occurrence costs a full relaunch-and-recovery.
+- Set screen saver and display-off to **Never** (macOS can instead rely on `caffeinate` below; on Windows use Settings → System → Power, or `powercfg /change standby-timeout-ac 0`).
 - Have a few hundred MB free under `~/hkrl` for checkpoints and logs.
 
 ### Start a run
@@ -115,6 +126,8 @@ You should see the fight start on its own and one summary line per episode (step
 cd trainer
 caffeinate -dims ./.venv/bin/python scripts/train.py --timesteps 500000 --run-id my-run
 ```
+
+(On Windows, run `.venv\Scripts\python scripts\train.py ...` without the `caffeinate` prefix — sleep suppression comes from the power settings above.)
 
 `train.py` launches the game itself — don't start one manually. When prompted, wait for the game to reach the Hall of Gods (the boot macro can drive it there; a few `reset ... reconnecting` retries on stderr are normal) and press Enter. 500k steps is roughly an overnight run (~54k steps/hour at 15&nbsp;Hz).
 
@@ -170,7 +183,7 @@ Comparing an early generation against the latest is the quickest way to *see* wh
 
 ## Things that bite
 
-- **Forgot to re-sign after a mod build** → game exits immediately with code 138. Run the `codesign` command above.
-- **Occluded game window** → App Nap suspends the game; the trainer sees a wedge and burns a recovery. Keep it visible, even if small.
+- **Forgot to re-sign after a mod build (macOS)** → game exits immediately with code 138. Run the `codesign` command above.
+- **Occluded game window (macOS) / minimized window (Windows)** → the OS suspends or deprioritizes the game; the trainer sees a wedge and burns a recovery. Keep it visible, even if small.
 - **Old checkpoints after changing the action/observation space** → not resumable or replayable; the policy network's shape changed. Start a fresh run.
 - **The mod drops idle connections after 10 s** → anything that blocks the trainer between messages for ~10 s (including a slow PPO update) severs the connection. If updates get slow, lower `--n-epochs` first; don't raise the mod's `ReadTimeout`.

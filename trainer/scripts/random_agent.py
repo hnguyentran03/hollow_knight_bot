@@ -250,7 +250,8 @@ def main():
               f"!!! Likely cause: the game isn't running, the mod isn't "
               f"installed/loaded, or --port is wrong.\n"
               f"!!! Start Hollow Knight with the mod installed "
-              f"(see mod/build.sh) and try again.", file=sys.stderr)
+              f"(see mod/build.sh, or mod/build.ps1 on Windows) and try "
+              f"again.", file=sys.stderr)
         sys.exit(1)
 
     if args.seed is not None:

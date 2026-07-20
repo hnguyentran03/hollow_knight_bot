@@ -11,13 +11,20 @@ import argparse
 import os
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 
-DEFAULT_APP = Path(
-    "~/Library/Application Support/Steam/steamapps/common/Hollow Knight/"
-    "hollow_knight.app/Contents/MacOS/Hollow Knight"
-).expanduser()
+if sys.platform == "win32":
+    DEFAULT_APP = Path(
+        r"C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight"
+        r"\hollow_knight.exe"
+    )
+else:
+    DEFAULT_APP = Path(
+        "~/Library/Application Support/Steam/steamapps/common/Hollow Knight/"
+        "hollow_knight.app/Contents/MacOS/Hollow Knight"
+    ).expanduser()
 
 DEFAULT_PORT = 9020
 
@@ -67,18 +74,26 @@ def launch(port: int, app: Path, visible: bool) -> subprocess.Popen:
     # ~15s after boot -- at the title menu, before any bridge traffic.
     # steam_appid.txt beside the binary or in the cwd does NOT satisfy the
     # check on macOS; only the env vars do (verified live, 2026-07-19).
+    # Unverified on Windows, where steam_appid.txt reportedly also works;
+    # the env vars are kept as the single cross-platform mechanism.
     env = dict(os.environ, HKRL_PORT=str(port),
                SteamAppId="367520", SteamGameId="367520")
+    # Detach the game from the terminal's Ctrl-C: Ctrl-C at the trainer must
+    # interrupt the trainer alone, not kill the game out from under the
+    # supervisor and the final checkpoint save. shutdown() is the one
+    # intended kill path. On POSIX that means a new session (out of the
+    # terminal's foreground process group); on Windows, a new process group
+    # (out of the console's CTRL_C_EVENT broadcast).
+    if sys.platform == "win32":
+        detach = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        detach = {"start_new_session": True}
     return subprocess.Popen(
         [str(app)],
         env=env,
         stdout=subprocess.DEVNULL if not visible else None,
         stderr=subprocess.DEVNULL if not visible else None,
-        # A new session detaches the game from the terminal's process group:
-        # Ctrl-C at the trainer must interrupt the trainer alone, not kill
-        # the game out from under the supervisor and the final checkpoint
-        # save. shutdown() is the one intended kill path.
-        start_new_session=True,
+        **detach,
     )
 
 
@@ -91,6 +106,13 @@ def shutdown(procs: list, grace: float = 15.0) -> None:
     shared deadline passes is SIGKILLed and reaped, so a hung or
     signal-ignoring process can never outlive this call and be left holding
     the bridge port for a subsequent launch to collide with.
+
+    On Windows, terminate() IS TerminateProcess -- an immediate hard kill
+    with no save-on-exit window. That is acceptable here: the training save
+    is parked at the Hall of Gods bench and the mod never writes game saves,
+    so there is nothing in memory worth flushing. The escalation path is
+    then a no-op (kill() == terminate()), but the wait-and-reap contract
+    holds identically.
     """
     for p in procs:
         p.terminate()

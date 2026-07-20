@@ -5,7 +5,10 @@
     <RootNamespace>HKRLBot</RootNamespace>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <HKManaged>$(HOME)/Library/Application Support/Steam/steamapps/common/Hollow Knight/hollow_knight.app/Contents/Resources/Data/Managed</HKManaged>
+    <!-- Overridable from the command line with -p:HKManaged=... for a
+         non-default Steam library location. -->
+    <HKManaged Condition="'$(HKManaged)' == '' AND '$(OS)' == 'Windows_NT'">C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight\hollow_knight_Data\Managed</HKManaged>
+    <HKManaged Condition="'$(HKManaged)' == ''">$(HOME)/Library/Application Support/Steam/steamapps/common/Hollow Knight/hollow_knight.app/Contents/Resources/Data/Managed</HKManaged>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
