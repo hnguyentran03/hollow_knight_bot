@@ -157,6 +157,10 @@ namespace HKRLBot
                 // ReadTimeout revisited, not this loop.
                 var msg = SafeReadMessage(server);
                 if (msg == null) return;
+                // Liveness ping: answer from this main-thread read and stay
+                // idle. See TryAnswerPing for why the main thread must be the
+                // one to reply.
+                if (TryAnswerPing(server, msg)) return;
                 if ((string)msg["type"] == "reset")
                 {
                     awaitingReset = true;
@@ -212,6 +216,17 @@ namespace HKRLBot
                         sawSceneReentrySinceReset = false; // require a fresh BossScene entry before the next reset is accepted
                         ResetMacro.Reset();
                         HKRLBotMod.Instance.Input.Clear();
+                        break;
+                    case "ping":
+                        // Liveness ping arriving mid-episode, in the read slot
+                        // this decision cycle is blocked on. Answer it and
+                        // stay in Phase.AwaitingAction WITHOUT applying an
+                        // action or advancing to Holding: the client still
+                        // owes us the real action, which the next LateUpdate's
+                        // read will pick up. Unlike the default case below, a
+                        // ping is NOT a protocol violation, so it must not drop
+                        // the connection. See TryAnswerPing.
+                        server.SendPong();
                         break;
                     default:
                         HKRLBotMod.Instance.Log($"EpisodeManager: unexpected message type '{reply["type"]}' while awaiting action, dropping connection");
@@ -288,6 +303,37 @@ namespace HKRLBot
                 server.Drop();
                 return null;
             }
+        }
+
+        // Liveness ping/pong. The trainer (or the Python supervisor's probe)
+        // sends {"type":"ping"}; the mod answers {"type":"pong"}. This is
+        // handled HERE, in EpisodeManager's LateUpdate read loop, on purpose:
+        // BridgeServer.AcceptLoop greets a new connection inline from its own
+        // background thread (see _port_ready in trainer/hkrl/supervisor.py),
+        // so a bare TCP connect + hello proves only that the process exists
+        // and the accept thread runs -- NOT that the Unity main thread is
+        // still scheduling LateUpdate. An App-Nap-suspended or
+        // frozen-main-thread game still greets a probe but can no longer reach
+        // this code, so it never sends a pong. A caller that connects, sends
+        // ping, and waits a short bounded time for pong therefore has a true
+        // main-thread liveness signal that the hello handshake cannot give.
+        //
+        // Returns true when the message was a ping (already answered), so the
+        // caller treats it as "keep waiting for the real message" rather than
+        // a reset/action or a protocol violation. Note this is deliberately
+        // NOT wired into the Python supervisor here: _port_ready's existing
+        // hello-based probe stays the fallback, and adding a ping probe there
+        // would open a second connection that AcceptLoop would treat as a
+        // reconnect, severing the live trainer -- so any Python-side probe
+        // must reuse the training connection, which is left as a follow-up.
+        private static bool TryAnswerPing(BridgeServer server, JObject msg)
+        {
+            if (msg != null && (string)msg["type"] == "ping")
+            {
+                server.SendPong();
+                return true;
+            }
+            return false;
         }
 
         private static bool TryApplyButtons(JToken bt)

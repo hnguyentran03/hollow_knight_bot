@@ -2,8 +2,8 @@ import pathlib
 import sys
 
 import pytest
-from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack, VecNormalize
+from sb3_contrib import RecurrentPPO
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import replay  # noqa: E402  (path insert must precede this import)
@@ -25,13 +25,15 @@ def _scripted(win):
 
 
 def _make_checkpoint(tmp_path):
-    """A real, loadable checkpoint: an untrained PPO with this pipeline's
-    spaces, plus the VecNormalize statistics it was constructed with."""
+    """A real, loadable checkpoint: an untrained RecurrentPPO with this
+    pipeline's spaces, plus the VecNormalize statistics it was constructed
+    with. No VecFrameStack -- the recurrent policy replaced frame stacking,
+    so replay's pipeline (which this must match) no longer stacks either."""
     with FakeGame([_scripted(win=False)]) as fg:
         venv = DummyVecEnv([make_env(fg.port)])
-        stacked = VecFrameStack(venv, n_stack=4)
-        env = VecNormalize(stacked, gamma=0.995)
-        model = PPO("MlpPolicy", env, n_steps=8, batch_size=8, device="cpu")
+        env = VecNormalize(venv, gamma=0.995)
+        model = RecurrentPPO("MlpLstmPolicy", env, n_steps=8, batch_size=8,
+                             device="cpu")
         weights = tmp_path / "gen_0001.zip"
         vecnorm = tmp_path / "gen_0001_vecnorm.pkl"
         model.save(weights)
