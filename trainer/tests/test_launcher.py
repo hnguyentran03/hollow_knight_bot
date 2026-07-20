@@ -254,3 +254,37 @@ def test_prepare_instance_clones_the_app_with_a_per_port_bundle_id(
     assert got.stdout.strip() == "unity.Team Cherry.Hollow Knight.hkrl9030"
     assert (tmp_path / "unity.Team Cherry.Hollow Knight.hkrl9030" /
             "user1.dat").read_text() == "save"
+
+
+def test_backup_saves_snapshots_the_master_save(tmp_path):
+    src = tmp_path / "master"
+    src.mkdir()
+    (src / "user1.dat").write_text("godhome, parked at bench")
+    dest = launch_instances.backup_saves(root=tmp_path / "hkrl", source=src,
+                                         stamp="20260720_190000")
+    assert dest == tmp_path / "hkrl" / "save-backups" / "20260720_190000"
+    assert (dest / "user1.dat").read_text() == "godhome, parked at bench"
+    # A second run in the same second must not overwrite the first snapshot.
+    again = launch_instances.backup_saves(root=tmp_path / "hkrl", source=src,
+                                          stamp="20260720_190000")
+    assert again != dest and (again / "user1.dat").exists()
+
+
+def test_backup_saves_retains_only_the_newest_snapshots(tmp_path):
+    src = tmp_path / "master"
+    src.mkdir()
+    (src / "user1.dat").write_text("save")
+    for i in range(5):
+        launch_instances.backup_saves(root=tmp_path / "hkrl", keep=3,
+                                      source=src, stamp=f"20260720_19000{i}")
+    left = sorted(p.name for p in
+                  (tmp_path / "hkrl" / "save-backups").iterdir())
+    assert left == ["20260720_190002", "20260720_190003", "20260720_190004"]
+
+
+def test_backup_saves_is_a_noop_without_a_master_save_dir(tmp_path):
+    # A platform with no known save location (or a machine without the
+    # game) must not crash the launch path -- there is nothing to protect.
+    assert launch_instances.backup_saves(root=tmp_path / "hkrl",
+                                         source=tmp_path / "absent") is None
+    assert not (tmp_path / "hkrl" / "save-backups").exists()
