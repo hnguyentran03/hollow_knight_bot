@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hkrl — Hall of Gods</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --s1: #2a78d6;          /* categorical slot 1: blue */
+    --s2: #008300;          /* categorical slot 2: green */
+    --meter-track: #cde2fb; /* blue ramp, step 100 */
+    --good: #0ca30c;
+    --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --s1: #3987e5;
+      --s2: #008300;
+      --meter-track: #104281; /* blue ramp, step 650 */
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 48px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 22px; font-weight: 650; margin: 0; }
+  select {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
+  }
+  .status-line { display: flex; align-items: center; gap: 8px; color: var(--ink-2); margin-left: auto; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+  .badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .badge.live .dot { background: var(--good); }
+  .badge.live { color: var(--good); }
+  .badge.stopped .dot { background: var(--critical); }
+  .badge.stopped { color: var(--critical); }
+
+  #banner {
+    display: none; margin: 12px 0 0; padding: 8px 12px; border-radius: 6px;
+    background: var(--surface); border: 1px solid var(--critical); color: var(--ink-2);
+  }
+  #banner.show { display: block; }
+
+  /* Signature: the boss bar. Fill = mean damage dealt; track = what is
+     left of Hornet, a lighter step of the same ramp. */
+  .bossbar { margin: 20px 0 16px; }
+  .bossbar .row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .bossbar .name { font-size: 15px; font-weight: 650; letter-spacing: 0.14em; text-transform: uppercase; }
+  .bossbar .read { color: var(--ink-2); }
+  .bossbar .read strong { color: var(--ink); font-weight: 650; }
+  .bossbar .track { height: 14px; border-radius: 7px; background: var(--meter-track); overflow: hidden; }
+  .bossbar .fill { height: 100%; background: var(--s1); border-radius: 7px 0 0 7px; width: 0; transition: width 400ms ease; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 18px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .tile .label { font-size: 12px; color: var(--muted); }
+  .tile .value { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  .tile .sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  .tile .mini { height: 4px; border-radius: 2px; background: var(--meter-track); margin-top: 8px; overflow: hidden; }
+  .tile .mini > div { height: 100%; background: var(--s1); }
+
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 760px) { .charts { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 12px 8px; position: relative; }
+  .card.wide { grid-column: 1 / -1; }
+  .card h2 { font-size: 13px; font-weight: 650; margin: 0; }
+  .card .subtitle { font-size: 12px; color: var(--muted); margin: 1px 0 6px; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); margin: 2px 0 4px; }
+  .legend .key { display: inline-block; width: 14px; height: 0; border-top: 3px solid; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+  svg { display: block; width: 100%; }
+  svg text { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; fill: var(--muted); }
+
+  .tooltip {
+    position: absolute; pointer-events: none; display: none; z-index: 2;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 9px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    min-width: 110px;
+  }
+  .tooltip .tx { color: var(--muted); margin-bottom: 3px; }
+  .tooltip .trow { display: flex; align-items: center; gap: 6px; }
+  .tooltip .tkey { width: 10px; height: 0; border-top: 3px solid; border-radius: 2px; }
+  .tooltip .tval { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tooltip .tname { color: var(--ink-2); }
+
+  details { margin-top: 18px; color: var(--ink-2); }
+  summary { cursor: pointer; font-size: 13px; }
+  .config-table { border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+  .config-table td { padding: 3px 18px 3px 0; font-variant-numeric: tabular-nums; }
+  .config-table td:first-child { color: var(--muted); }
+
+  .empty { margin: 48px auto; text-align: center; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">hkrl · Hall of Gods telemetry</div>
+      <h1 id="run-title">…</h1>
+    </div>
+    <select id="run-select" aria-label="Training run"></select>
+    <div class="status-line">
+      <span id="badge" class="badge"><span class="dot"></span><span id="badge-text"></span></span>
+      <span id="activity"></span>
+    </div>
+  </header>
+  <div id="banner">Dashboard server unreachable — showing the last data received. Retrying…</div>
+
+  <div id="content" hidden>
+    <div class="bossbar">
+      <div class="row">
+        <span class="name">Hornet</span>
+        <span class="read" id="boss-read"></span>
+      </div>
+      <div class="track"><div class="fill" id="boss-fill"></div></div>
+    </div>
+
+    <div class="tiles" id="tiles"></div>
+
+    <div class="charts">
+      <div class="card wide" id="chart-learning">
+        <h2>Is it learning?</h2>
+        <div class="subtitle">Per generation, by timestep</div>
+      </div>
+      <div class="card" id="chart-reward">
+        <h2>Mean reward</h2>
+        <div class="subtitle">Per generation</div>
+      </div>
+      <div class="card" id="chart-eplen">
+        <h2>Episode length</h2>
+        <div class="subtitle">Steps per episode, per generation (ceiling 2700)</div>
+      </div>
+      <div class="card wide" id="chart-episodes">
+        <h2>Reward per episode</h2>
+        <div class="subtitle">Every fight, over wall-clock time — the heartbeat between checkpoints</div>
+      </div>
+    </div>
+
+    <details>
+      <summary>Session config</summary>
+      <table class="config-table" id="config"></table>
+    </details>
+  </div>
+
+  <div class="empty" id="empty" hidden>
+    <p>No runs found under the dashboard root.</p>
+    <p>Start one with <code>scripts/train.py --run-id my-run</code> and this page will pick it up.</p>
+  </div>
+</div>
+
+<script>
+"use strict";
+const POLL_MS = 10000;
+const state = { runId: null, run: null, runs: [] };
+
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+/* ---------- formatting ---------- */
+const fmtK = n => n >= 1e6 ? (n / 1e6).toFixed(2) + "M"
+  : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(Math.round(n));
+const fmtPct = f => (f * 100).toFixed(0) + "%";
+const fmtDur = s => s == null ? "—"
+  : s >= 5400 ? (s / 3600).toFixed(1) + " h"
+  : s >= 90 ? Math.round(s / 60) + " min" : Math.round(s) + " s";
+const fmtAgo = epoch => {
+  if (epoch == null) return "";
+  return fmtDur(Date.now() / 1000 - epoch) + " ago";
+};
+const fmtClock = epoch =>
+  new Date(epoch * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/* ---------- generic SVG line/scatter chart with crosshair tooltip ---------- */
+function niceTicks(lo, hi, n) {
+  if (hi === lo) { hi = lo + 1; }
+  const span = hi - lo;
+  const step0 = span / Math.max(1, n);
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => span / s <= n + 0.5) || 10 * mag;
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) ticks.push(v);
+  return ticks;
+}
+
+// series: {name, color, points:[{x,y}], kind:"line"|"dots", endDot:bool}
+function drawChart(card, opts) {
+  card.querySelectorAll("svg, .tooltip, .legend").forEach(el => el.remove());
+  const allPts = opts.series.flatMap(s => s.points);
+  if (!allPts.length) return;
+
+  if (opts.series.length > 1) {
+    const legend = document.createElement("div");
+    legend.className = "legend";
+    for (const s of opts.series) {
+      const item = document.createElement("span");
+      const key = document.createElement("span");
+      key.className = "key";
+      key.style.borderTopColor = s.color;
+      item.appendChild(key);
+      item.appendChild(document.createTextNode(s.name));
+      legend.appendChild(item);
+    }
+    card.appendChild(legend);
+  }
+
+  const W = Math.max(280, card.clientWidth - 24), H = opts.height || 190;
+  const M = { l: 42, r: 14, t: 8, b: 22 };
+  const xs = allPts.map(p => p.x), ys = allPts.map(p => p.y);
+  const xlo = opts.xDomain ? opts.xDomain[0] : Math.min(...xs);
+  const xhi = opts.xDomain ? opts.xDomain[1] : Math.max(...xs);
+  let ylo = opts.yDomain ? opts.yDomain[0] : Math.min(0, ...ys);
+  let yhi = opts.yDomain ? opts.yDomain[1] : Math.max(...ys);
+  if (yhi === ylo) yhi = ylo + 1;
+  const pad = opts.yDomain ? 0 : (yhi - ylo) * 0.06;
+  ylo -= opts.yDomain ? 0 : (ylo < 0 ? pad : 0);
+  yhi += pad;
+  const X = x => M.l + (x - xlo) / (xhi - xlo || 1) * (W - M.l - M.r);
+  const Y = y => H - M.b - (y - ylo) / (yhi - ylo) * (H - M.t - M.b);
+
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("height", H);
+  const el = (tag, attrs) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    svg.appendChild(node);
+    return node;
+  };
+
+  for (const t of niceTicks(ylo, yhi, 4)) {
+    el("line", { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t),
+                 stroke: css("--grid"), "stroke-width": 1 });
+    const txt = el("text", { x: M.l - 6, y: Y(t) + 3, "text-anchor": "end" });
+    txt.textContent = opts.yFormat(t);
+  }
+  el("line", { x1: M.l, x2: W - M.r, y1: Y(Math.max(ylo, Math.min(0, yhi))), y2: Y(Math.max(ylo, Math.min(0, yhi))),
+               stroke: css("--baseline"), "stroke-width": 1 });
+  for (const t of niceTicks(xlo, xhi, 5)) {
+    const txt = el("text", { x: X(t), y: H - 6, "text-anchor": "middle" });
+    txt.textContent = opts.xFormat(t);
+  }
+
+  for (const s of opts.series) {
+    if (s.kind === "dots") {
+      for (const p of s.points)
+        el("circle", { cx: X(p.x), cy: Y(p.y), r: 2.5, fill: s.color,
+                       stroke: css("--surface"), "stroke-width": 1 });
+    } else {
+      const d = s.points.map((p, i) => (i ? "L" : "M") + X(p.x) + " " + Y(p.y)).join(" ");
+      el("path", { d, fill: "none", stroke: s.color, "stroke-width": 2,
+                   "stroke-linejoin": "round", "stroke-linecap": "round" });
+      if (s.endDot !== false && s.points.length) {
+        const last = s.points[s.points.length - 1];
+        el("circle", { cx: X(last.x), cy: Y(last.y), r: 4, fill: s.color,
+                       stroke: css("--surface"), "stroke-width": 2 });
+      }
+    }
+  }
+
+  /* crosshair + one tooltip listing every series at the snapped x */
+  const cross = el("line", { y1: M.t, y2: H - M.b, stroke: css("--baseline"),
+                             "stroke-width": 1, visibility: "hidden" });
+  const tip = document.createElement("div");
+  tip.className = "tooltip";
+  card.appendChild(tip);
+  const snapXs = [...new Set(opts.series.filter(s => !s.snapExempt)
+                                        .flatMap(s => s.points.map(p => p.x)))].sort((a, b) => a - b);
+
+  svg.addEventListener("pointermove", ev => {
+    if (!snapXs.length) return;
+    const rect = svg.getBoundingClientRect();
+    const mx = (ev.clientX - rect.left) / rect.width * W;
+    const dataX = xlo + (mx - M.l) / (W - M.l - M.r) * (xhi - xlo);
+    let best = snapXs[0];
+    for (const x of snapXs) if (Math.abs(x - dataX) < Math.abs(best - dataX)) best = x;
+    cross.setAttribute("x1", X(best));
+    cross.setAttribute("x2", X(best));
+    cross.setAttribute("visibility", "visible");
+
+    tip.replaceChildren();
+    const tx = document.createElement("div");
+    tx.className = "tx";
+    tx.textContent = opts.xTipFormat ? opts.xTipFormat(best) : opts.xFormat(best);
+    tip.appendChild(tx);
+    for (const s of opts.series) {
+      const near = s.points.reduce((a, p) =>
+        Math.abs(p.x - best) < Math.abs(a.x - best) ? p : a, s.points[0]);
+      if (!near || Math.abs(near.x - best) > (xhi - xlo) / 50 && s.snapExempt) continue;
+      const row = document.createElement("div");
+      row.className = "trow";
+      const key = document.createElement("span");
+      key.className = "tkey";
+      key.style.borderTopColor = s.color;
+      const val = document.createElement("span");
+      val.className = "tval";
+      val.textContent = opts.yFormat(near.y);
+      const name = document.createElement("span");
+      name.className = "tname";
+      name.textContent = s.name;
+      row.append(key, val, name);
+      tip.appendChild(row);
+    }
+    const cardRect = card.getBoundingClientRect();
+    const px = X(best) / W * rect.width + rect.left - cardRect.left;
+    tip.style.display = "block";
+    tip.style.left = Math.min(px + 12, cardRect.width - tip.offsetWidth - 8) + "px";
+    tip.style.top = (rect.top - cardRect.top + 10) + "px";
+  });
+  svg.addEventListener("pointerleave", () => {
+    cross.setAttribute("visibility", "hidden");
+    tip.style.display = "none";
+  });
+
+  card.appendChild(svg);
+}
+
+/* ---------- page assembly ---------- */
+function rollingMean(points, window) {
+  const out = [];
+  let sum = 0;
+  const q = [];
+  for (const p of points) {
+    q.push(p.y); sum += p.y;
+    if (q.length > window) sum -= q.shift();
+    out.push({ x: p.x, y: sum / q.length });
+  }
+  return out;
+}
+
+function tile(label, value, sub) {
+  const div = document.createElement("div");
+  div.className = "tile";
+  const l = document.createElement("div"); l.className = "label"; l.textContent = label;
+  const v = document.createElement("div"); v.className = "value"; v.textContent = value;
+  div.append(l, v);
+  if (sub) { const s = document.createElement("div"); s.className = "sub"; s.textContent = sub; div.appendChild(s); }
+  return div;
+}
+
+function render() {
+  const run = state.run;
+  if (!run) return;
+  document.getElementById("content").hidden = false;
+  document.getElementById("empty").hidden = true;
+  document.getElementById("run-title").textContent = run.id;
+
+  const st = run.status;
+  const badge = document.getElementById("badge");
+  badge.className = "badge " + (st.live ? "live" : "stopped");
+  document.getElementById("badge-text").textContent = st.live ? "live" : "stopped";
+  document.getElementById("activity").textContent =
+    st.last_activity ? "· last activity " + fmtAgo(st.last_activity) : "";
+
+  const gens = run.generations;
+  const latest = gens.length ? gens[gens.length - 1] : null;
+  const damage = latest ? Math.min(1, latest.mean_boss_damage) : 0;
+  document.getElementById("boss-fill").style.width = (damage * 100).toFixed(1) + "%";
+  document.getElementById("boss-read").replaceChildren();
+  const read = document.getElementById("boss-read");
+  const strong = document.createElement("strong");
+  strong.textContent = latest ? fmtPct(damage) : "—";
+  read.appendChild(strong);
+  read.appendChild(document.createTextNode(
+    latest ? ` of Hornet's HP per attempt · gen ${latest.gen}` : " no generations yet"));
+
+  const tiles = document.getElementById("tiles");
+  tiles.replaceChildren();
+  const progress = st.target_timestep ? st.timestep / st.target_timestep : null;
+  const tsTile = tile("Timestep", fmtK(st.timestep),
+    st.target_timestep ? "of " + fmtK(st.target_timestep) : "");
+  if (progress != null) {
+    const mini = document.createElement("div");
+    mini.className = "mini";
+    const fill = document.createElement("div");
+    fill.style.width = Math.min(100, progress * 100) + "%";
+    mini.appendChild(fill);
+    tsTile.appendChild(mini);
+  }
+  tiles.appendChild(tsTile);
+  tiles.appendChild(tile("Steps / hour", st.steps_per_hour ? fmtK(st.steps_per_hour) : "—",
+    "session average"));
+  tiles.appendChild(tile("ETA", st.live ? fmtDur(st.eta_s) : "—",
+    st.live ? "at current pace" : "run stopped"));
+  tiles.appendChild(tile("Generations", String(gens.length),
+    latest ? "win rate " + fmtPct(latest.win_rate) : ""));
+  tiles.appendChild(tile("Episodes", String(run.episodes.length), "all sessions"));
+  tiles.appendChild(tile("Recoveries", String(st.recoveries),
+    "this session · " + st.sessions + " session" + (st.sessions === 1 ? "" : "s")));
+
+  const s1 = css("--s1"), s2 = css("--s2"), muted = css("--muted");
+  drawChart(document.getElementById("chart-learning"), {
+    height: 220,
+    series: [
+      { name: "mean boss damage", color: s1,
+        points: gens.map(g => ({ x: g.timestep, y: g.mean_boss_damage })) },
+      { name: "win rate", color: s2,
+        points: gens.map(g => ({ x: g.timestep, y: g.win_rate })) },
+    ],
+    yDomain: [0, 1], yFormat: fmtPct, xFormat: fmtK,
+    xTipFormat: x => "timestep " + fmtK(x),
+  });
+  drawChart(document.getElementById("chart-reward"), {
+    series: [{ name: "mean reward", color: s1,
+               points: gens.map(g => ({ x: g.timestep, y: g.mean_reward })) }],
+    yFormat: v => v.toFixed(1), xFormat: fmtK,
+    xTipFormat: x => "timestep " + fmtK(x),
+  });
+  drawChart(document.getElementById("chart-eplen"), {
+    series: [{ name: "mean episode length", color: s1,
+               points: gens.map(g => ({ x: g.timestep, y: g.mean_episode_len })) }],
+    yFormat: v => fmtK(v), xFormat: fmtK,
+    xTipFormat: x => "timestep " + fmtK(x),
+  });
+  const eps = run.episodes.map(e => ({ x: e.t, y: e.r }));
+  drawChart(document.getElementById("chart-episodes"), {
+    height: 220,
+    series: [
+      { name: "episode reward", color: muted, kind: "dots", points: eps, snapExempt: false },
+      { name: "rolling mean (20)", color: s1, points: rollingMean(eps, 20), endDot: false },
+    ],
+    yFormat: v => v.toFixed(1), xFormat: fmtClock, xTipFormat: fmtClock,
+  });
+
+  const config = document.getElementById("config");
+  config.replaceChildren();
+  if (run.config) {
+    const keys = ["started_at", "timesteps", "resumed_from_gen", "gen_every",
+                  "n_steps", "batch_size", "n_epochs", "gamma", "ent_coef",
+                  "n_stack", "seed", "port"];
+    for (const k of keys) {
+      if (!(k in run.config)) continue;
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.textContent = k;
+      const td2 = document.createElement("td");
+      td2.textContent = run.config[k] == null ? "—" : String(run.config[k]);
+      tr.append(td1, td2);
+      config.appendChild(tr);
+    }
+  }
+}
+
+async function refresh() {
+  try {
+    const runs = await (await fetch("/api/runs")).json();
+    state.runs = runs;
+    document.getElementById("banner").classList.remove("show");
+    if (!runs.length) {
+      document.getElementById("empty").hidden = false;
+      document.getElementById("content").hidden = true;
+      document.getElementById("run-title").textContent = "no runs";
+      return;
+    }
+    const select = document.getElementById("run-select");
+    if (select.options.length !== runs.length ||
+        [...select.options].some((o, i) => o.value !== runs[i].id)) {
+      select.replaceChildren();
+      for (const r of runs) {
+        const opt = document.createElement("option");
+        opt.value = r.id;
+        opt.textContent = r.id + (r.live ? " · live" : "");
+        select.appendChild(opt);
+      }
+    }
+    if (!state.runId || !runs.some(r => r.id === state.runId)) state.runId = runs[0].id;
+    select.value = state.runId;
+    state.run = await (await fetch("/api/run/" + encodeURIComponent(state.runId))).json();
+    render();
+  } catch (err) {
+    // keep the last render; just say we lost the server
+    document.getElementById("banner").classList.add("show");
+  }
+}
+
+document.getElementById("run-select").addEventListener("change", ev => {
+  state.runId = ev.target.value;
+  refresh();
+});
+let resizeTimer;
+addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(render, 150);
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+
+refresh();
+setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>
