@@ -5,103 +5,122 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>hkrl — Hall of Gods</title>
 <link rel="icon" href="data:,">
+<meta name="theme-color" content="#0a0d13">
 <style>
+  /* Hallownest, committed: one dark look, no light mode. Cave-slate blue
+     under warm bone ink; engraved Optima for anything that names or counts;
+     soul-blue and statue-gold as the only data colors (validated pair). */
   :root {
-    color-scheme: light;
-    --page: #f9f9f7;
-    --surface: #fcfcfb;
-    --ink: #0b0b0b;
-    --ink-2: #52514e;
-    --muted: #898781;
-    --grid: #e1e0d9;
-    --baseline: #c3c2b7;
-    --border: rgba(11, 11, 11, 0.10);
-    --s1: #2a78d6;          /* categorical slot 1: blue */
-    --s2: #008300;          /* categorical slot 2: green */
-    --meter-track: #cde2fb; /* blue ramp, step 100 */
+    color-scheme: dark;
+    --page: #0a0d13;
+    --surface: #111622;
+    --raised: #182031;
+    --ink: #e9e6da;          /* bone */
+    --ink-2: #a8a89b;        /* worn bone */
+    --muted: #6f7788;        /* cave mist */
+    --grid: #1d2434;
+    --baseline: #2c3550;
+    --border: rgba(233, 230, 218, 0.13);
+    --tick: rgba(233, 230, 218, 0.32);
+    --s1: #3987e5;           /* soul blue  (validated on --surface) */
+    --s2: #c98500;           /* statue gold (validated on --surface) */
+    --meter-track: #14294a;  /* the soul ramp stepped toward the surface */
+    --glow: rgba(90, 167, 240, 0.40);
     --good: #0ca30c;
     --critical: #d03b3b;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      color-scheme: dark;
-      --page: #0d0d0d;
-      --surface: #1a1a19;
-      --ink: #ffffff;
-      --ink-2: #c3c2b7;
-      --muted: #898781;
-      --grid: #2c2c2a;
-      --baseline: #383835;
-      --border: rgba(255, 255, 255, 0.10);
-      --s1: #3987e5;
-      --s2: #008300;
-      --meter-track: #104281; /* blue ramp, step 650 */
-    }
+    --display: "Optima", "Candara", "Gill Sans", "Segoe UI", sans-serif;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: var(--page);
+    background: radial-gradient(1100px 520px at 50% -140px, #131a2b 0%, var(--page) 62%) fixed var(--page);
     color: var(--ink);
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 14px/1.45 "Avenir Next", Avenir, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 48px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
 
-  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
-  .eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
-  h1 { font-size: 22px; font-weight: 650; margin: 0; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .eyebrow { font-family: var(--display); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-family: var(--display); font-size: 26px; font-weight: 550; letter-spacing: 0.05em; margin: 0; }
   select {
     font: inherit; color: var(--ink); background: var(--surface);
-    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
+    border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px;
   }
   .status-line { display: flex; align-items: center; gap: 8px; color: var(--ink-2); margin-left: auto; }
-  .badge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: 0.04em; }
   .badge .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .badge.live .dot { background: var(--good); }
+  .badge.live .dot { background: var(--good); box-shadow: 0 0 8px var(--good); animation: breathe 2.4s ease-in-out infinite; }
   .badge.live { color: var(--good); }
   .badge.stopped .dot { background: var(--critical); }
   .badge.stopped { color: var(--critical); }
+  @keyframes breathe { 50% { opacity: 0.45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .badge.live .dot { animation: none; }
+    .bossbar .fill { transition: none; }
+  }
+
+  /* The game's menu rule: a hairline fading at both ends, a diamond at heart. */
+  .rule { display: flex; align-items: center; margin: 18px 0; }
+  .rule::before, .rule::after {
+    content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--tick));
+  }
+  .rule::after { background: linear-gradient(90deg, var(--tick), transparent); }
+  .rule .gem { width: 7px; height: 7px; margin: 0 10px; transform: rotate(45deg);
+               background: var(--ink-2); }
 
   #banner {
-    display: none; margin: 12px 0 0; padding: 8px 12px; border-radius: 6px;
+    display: none; margin: 12px 0 0; padding: 8px 12px; border-radius: 4px;
     background: var(--surface); border: 1px solid var(--critical); color: var(--ink-2);
   }
   #banner.show { display: block; }
 
-  /* Signature: the boss bar. Fill = mean damage dealt; track = what is
-     left of Hornet, a lighter step of the same ramp. */
-  .bossbar { margin: 20px 0 16px; }
-  .bossbar .row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
-  .bossbar .name { font-size: 15px; font-weight: 650; letter-spacing: 0.14em; text-transform: uppercase; }
-  .bossbar .read { color: var(--ink-2); }
+  /* Signature: the boss encounter banner. Fill = mean damage dealt; track =
+     what is left of Hornet, the soul ramp stepped toward the surface. */
+  .bossbar { margin: 6px 0 22px; text-align: center; }
+  .nameplate { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 10px; }
+  .nameplate .name { font-family: var(--display); font-size: 21px; font-weight: 550;
+                     letter-spacing: 0.34em; text-transform: uppercase; text-indent: 0.34em; }
+  .flourish { width: 90px; height: 12px; color: var(--tick); flex: none; }
+  .flourish.mirror { transform: scaleX(-1); }
+  .bossbar .track { height: 12px; border-radius: 3px; background: var(--meter-track);
+                    box-shadow: inset 0 1px 3px rgba(0,0,0,0.5); overflow: hidden; }
+  .bossbar .fill { height: 100%; background: linear-gradient(180deg, #6fb2f2, var(--s1));
+                   border-radius: 3px 0 0 3px; width: 0; transition: width 400ms ease;
+                   box-shadow: 0 0 14px var(--glow); }
+  .bossbar .read { color: var(--ink-2); margin-top: 8px; font-size: 13px; }
   .bossbar .read strong { color: var(--ink); font-weight: 650; }
-  .bossbar .track { height: 14px; border-radius: 7px; background: var(--meter-track); overflow: hidden; }
-  .bossbar .fill { height: 100%; background: var(--s1); border-radius: 7px 0 0 7px; width: 0; transition: width 400ms ease; }
+
+  /* Panels: hairline frame with pale corner ticks, the menus' engraved edge. */
+  .panel { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 2px; }
+  .panel::before, .panel::after { content: ""; position: absolute; width: 9px; height: 9px; pointer-events: none; }
+  .panel::before { top: -1px; left: -1px; border-top: 1px solid var(--tick); border-left: 1px solid var(--tick); }
+  .panel::after { bottom: -1px; right: -1px; border-bottom: 1px solid var(--tick); border-right: 1px solid var(--tick); }
 
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 18px; }
-  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
-  .tile .label { font-size: 12px; color: var(--muted); }
-  .tile .value { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  .tile { padding: 10px 12px; }
+  .tile .label { font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .tile .value { font-family: var(--display); font-size: 25px; font-weight: 550; margin-top: 2px; }
   .tile .sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
   .tile .mini { height: 4px; border-radius: 2px; background: var(--meter-track); margin-top: 8px; overflow: hidden; }
   .tile .mini > div { height: 100%; background: var(--s1); }
 
   .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 760px) { .charts { grid-template-columns: 1fr; } }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 12px 8px; position: relative; }
+  .card { padding: 12px 12px 8px; }
   .card.wide { grid-column: 1 / -1; }
-  .card h2 { font-size: 13px; font-weight: 650; margin: 0; }
+  .card h2 { font-family: var(--display); font-size: 15px; font-weight: 550; letter-spacing: 0.06em; margin: 0; }
   .card .subtitle { font-size: 12px; color: var(--muted); margin: 1px 0 6px; }
   .legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); margin: 2px 0 4px; }
   .legend .key { display: inline-block; width: 14px; height: 0; border-top: 3px solid; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
   svg { display: block; width: 100%; }
-  svg text { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; fill: var(--muted); }
+  svg text { font: 11px "Avenir Next", Avenir, system-ui, sans-serif; font-variant-numeric: tabular-nums; fill: var(--muted); }
 
   .tooltip {
     position: absolute; pointer-events: none; display: none; z-index: 2;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px 9px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-    min-width: 110px;
+    background: var(--raised); border: 1px solid var(--border); border-radius: 4px;
+    padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+    min-width: 110px; text-align: left;
   }
   .tooltip .tx { color: var(--muted); margin-bottom: 3px; }
   .tooltip .trow { display: flex; align-items: center; gap: 6px; }
@@ -109,8 +128,9 @@
   .tooltip .tval { font-weight: 650; font-variant-numeric: tabular-nums; }
   .tooltip .tname { color: var(--ink-2); }
 
-  details { margin-top: 18px; color: var(--ink-2); }
-  summary { cursor: pointer; font-size: 13px; }
+  details { margin-top: 20px; color: var(--ink-2); }
+  summary { cursor: pointer; font-family: var(--display); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  summary:hover { color: var(--ink-2); }
   .config-table { border-collapse: collapse; margin-top: 8px; font-size: 13px; }
   .config-table td { padding: 3px 18px 3px 0; font-variant-numeric: tabular-nums; }
   .config-table td:first-child { color: var(--muted); }
@@ -132,37 +152,49 @@
     </div>
   </header>
   <div id="banner">Dashboard server unreachable — showing the last data received. Retrying…</div>
+  <div class="rule" aria-hidden="true"><span class="gem"></span></div>
 
   <div id="content" hidden>
     <div class="bossbar">
-      <div class="row">
+      <div class="nameplate">
+        <svg class="flourish" viewBox="0 0 90 12" aria-hidden="true">
+          <path d="M2 6 H68" stroke="currentColor" stroke-width="1" fill="none"/>
+          <path d="M68 6 C74 6 76 2.5 80 2.5" stroke="currentColor" stroke-width="1" fill="none"/>
+          <rect x="83" y="3" width="5.6" height="5.6" transform="rotate(45 85.8 5.8)" fill="currentColor"/>
+        </svg>
         <span class="name">Hornet</span>
-        <span class="read" id="boss-read"></span>
+        <svg class="flourish mirror" viewBox="0 0 90 12" aria-hidden="true">
+          <path d="M2 6 H68" stroke="currentColor" stroke-width="1" fill="none"/>
+          <path d="M68 6 C74 6 76 2.5 80 2.5" stroke="currentColor" stroke-width="1" fill="none"/>
+          <rect x="83" y="3" width="5.6" height="5.6" transform="rotate(45 85.8 5.8)" fill="currentColor"/>
+        </svg>
       </div>
       <div class="track"><div class="fill" id="boss-fill"></div></div>
+      <div class="read" id="boss-read"></div>
     </div>
 
     <div class="tiles" id="tiles"></div>
 
     <div class="charts">
-      <div class="card wide" id="chart-learning">
+      <div class="card panel wide" id="chart-learning">
         <h2>Is it learning?</h2>
         <div class="subtitle">Per generation, by timestep</div>
       </div>
-      <div class="card" id="chart-reward">
+      <div class="card panel" id="chart-reward">
         <h2>Mean reward</h2>
         <div class="subtitle">Per generation</div>
       </div>
-      <div class="card" id="chart-eplen">
+      <div class="card panel" id="chart-eplen">
         <h2>Episode length</h2>
         <div class="subtitle">Steps per episode, per generation (ceiling 2700)</div>
       </div>
-      <div class="card wide" id="chart-episodes">
+      <div class="card panel wide" id="chart-episodes">
         <h2>Reward per episode</h2>
         <div class="subtitle">Every fight, over wall-clock time — the heartbeat between checkpoints</div>
       </div>
     </div>
 
+    <div class="rule" aria-hidden="true"><span class="gem"></span></div>
     <details>
       <summary>Session config</summary>
       <table class="config-table" id="config"></table>
@@ -356,7 +388,7 @@ function rollingMean(points, window) {
 
 function tile(label, value, sub) {
   const div = document.createElement("div");
-  div.className = "tile";
+  div.className = "tile panel";
   const l = document.createElement("div"); l.className = "label"; l.textContent = label;
   const v = document.createElement("div"); v.className = "value"; v.textContent = value;
   div.append(l, v);
@@ -507,8 +539,6 @@ addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(render, 150);
 });
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
-
 refresh();
 setInterval(refresh, POLL_MS);
 </script>
