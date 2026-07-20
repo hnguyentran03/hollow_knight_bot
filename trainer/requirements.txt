@@ -1,5 +1,6 @@
 gymnasium>=0.29
 numpy>=1.26
 pytest>=8
+sb3-contrib
 stable-baselines3[extra]
 torch

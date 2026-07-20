@@ -215,12 +215,21 @@ def main() -> None:
     try:
         game.start()
         print(f"game up on port {game.port}", flush=True)
-        print("Keep the game window visible for the whole run: macOS suspends a "
-              "fully occluded window (App Nap) with its port still open, and "
-              "every occurrence costs a full relaunch-and-reboot recovery. "
-              "Suppress display sleep for the run: caffeinate -d (in another "
-              "terminal).",
-              flush=True)
+        if sys.platform == "win32":
+            print("Keep the game window visible (not minimized) for the whole "
+                  "run, and disable system sleep for its duration "
+                  "(Settings > System > Power, or `powercfg /change "
+                  "standby-timeout-ac 0`): a suspended game holds its port "
+                  "open while wedged, and every occurrence costs a full "
+                  "relaunch-and-reboot recovery.",
+                  flush=True)
+        else:
+            print("Keep the game window visible for the whole run: macOS "
+                  "suspends a fully occluded window (App Nap) with its port "
+                  "still open, and every occurrence costs a full "
+                  "relaunch-and-reboot recovery. Suppress display sleep for "
+                  "the run: caffeinate -d (in another terminal).",
+                  flush=True)
         input("Bring the game to the Hall of Gods near the Hornet statue, then "
               "press Enter. (A freshly booted game can also challenge itself in "
               "via the boot macro; expect a few reset retries.) ")

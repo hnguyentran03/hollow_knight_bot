@@ -55,11 +55,16 @@ class GameProcess:
         the zombie.
         """
         if _accepting(self.port):
+            if sys.platform == "win32":
+                find_it = (f"`netstat -ano | findstr :{self.port}` then "
+                           f"`taskkill /PID <pid> /F`")
+            else:
+                find_it = f"`lsof -nP -iTCP:{self.port} -sTCP:LISTEN`"
             raise PortInUse(
                 f"port {self.port} is already accepting connections before "
                 f"any game was launched -- an unmanaged process (a leftover "
                 f"from an earlier run?) holds it. Find it with "
-                f"`lsof -nP -iTCP:{self.port} -sTCP:LISTEN`, kill it, rerun."
+                f"{find_it}, kill it, rerun."
             )
         self._proc = self._launch(self.port, self.app, False)
         self._wait_for_port(self.port, timeout=self.launch_timeout,
