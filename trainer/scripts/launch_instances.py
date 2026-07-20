@@ -129,15 +129,40 @@ def shutdown(procs: list, grace: float = 15.0) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--app", type=Path, default=DEFAULT_APP)
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
+                    help="first bridge port; instance i listens on port+i")
+    ap.add_argument("--instances", type=int, default=1)
     args = ap.parse_args()
+
+    # Fail fast on squatted ports BEFORE launching anything: the mod's
+    # TcpListener.Start() throws on an in-use port and the game then runs
+    # bridgeless, while wait_for_port happily greets the squatter -- observed
+    # live (2026-07-20) when a second instance's port 9021 turned out to be
+    # the dashboard's old default.
+    for i in range(args.instances):
+        port = args.port + i
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                pass
+        except OSError:
+            continue
+        raise SystemExit(
+            f"port {port} is already accepting connections -- another "
+            f"process (a dashboard? a leftover game?) holds it. Free it or "
+            f"pick a different --port range."
+        )
 
     procs = []
     try:
-        procs.append(launch(args.port, args.app, visible=True))
-        print(f"launched: port={args.port}", flush=True)
-        wait_for_port(args.port, proc=procs[0])
-        print(f"bridge ready on {args.port}. Ctrl-C to stop.", flush=True)
+        # Launch all, then wait all, so the games boot in parallel (a cold
+        # boot is tens of seconds each) -- same shape as GameFleet.start().
+        for i in range(args.instances):
+            procs.append(launch(args.port + i, args.app, visible=True))
+            print(f"launched: port={args.port + i}", flush=True)
+        for i, proc in enumerate(procs):
+            wait_for_port(args.port + i, proc=proc)
+            print(f"bridge ready on {args.port + i}.", flush=True)
+        print("Ctrl-C to stop.", flush=True)
         while True:
             time.sleep(1)
     except KeyboardInterrupt:

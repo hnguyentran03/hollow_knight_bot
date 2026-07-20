@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Train a recurrent PPO against Hornet 1 on one supervised game instance.
+"""Train a recurrent PPO against Hornet 1 on N supervised game instances.
 
-Owns the game process end to end: launches it, supervises it through
-crashes, wedges, and App Nap suspensions, checkpoints a generation every
---gen-every timesteps, and shuts it down on exit. Stop a run with one
+Owns the game processes end to end: launches them (one per port, counting
+up from --port), supervises them through crashes, wedges, and App Nap
+suspensions, checkpoints a generation every --gen-every timesteps, and
+shuts them down on exit. Stop a run with one
 Ctrl-C: it finishes the current rollout, saves a final generation, and
 terminates the game. launch_instances.py stays for manual gates only -- the
 training game must be this process's own child or relaunch() could never
@@ -25,7 +26,7 @@ from stable_baselines3.common.vec_env import (  # noqa: E402
     VecMonitor, VecNormalize,
 )
 
-from hkrl.game import GameProcess  # noqa: E402
+from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
 from hkrl.supervisor import InstanceDown, SupervisedVecEnv  # noqa: E402
 
@@ -92,8 +93,9 @@ def build_model(env, run_dir, resume_model=None, seed=None,
         # with the punish it enables; the default 0.99 covers only ~6.7s.
         gamma=GAMMA,
         learning_rate=3e-4,
-        # One instance at 15 Hz collects the full n_steps=2048 (~2.3 minutes
-        # of play) per update.
+        # Per-instance rollout length; the flag's default divides 2048 by
+        # --instances so the total batch per update stays ~2048 (~2.3
+        # minutes of play at 15 Hz) however many games collect it.
         n_steps=n_steps,
         batch_size=batch_size,
         # The whole gradient update runs while the game connection idles,
@@ -171,9 +173,20 @@ def main() -> None:
                     help="continue an existing run from its latest generation")
     ap.add_argument("--root", type=Path, default=Path("~/hkrl").expanduser())
     ap.add_argument("--app", type=Path, default=DEFAULT_APP)
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
+                    help="first bridge port; instance i listens on port+i")
+    ap.add_argument("--instances", type=int, default=1,
+                    help="game instances to run in parallel. Every instance "
+                         "is a full game client -- 2-3 is realistic on one "
+                         "machine, and every window must stay visible")
     ap.add_argument("--gen-every", type=int, default=15_000)
-    ap.add_argument("--n-steps", type=int, default=2048)
+    ap.add_argument("--n-steps", type=int, default=None,
+                    help="PPO rollout length PER INSTANCE (default: "
+                         "2048 // instances). The default divides so the "
+                         "total batch -- and with it the update's wall-clock "
+                         "time -- stays constant as --instances grows: the "
+                         "update runs while every game connection idles, and "
+                         "the mod drops connections idle for 10s")
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--n-epochs", type=int, default=5,
                     help="PPO epochs per update. Kept at 5 so the recurrent "
@@ -182,6 +195,12 @@ def main() -> None:
                          "(~13s). Raise only if the net moves off CPU.")
     ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args()
+    if args.instances < 1:
+        sys.exit("--instances must be at least 1")
+    # Resolved before the config dump below so config.jsonl records the
+    # value actually used, not None.
+    if args.n_steps is None:
+        args.n_steps = max(128, 2048 // args.instances)
 
     if args.resume is not None:
         run_dir = args.resume.expanduser()
@@ -209,12 +228,14 @@ def main() -> None:
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }) + "\n")
 
-    game = GameProcess(port=args.port, app=args.app)
+    game = GameFleet([args.port + i for i in range(args.instances)],
+                     app=args.app)
     env = None
     exit_code = 0
     try:
         game.start()
-        print(f"game up on port {game.port}", flush=True)
+        print(f"game(s) up on port(s) {', '.join(map(str, game.ports))}",
+              flush=True)
         if sys.platform == "win32":
             print("Keep the game window visible (not minimized) for the whole "
                   "run, and disable system sleep for its duration "
@@ -230,9 +251,9 @@ def main() -> None:
                   "relaunch-and-reboot recovery. Suppress display sleep for "
                   "the run: caffeinate -d (in another terminal).",
                   flush=True)
-        input("Bring the game to the Hall of Gods near the Hornet statue, then "
-              "press Enter. (A freshly booted game can also challenge itself in "
-              "via the boot macro; expect a few reset retries.) ")
+        input("Bring the game(s) to the Hall of Gods near the Hornet statue, "
+              "then press Enter. (A freshly booted game can also challenge "
+              "itself in via the boot macro; expect a few reset retries.) ")
 
         stop = threading.Event()
 
@@ -247,7 +268,7 @@ def main() -> None:
         signal.signal(signal.SIGINT, request_stop)
 
         env, supervisor = build_env(
-            [game.port], game.relaunch, run_dir,
+            game.ports, game.relaunch, run_dir,
             resume_vecnorm=resume[2] if resume else None,
             # Boot-to-fight spans several 22.5s reset budgets, so a single
             # relaunch legitimately consumes a few attempts (see the
