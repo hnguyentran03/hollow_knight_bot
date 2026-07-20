@@ -18,8 +18,11 @@ from hkrl.dashboard import make_server  # noqa: E402
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", type=Path, default=Path("~/hkrl").expanduser())
-    ap.add_argument("--port", type=int, default=9021,
-                    help="HTTP port (default 9021; the game bridge owns 9020)")
+    ap.add_argument("--port", type=int, default=9700,
+                    help="HTTP port (default 9700 -- far from the game "
+                         "bridges, which count up from 9020 one port per "
+                         "instance; the old default 9021 collided with the "
+                         "second instance's bridge)")
     ap.add_argument("--open", action="store_true",
                     help="open the dashboard in the default browser")
     args = ap.parse_args()

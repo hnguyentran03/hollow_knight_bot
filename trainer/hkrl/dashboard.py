@@ -55,7 +55,7 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def make_server(root, port: int = 9021, host: str = "127.0.0.1") -> ThreadingHTTPServer:
+def make_server(root, port: int = 9700, host: str = "127.0.0.1") -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), _Handler)
     server.root = Path(root).expanduser()
     return server

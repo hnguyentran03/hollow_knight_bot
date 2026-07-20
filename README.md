@@ -44,7 +44,7 @@ trainer/
     fake_game.py            scripted in-process game for tests
   scripts/
     train.py                the training entry point
-    dashboard.py            serve the web dashboard (default port 9021)
+    dashboard.py            serve the web dashboard (default port 9700)
     random_agent.py         random-policy smoke test (game must already be running)
     replay.py               watch a saved generation play
     launch_instances.py     manually launch a game instance (for random_agent/replay)
@@ -129,6 +129,58 @@ caffeinate -dims ./.venv/bin/python scripts/train.py --timesteps 500000 --run-id
 
 (On Windows, run `.venv\Scripts\python scripts\train.py ...` without the `caffeinate` prefix — sleep suppression comes from the power settings above.)
 
+### Multiple instances (experimental)
+
+`--instances N` runs N game instances in parallel (bridge ports `--port`
+through `--port + N - 1`), each a slot of the same vectorized PPO — roughly
+N× the samples per hour. The supervisor recovers each slot independently,
+exactly as it does at N=1.
+
+```bash
+caffeinate -dims ./.venv/bin/python scripts/train.py --instances 2 --timesteps 500000 --run-id my-run
+```
+
+What to know before trying it:
+
+- **Every instance is a full game client.** 2–3 on one machine is realistic;
+  each window must stay visible (see App Nap above), so tile them, don't
+  stack them.
+- **`--n-steps` is per instance and its default divides by N** (2048 → 1024
+  at N=2) so the total batch, and with it the PPO update's wall-clock time,
+  stays constant. The keepalive pinger keeps connections alive through the
+  update, but the games keep running in real time while it computes — every
+  Knight stands in a live fight for the duration — so if you override
+  `--n-steps`, keep `n_steps × instances` around 2048.
+- **One slot's episode reset blocks the whole lockstep step** (the mod's
+  reset macro can run its full 22.5 s budget). The other instances' Knights
+  stand in their live fights for that long; their connections survive it
+  via the keepalive pinger. Expect episode throughput somewhat below N× for
+  this reason.
+- **Each instance gets its own save/log sandbox (macOS).** Instances
+  sharing one save directory autosave the same slot concurrently, which
+  corrupted the master save in live testing (both games saved in the same
+  second; the next boot read the slot as empty and started a new game — the
+  game's own `user1.dat.bakNNN` rotation recovered it). At `--instances` >
+  1 the trainer clones the whole `.app` per port under
+  `<root>/instances/port-<port>/` (APFS copy-on-write: instant, near-zero
+  disk) with a per-port bundle identifier, which moves that instance's
+  Unity save directory and `ModLog.txt` wholesale; each clone's save dir is
+  seeded from the master save at every start. Training never opens the
+  master save or app, in-run save churn is disposable, and a mod rebuild on
+  the master propagates to the clones on the next start. Keep the master
+  save parked at the Hall of Gods bench; it is copied, not played. (`HOME`
+  redirection was tried first and disproven live — Unity ignores it.)
+  **Windows has no save isolation yet** — multi-instance there shares one
+  slot at your own risk, and the trainer warns accordingly.
+- **Two direct-exec Steam instances at once is verified live on macOS**
+  (2026-07-20: both processes survive the DRM window and both bridges serve
+  the protocol simultaneously). Windows multi-instance is unverified; if an
+  instance quits ~15 s after boot there, that's the DRM check — report it
+  before working around it.
+- Replay and the random agent are single-instance tools: point them at one
+  port (`--port`) of a manually launched game
+  (`launch_instances.py --instances N` launches a tiled set for that).
+
 `train.py` launches the game itself — don't start one manually. When prompted, wait for the game to reach the Hall of Gods (the boot macro can drive it there; a few `reset ... reconnecting` retries on stderr are normal) and press Enter. 500k steps is roughly an overnight run (~54k steps/hour at 15&nbsp;Hz).
 
 Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (PPO rollout/update shape), `--seed`, `--root` (default `~/hkrl`).
@@ -142,7 +194,7 @@ that updates between checkpoints. It is read-only — it never touches the game
 port — so it is safe to leave up beside a live run:
 
 ```bash
-./.venv/bin/python scripts/dashboard.py --open   # http://127.0.0.1:9021
+./.venv/bin/python scripts/dashboard.py --open   # http://127.0.0.1:9700
 ```
 
 Each run lives in `~/hkrl/runs/<run-id>/`. The per-generation manifest is the health record:
@@ -186,4 +238,5 @@ Comparing an early generation against the latest is the quickest way to *see* wh
 - **Forgot to re-sign after a mod build (macOS)** → game exits immediately with code 138. Run the `codesign` command above.
 - **Occluded game window (macOS) / minimized window (Windows)** → the OS suspends or deprioritizes the game; the trainer sees a wedge and burns a recovery. Keep it visible, even if small.
 - **Old checkpoints after changing the action/observation space** → not resumable or replayable; the policy network's shape changed. Start a fresh run.
-- **The mod drops idle connections after 10 s** → anything that blocks the trainer between messages for ~10 s (including a slow PPO update) severs the connection. If updates get slow, lower `--n-epochs` first; don't raise the mod's `ReadTimeout`.
+- **The mod drops connections that go silent for 10 s** → the trainer's keepalive pinger (`hkrl/protocol.py`) keeps every connection chatty through lockstep gaps (another instance's reset, a PPO update), so this no longer severs connections. The game still runs in real time while the trainer thinks, though — a slow update leaves the Knight standing in a live fight — so still lower `--n-epochs` if updates get slow; don't raise the mod's `ReadTimeout`.
+- **Something else holds a bridge port** → the mod's listener silently fails and the game runs bridgeless, while port probes greet the squatter. `train.py` and `launch_instances.py` both fail fast on this before launching; if they name a port you recognize, it's probably an old dashboard (its default was 9021 — the second instance's bridge port — before it moved to 9700).

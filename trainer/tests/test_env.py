@@ -145,3 +145,26 @@ def test_reset_retries_are_bounded_so_a_drop_loop_still_surfaces():
         with pytest.raises(ConnectionClosed):
             env.reset()
         env.close()
+
+
+def test_keepalive_pings_keep_an_idle_connection_alive_and_invisible():
+    """The N>1 starvation fix (hkrl/protocol.py Connection keepalive): while
+    the trainer idles between lockstep messages -- another slot resetting, a
+    PPO update -- the pinger must keep this connection's traffic flowing,
+    and the pong replies must be invisible to step(). Interval shrunk to
+    50ms so 300ms of idling stands in for a sibling's multi-second reset."""
+    import time
+
+    episode = [state(obs()), state(obs()), state(obs(bhp=0), done=True, won=True)]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, keepalive=0.05)
+        env.reset()
+        time.sleep(0.3)  # several keepalive intervals of trainer silence
+        assert fg.pings > 0  # the pinger really ran against the idle gap
+        # The queued pongs sit between this step's action and its state;
+        # recv() must filter them or this returns garbage/desyncs.
+        _, _, terminated, *_ = env.step(0)
+        assert not terminated
+        _, _, terminated, *_ = env.step(0)
+        assert terminated  # lockstep survived the pong interleaving intact
+        env.close()

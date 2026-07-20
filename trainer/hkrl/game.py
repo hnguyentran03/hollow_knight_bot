@@ -1,11 +1,15 @@
-"""Owns the training run's game process: launch, relaunch, shut down.
+"""Owns the training run's game processes: launch, relaunch, shut down.
 
-train.py runs the game as its own child rather than beside a separately
+train.py runs the games as its own children rather than beside a separately
 started launcher: the supervisor's relaunch(slot) callback has to terminate
 and reap the game currently holding the port, and a process can only reap
 its own children. A relaunch driven from outside the launching process would
 orphan a game that launcher's shutdown() never sees, leaving a zombie bound
 to the port.
+
+GameProcess is the single-instance unit; GameFleet composes N of them, one
+per port, and presents the exact (ports, relaunch(slot)) surface
+SupervisedVecEnv is built around.
 """
 import socket
 import subprocess
@@ -46,7 +50,17 @@ class GameProcess:
         self._proc: subprocess.Popen | None = None
 
     def start(self) -> None:
-        """Launch the game and wait for its bridge to accept.
+        """Launch the game and wait for its bridge to accept."""
+        self.spawn()
+        self.wait_ready()
+
+    def spawn(self) -> None:
+        """Launch the game without waiting for its bridge.
+
+        Split from wait_ready() so GameFleet can boot every instance in
+        parallel (a cold Hollow Knight launch is tens of seconds; booting N
+        games serially would multiply that) and only then wait for each
+        bridge in turn.
 
         Fails fast on a squatter: this process can only reap its own
         children, so a port held by a leftover game from an earlier run
@@ -67,6 +81,8 @@ class GameProcess:
                 f"{find_it}, kill it, rerun."
             )
         self._proc = self._launch(self.port, self.app, False)
+
+    def wait_ready(self) -> None:
         self._wait_for_port(self.port, timeout=self.launch_timeout,
                             proc=self._proc)
 
@@ -90,6 +106,68 @@ class GameProcess:
         proc, self._proc = self._proc, None
         if proc is not None:
             self._shutdown([proc])
+
+
+class GameFleet:
+    """N game processes, one per port, behind one training run.
+
+    Explicit ports rather than a base+count so the caller decides the
+    numbering (train.py hands out consecutive ports from --port) and so a
+    port list can skip one that something else on the machine occupies.
+
+    Every per-instance failure mode stays GameProcess's: the fleet only adds
+    the all-or-nothing start (no half-started fleet survives a collision or
+    a launch timeout) and the slot -> process routing for the supervisor's
+    relaunch callback.
+
+    `apps`, when given, is one game binary per port (see
+    launch_instances.prepare_instance): each slot launches -- and, crucially,
+    RELAUNCHES -- its own isolated app clone, so a recovery never points a
+    replacement game at the master save directory.
+    """
+
+    def __init__(self, ports, app: Path = None, apps=None, **process_kwargs):
+        ports = list(ports)
+        if apps is not None and len(apps) != len(ports):
+            raise ValueError("apps must match ports one to one")
+        if apps is None:
+            apps = [app] * len(ports)
+        self.games = []
+        for p, a in zip(ports, apps):
+            kwargs = dict(process_kwargs)
+            if a is not None:
+                kwargs["app"] = a
+            self.games.append(GameProcess(port=p, **kwargs))
+
+    @property
+    def ports(self) -> list:
+        return [g.port for g in self.games]
+
+    def start(self) -> None:
+        """Spawn every instance, then wait for every bridge.
+
+        Spawn-all-then-wait-all so the games boot in parallel. Any failure
+        -- a squatted port mid-spawn, a bridge that never comes up -- stops
+        whatever was already launched before propagating: a partial fleet
+        left running would squat its own ports and turn the next start()
+        into the PortInUse it exists to diagnose.
+        """
+        try:
+            for g in self.games:
+                g.spawn()
+            for g in self.games:
+                g.wait_ready()
+        except Exception:
+            self.stop()
+            raise
+
+    def relaunch(self, slot: int) -> None:
+        """SupervisedVecEnv's relaunch callback: slot indexes self.ports."""
+        self.games[slot].relaunch()
+
+    def stop(self) -> None:
+        for g in self.games:
+            g.stop()
 
 
 def _accepting(port: int, host: str = "127.0.0.1") -> bool:
