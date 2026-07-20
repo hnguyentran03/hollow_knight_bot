@@ -32,7 +32,8 @@ from hkrl.supervisor import InstanceDown, SupervisedVecEnv  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from launch_instances import (  # noqa: E402
-    DEFAULT_APP, DEFAULT_PORT, SAVE_ISOLATION_SUPPORTED, prepare_instance,
+    DEFAULT_APP, DEFAULT_PORT, SAVE_ISOLATION_SUPPORTED, backup_saves,
+    prepare_instance,
 )
 
 GAMMA = 0.995
@@ -243,6 +244,14 @@ def main() -> None:
             "resumed_from_gen": resume[0] if resume else None,
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }) + "\n")
+
+    # Unconditional, N=1 included: the single-instance game plays the
+    # master save directly, and even the isolated N>1 path seeds its clones
+    # FROM the master -- a quietly corrupt master would propagate. A run
+    # must never be the event that loses someone's save.
+    backup = backup_saves(args.root)
+    if backup is not None:
+        print(f"master save backed up to {backup}", flush=True)
 
     ports = [args.port + i for i in range(args.instances)]
     # At N>1 the instances must not share the game's save directory: they

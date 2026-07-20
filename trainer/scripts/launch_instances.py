@@ -43,6 +43,50 @@ APP_SUPPORT = Path("~/Library/Application Support").expanduser()
 
 SAVE_ISOLATION_SUPPORTED = sys.platform == "darwin"
 
+# The master save directory per platform; None where the location is
+# unknown (nothing to back up there).
+if sys.platform == "darwin":
+    MASTER_SAVE_DIR = APP_SUPPORT / MASTER_BUNDLE_ID
+elif sys.platform == "win32":
+    MASTER_SAVE_DIR = Path.home() / "AppData/LocalLow/Team Cherry/Hollow Knight"
+else:
+    MASTER_SAVE_DIR = None
+
+
+def backup_saves(root: Path = None, keep: int = 10,
+                 source: Path = None, stamp: str = None) -> Path | None:
+    """Snapshot the master save directory; returns the snapshot path.
+
+    Taken automatically before any run launches games. The game's own
+    .bakNNN rotation is NOT sufficient protection: it lives inside the
+    same directory, so anything that scrambles the directory itself -- or
+    a corrupt save faithfully rotated into the backups -- takes the
+    rotation with it. A concurrent-autosave accident destroyed the master
+    slot live (2026-07-20) and was only recoverable because a manual
+    snapshot habit existed; this makes that habit automatic.
+
+    Snapshots land under <root>/save-backups/<timestamp>; only the newest
+    `keep` are retained (a save dir is a few MB, so ten snapshots are
+    noise). Returns None when no master save directory exists on this
+    platform -- there is nothing to protect.
+    """
+    src = source if source is not None else MASTER_SAVE_DIR
+    if src is None or not Path(src).exists():
+        return None
+    root = Path(root).expanduser() if root is not None \
+        else Path("~/hkrl").expanduser()
+    dest_root = root / "save-backups"
+    stamp = stamp if stamp is not None else time.strftime("%Y%m%d_%H%M%S")
+    dest, n = dest_root / stamp, 1
+    while dest.exists():  # same-second runs must not overwrite each other
+        n += 1
+        dest = dest_root / f"{stamp}_{n}"
+    dest_root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest)
+    for old in sorted(d for d in dest_root.iterdir() if d.is_dir())[:-keep]:
+        shutil.rmtree(old)
+    return dest
+
 
 def seed_save_dir(bundle_id: str, source: Path = None,
                   app_support: Path = None) -> Path:
@@ -271,6 +315,10 @@ def main() -> None:
             f"process (a dashboard? a leftover game?) holds it. Free it or "
             f"pick a different --port range."
         )
+
+    backup = backup_saves()
+    if backup is not None:
+        print(f"master save backed up to {backup}", flush=True)
 
     # Same save-isolation rule as train.py: instances sharing one save slot
     # autosave over each other. Manual multi-instance gates get the same
