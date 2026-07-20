@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train PPO against Hornet 1 on one supervised game instance.
+"""Train a recurrent PPO against Hornet 1 on one supervised game instance.
 
 Owns the game process end to end: launches it, supervises it through
 crashes, wedges, and App Nap suspensions, checkpoints a generation every
@@ -19,10 +19,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from stable_baselines3 import PPO  # noqa: E402
+from sb3_contrib import RecurrentPPO  # noqa: E402
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
 from stable_baselines3.common.vec_env import (  # noqa: E402
-    VecFrameStack, VecMonitor, VecNormalize,
+    VecMonitor, VecNormalize,
 )
 
 from hkrl.game import GameProcess  # noqa: E402
@@ -33,27 +33,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from launch_instances import DEFAULT_APP, DEFAULT_PORT  # noqa: E402
 
 GAMMA = 0.995
-N_STACK = 4
 
 
 def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs):
-    """SupervisedVecEnv -> VecMonitor -> VecFrameStack -> VecNormalize.
+    """SupervisedVecEnv -> VecMonitor -> VecNormalize.
 
     Returns (env, supervisor): the outermost wrapper for PPO, plus the
     supervisor itself so the checkpoint callback can read its recovery
     count.
 
-    VecMonitor sits below the frame stack and the normalizer so its episode
-    records carry raw rewards and true lengths. It gets no info_keywords:
-    VecMonitor indexes every keyword into each done step's info, and the
-    supervisor's recovery frames carry only terminal_observation, so a
-    keyword would KeyError there and kill the run on its first recovery.
-    GenerationCallback reads won/boss_damage_frac from the raw infos
-    instead.
+    VecMonitor sits below the normalizer so its episode records carry raw
+    rewards and true lengths. It gets no info_keywords: VecMonitor indexes
+    every keyword into each done step's info, and the supervisor's recovery
+    frames carry only terminal_observation, so a keyword would KeyError there
+    and kill the run on its first recovery. GenerationCallback reads
+    won/boss_damage_frac from the raw infos instead.
 
-    VecFrameStack(n_stack=4): one observation is an instant, and the FSM
-    one-hot does not encode how long Hornet has been in a state -- the
-    stack is what lets the policy tell "starting a dash" from "mid-dash".
+    No frame stacking: one observation is an instant, and the FSM one-hot
+    does not encode how long Hornet has been in a state -- but the recurrent
+    ("MlpLstmPolicy") policy carries its own hidden state across steps, so
+    the LSTM supplies exactly the temporal memory a VecFrameStack used to
+    fake. Stacking on top would only feed the LSTM redundant, delayed copies
+    of frames it already remembers.
 
     VecNormalize shares PPO's gamma so its return normalization tracks the
     same discounted quantity the value head learns.
@@ -63,29 +64,29 @@ def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs
     # Session-stamped so a resumed run appends a new episode log instead of
     # truncating the previous session's.
     mon = VecMonitor(supervisor, filename=str(Path(run_dir) / f"monitor_{session}"))
-    stacked = VecFrameStack(mon, n_stack=N_STACK)
     if resume_vecnorm is not None:
         # The saved statistics are the distribution the resumed weights were
         # trained under; loading them together is what makes a resume a
         # continuation. training stays on so they keep adapting.
-        env = VecNormalize.load(str(resume_vecnorm), stacked)
+        env = VecNormalize.load(str(resume_vecnorm), mon)
         env.training = True
     else:
-        env = VecNormalize(stacked, gamma=GAMMA, clip_obs=10.0)
+        env = VecNormalize(mon, gamma=GAMMA, clip_obs=10.0)
     return env, supervisor
 
 
 def build_model(env, run_dir, resume_model=None, seed=None,
                 n_steps=2048, batch_size=64, n_epochs=10):
-    """A PPO for this env, fresh or loaded from a generation checkpoint.
+    """A RecurrentPPO for this env, fresh or loaded from a generation
+    checkpoint.
 
     On resume every hyperparameter comes from the checkpoint zip; the
     keyword arguments here shape fresh models only.
     """
     if resume_model is not None:
-        return PPO.load(str(resume_model), env=env, device="cpu")
-    return PPO(
-        "MlpPolicy",
+        return RecurrentPPO.load(str(resume_model), env=env, device="cpu")
+    return RecurrentPPO(
+        "MlpLstmPolicy",
         env,
         # ~13s credit horizon at 15 Hz, so a dodge can still be credited
         # with the punish it enables; the default 0.99 covers only ~6.7s.
@@ -98,18 +99,34 @@ def build_model(env, run_dir, resume_model=None, seed=None,
         # The whole gradient update runs while the game connection idles,
         # and the mod drops any connection idle for 10s (see the ceiling
         # note in hkrl/env.py) -- so the update must finish well inside 10s
-        # or every rollout boundary severs the connection. Measured at the
-        # live gate; if updates approach 10s, lower --n-epochs first.
+        # or every rollout boundary severs the connection. This bites HARDER
+        # with the recurrent 256x256+LSTM policy than the old tiny MLP:
+        # measured on CPU at n_steps=2048, n_epochs=10 takes ~13s (over the
+        # ceiling), n_epochs=6 ~7.8s, n_epochs=5 ~6.7s -- update time scales
+        # ~linearly with n_epochs, and a bigger batch_size does NOT help (the
+        # per-sequence LSTM forward dominates). Hence the default dropped from
+        # 10 to 5; if updates still approach 10s, lower --n-epochs further
+        # before touching anything else.
         n_epochs=n_epochs,
         # Discrete 15-action combat collapses quickly into "hold nothing"
         # under a death-dominated reward; a small entropy bonus keeps
         # alternatives alive long enough for the damage term to be
         # discovered.
         ent_coef=0.01,
+        # The MLP feature extractors around the LSTM. Bumped from SB3's
+        # default 64x64 to 256x256 (separate pi/vf stacks): the 46-dim
+        # observation plus a shared LSTM feed a policy that has to tell apart
+        # 21 discrete combat actions against a fast boss, and the wider heads
+        # give it the capacity to. The LSTM hidden size is left at
+        # RecurrentPPO's default -- it is the memory, not the per-step
+        # capacity, this net_arch controls.
+        policy_kwargs=dict(net_arch=dict(pi=[256, 256], vf=[256, 256])),
         seed=seed,
         verbose=1,
-        # The policy is a tiny MLP; CPU avoids the per-batch device
-        # transfer overhead that would dominate on MPS.
+        # The policy is a small LSTM + MLP; CPU avoids the per-batch device
+        # transfer overhead that would dominate on MPS, and recurrent
+        # rollouts run one step at a time (no big batched forward pass to
+        # amortize a transfer over).
         device="cpu",
         tensorboard_log=str(Path(run_dir) / "tb"),
     )
@@ -158,7 +175,11 @@ def main() -> None:
     ap.add_argument("--gen-every", type=int, default=15_000)
     ap.add_argument("--n-steps", type=int, default=2048)
     ap.add_argument("--batch-size", type=int, default=64)
-    ap.add_argument("--n-epochs", type=int, default=10)
+    ap.add_argument("--n-epochs", type=int, default=5,
+                    help="PPO epochs per update. Kept at 5 so the recurrent "
+                         "256x256+LSTM update finishes under the mod's 10s "
+                         "socket idle ceiling (~6.7s on CPU); 10 overruns it "
+                         "(~13s). Raise only if the net moves off CPU.")
     ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args()
 
@@ -181,7 +202,9 @@ def main() -> None:
         f.write(json.dumps({
             **{k: str(v) if isinstance(v, Path) else v
                for k, v in vars(args).items()},
-            "gamma": GAMMA, "n_stack": N_STACK, "ent_coef": 0.01,
+            # No "n_stack": the recurrent policy replaced frame stacking, so
+            # there is no stack depth to record.
+            "gamma": GAMMA, "ent_coef": 0.01,
             "resumed_from_gen": resume[0] if resume else None,
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }) + "\n")

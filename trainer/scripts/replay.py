@@ -18,11 +18,13 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from stable_baselines3 import PPO  # noqa: E402
+from sb3_contrib import RecurrentPPO  # noqa: E402
 from stable_baselines3.common.vec_env import (  # noqa: E402
-    DummyVecEnv, VecFrameStack, VecNormalize,
+    DummyVecEnv, VecNormalize,
 )
 
 from hkrl.generations import checkpoint_paths, latest_checkpoint  # noqa: E402
@@ -30,17 +32,21 @@ from hkrl.vec import make_env  # noqa: E402
 
 
 def load_policy(weights: Path, vecnorm: Path, port: int, host: str = "127.0.0.1"):
-    """The training pipeline minus training: one env, stacked, normalized.
+    """The training pipeline minus training: one env, normalized.
+
+    Mirrors scripts/train.py's build_env exactly (SupervisedVecEnv there,
+    DummyVecEnv here): no VecFrameStack, because the recurrent MlpLstmPolicy
+    carries its own temporal memory and the checkpoint's weights only make
+    sense against the same observation pipeline they were trained under.
 
     DummyVecEnv rather than Subproc: with a single env there are no parallel
     socket waits to overlap, so a subprocess would add IPC for nothing.
     """
     venv = DummyVecEnv([make_env(port, host=host)])
-    stacked = VecFrameStack(venv, n_stack=4)
-    env = VecNormalize.load(str(vecnorm), stacked)
+    env = VecNormalize.load(str(vecnorm), venv)
     env.training = False     # statistics are a checkpoint artifact, frozen here
     env.norm_reward = False  # report the env's real rewards, not scaled ones
-    model = PPO.load(str(weights), device="cpu")
+    model = RecurrentPPO.load(str(weights), device="cpu")
     return model, env
 
 
@@ -52,11 +58,23 @@ def replay(model, env, episodes: int, out=None, deterministic: bool = True):
         out = sys.stdout
     summaries = []
     obs = env.reset()
+    # RecurrentPPO threads an LSTM hidden state between steps: predict()
+    # takes the previous state and an episode_start mask (which zeroes the
+    # state at an episode boundary) and returns the updated state. Feeding
+    # None + all-True on the first call initializes it, and setting
+    # episode_starts from `dones` resets the memory exactly when the vec env
+    # autoresets, so each episode's policy starts from a clean hidden state
+    # instead of carrying the previous fight's memory into the new one.
+    lstm_states = None
+    episode_starts = np.ones((env.num_envs,), dtype=bool)
     for ep in range(1, episodes + 1):
         total, steps, done, infos = 0.0, 0, False, [{}]
         while not done:
-            action, _ = model.predict(obs, deterministic=deterministic)
+            action, lstm_states = model.predict(
+                obs, state=lstm_states, episode_start=episode_starts,
+                deterministic=deterministic)
             obs, rewards, dones, infos = env.step(action)
+            episode_starts = dones
             total += float(rewards[0])
             steps += 1
             done = bool(dones[0])

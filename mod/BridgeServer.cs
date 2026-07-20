@@ -60,6 +60,18 @@ namespace HKRLBot
                     // note in trainer/hkrl/env.py. Do not change this value
                     // without also reconsidering that call site.
                     stream.ReadTimeout = 10000;
+                    // A write must be bounded for the same reason a read is.
+                    // SendState's WriteLine holds `gate` while it writes, and
+                    // without a deadline a peer that stops draining its
+                    // receive buffer (a wedged/App-Napped trainer) blocks that
+                    // write -- and therefore AcceptLoop's ability to install a
+                    // reconnecting client -- indefinitely. With WriteTimeout
+                    // set, a stalled write instead throws IOException, which
+                    // SendState already turns into a clean DropLocked(), so a
+                    // wedged peer costs at most this timeout rather than
+                    // freezing the bridge forever. Mirrors ReadTimeout's 10s;
+                    // see the note in SendState.
+                    stream.WriteTimeout = 10000;
                     reader = new StreamReader(stream);
                     writer = new StreamWriter(stream) { AutoFlush = true };
                     writer.WriteLine("{\"type\":\"hello\",\"version\":1}");
@@ -89,20 +101,42 @@ namespace HKRLBot
             };
             var text = msg.ToString(Formatting.None);
             // This write is fast in the common case (a few hundred bytes into
-            // a loopback socket send buffer) but is NOT bounded: no
-            // stream.WriteTimeout is ever set on this stream, so if the peer
+            // a loopback socket send buffer). It IS now bounded: AcceptLoop
+            // sets stream.WriteTimeout = 10000 on this stream, so if the peer
             // stops draining its receive buffer (e.g. a wedged/blocked
-            // trainer), this WriteLine (AutoFlush) can block indefinitely --
-            // and it does so while holding `gate`, which stalls AcceptLoop's
+            // trainer) this WriteLine (AutoFlush) blocks at most ~10s rather
+            // than forever -- important because it holds `gate` while it
+            // writes, and a permanently-stuck write would stall AcceptLoop's
             // ability to accept/install a reconnecting client for as long as
-            // the write is stuck. If the peer has gone away outright (broken
-            // pipe / reset) this throws IOException instead; treat that the
-            // same as a read failure so a dead writer can never surface as an
+            // it was stuck. When the deadline expires the write throws
+            // IOException; a peer that has gone away outright (broken pipe /
+            // reset) throws IOException too. Both land in the catch below and
+            // are treated the same as a read failure -- a clean DropLocked()
+            // -- so neither a wedged nor a dead writer can surface as an
             // unhandled exception on the Unity main thread. See the note on
             // ReadMessage below for the related reconnect-race handling.
             lock (gate)
             {
                 try { writer?.WriteLine(text); }
+                catch (IOException) { DropLocked(); }
+            }
+        }
+
+        // Reply to a liveness ping (see EpisodeManager's ping handling).
+        // Deliberately a sibling of SendState, using the exact same gated,
+        // WriteTimeout-bounded, IOException-drops-cleanly write path: a pong
+        // that cannot be written (dead or wedged peer) tears the connection
+        // down instead of throwing on the Unity main thread. This is only
+        // ever CALLED from EpisodeManager.LateUpdate (the main thread), so a
+        // frozen main thread never produces a pong -- which is the entire
+        // point of the ping: AcceptLoop's background thread greets a probe
+        // even while the main thread is dead, but only a live main thread can
+        // answer this.
+        public void SendPong()
+        {
+            lock (gate)
+            {
+                try { writer?.WriteLine("{\"type\":\"pong\"}"); }
                 catch (IOException) { DropLocked(); }
             }
         }

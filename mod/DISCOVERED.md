@@ -58,6 +58,31 @@ Arena center X     = (left + right) / 2   = 26.5
 Arena half-width X = (right - left) / 2   = 11.23
 ```
 
+For the vertical scale, measure the **top of the arena** the same way the
+walls above gave the horizontal scale: jump as high as possible (full jump +
+double jump) to reach the ceiling, press up into it, and read the steady `y=`.
+If the ceiling is genuinely out of reach, record the `y` at the top of the
+two-jump apex instead. Using the arena top (not a Knight-specific apex) keeps
+this consistent with the wall-based horizontal scale and bounds Hornet's
+aerial leaps too, so it covers the boss `y` as well. Confirm `y` INCREASES
+going up (top > floor); if your build reads the top as smaller than the floor,
+y is inverted and the height is `floor - top` instead.
+
+```
+Knight Y at arena top (ceiling, or two-jump apex if unreachable): 38
+```
+
+Derived value (compute only after the top above is filled in):
+
+```
+Arena half-height H = top - floor = 9.59
+```
+
+This feeds `ARENA_HEIGHT` in `trainer/hkrl/env.py` (= 9.59). No `/2`, unlike
+the horizontal `ARENA_HALF_W`: vertical is normalized floor-relative,
+`(ky - FLOOR_Y) / ARENA_HEIGHT`, so the floor maps to 0 and the top to ~1 --
+it's the full floor-to-top height, not a half-span from a center.
+
 ## 3. Statue-stand X in `GG_Workshop`
 
 In `GG_Workshop` (the Godhome hub room), stand at the Hornet statue and note
@@ -76,7 +101,9 @@ Knight X at Hornet statue in GG_Workshop: 62.21
 - [x] Floor Y recorded
 - [x] Arena center / half-width computed
 - [x] Statue X recorded in GG_Workshop
+- [x] Arena vertical scale (arena top Y = 38, height 9.59) recorded —
+      `ARENA_HEIGHT` in `trainer/hkrl/env.py`
 
-**Complete.** Recorded from live play on 2026-07-18. Derived values verified
-arithmetically against the measured walls. Tasks 6 and 7 may now consume these
-numbers.
+**Complete.** The arena top Y was measured in a later session and feeds
+`ARENA_HEIGHT = 9.59` in `trainer/hkrl/env.py`; all other values are from the
+2026-07-18 session.

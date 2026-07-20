@@ -31,6 +31,15 @@ HORNET_STATES = [
 ARENA_CENTER_X = 26.5
 ARENA_HALF_W = 11.23
 FLOOR_Y = 28.41
+# Vertical scale for all vertical position terms: the arena's full height above
+# the floor (top - floor = 38 - 28.41), measured off the F1 overlay per
+# DISCOVERED.md section 2. NOT a "half" like ARENA_HALF_W -- vertical is
+# normalized floor-relative ((ky - FLOOR_Y) / ARENA_HEIGHT: floor -> 0, top ->
+# ~1), not center-relative, so there is no /2. The horizontal half-width MUST
+# NOT be reused here: the arena is far wider than it is tall, so normalizing a
+# vertical offset by 11.23 would squash every jump/leap into a sliver near zero
+# and make vertical spacing nearly invisible to the policy.
+ARENA_HEIGHT = 9.59
 VEL_SCALE = 20.0
 
 OBS_KEYS = [  # scalar block order (before the boss-state one-hot)
@@ -128,18 +137,18 @@ class HKEnv(gym.Env):
             self._max_bhp = max(obs["bhp"], 1)
         v = [
             (obs["kx"] - ARENA_CENTER_X) / ARENA_HALF_W,
-            (obs["ky"] - FLOOR_Y) / ARENA_HALF_W,
+            (obs["ky"] - FLOOR_Y) / ARENA_HEIGHT,
             obs["kvx"] / VEL_SCALE, obs["kvy"] / VEL_SCALE,
             obs["khp"] / 9.0, obs["soul"] / 99.0,
             float(obs["on_ground"]), float(obs["dashing"]),
             float(obs["invuln"]), float(obs["facing_right"]),
             (obs["bx"] - obs["kx"]) / ARENA_HALF_W,
-            (obs["by"] - obs["ky"]) / ARENA_HALF_W,
+            (obs["by"] - obs["ky"]) / ARENA_HEIGHT,
             obs["bvx"] / VEL_SCALE, obs["bvy"] / VEL_SCALE,
             obs["bhp"] / self._max_bhp,
             float(obs["needle_active"]),
             (obs["nx"] - obs["kx"]) / ARENA_HALF_W if obs["needle_active"] else 0.0,
-            (obs["ny"] - obs["ky"]) / ARENA_HALF_W if obs["needle_active"] else 0.0,
+            (obs["ny"] - obs["ky"]) / ARENA_HEIGHT if obs["needle_active"] else 0.0,
         ]
         onehot = [0.0] * len(HORNET_STATES)
         try:
