@@ -70,8 +70,48 @@ def seed_save_dir(bundle_id: str, source: Path = None,
     return dst
 
 
+def seed_prefs(bundle_id: str, slot: int = 0) -> None:
+    """Copy the master's PlayerPrefs domain onto a clone's, forced windowed.
+
+    Unity keeps PlayerPrefs in ~/Library/Preferences/<bundle id>.plist --
+    OUTSIDE persistentDataPath, so seeding the save directory alone leaves
+    a clone booting with first-run defaults, whose extra menu prompts
+    desync the boot macro's fixed input sequence (observed live 2026-07-20:
+    both instances wandered into the settings menu). Routed through
+    `defaults` rather than copying the plist file so cfprefsd's cache
+    never serves a stale/negative entry for the clone's domain.
+
+    The Screenmanager keys are then overridden to WINDOWED at a per-slot
+    size: the master plays fullscreen at native res, and N fullscreen
+    clones stack on one display -- the hidden one gets App Nap'd at ~0%
+    CPU and drags the whole lockstep down to its crawl (observed live:
+    "really slow", one game at 0.5% CPU, its macro wedging mid-menu).
+    Strictly decreasing sizes mean a later (frontmost) window can never
+    fully occlude an earlier one, so no clone is ever occlusion-suspended
+    even before anyone tiles the windows properly.
+    """
+    exported = subprocess.run(["defaults", "export", MASTER_BUNDLE_ID, "-"],
+                              check=True, capture_output=True).stdout
+    subprocess.run(["defaults", "delete", bundle_id],
+                   capture_output=True)  # fresh domain; ok if absent
+    subprocess.run(["defaults", "import", bundle_id, "-"],
+                   input=exported, check=True)
+    width = max(640, 1280 - 160 * slot)
+    height = max(360, 720 - 90 * slot)
+    for key, value in [
+        ("Screenmanager Fullscreen mode", 3),      # Unity FullScreenMode.Windowed
+        ("Screenmanager Is Fullscreen mode", 0),
+        ("Screenmanager Resolution Use Native", 0),
+        ("Screenmanager Resolution Width", width),
+        ("Screenmanager Resolution Height", height),
+    ]:
+        subprocess.run(["defaults", "write", bundle_id, key,
+                        "-int", str(value)], check=True)
+
+
 def prepare_instance(port: int, app: Path = None,
-                     root: Path = None, sign: bool = True) -> Path:
+                     root: Path = None, sign: bool = True,
+                     prefs: bool = True, slot: int = 0) -> Path:
     """Build this port's isolated game copy; returns its binary to launch.
 
     An APFS copy-on-write clone (cp -c: instant, near-zero disk) of the
@@ -104,6 +144,8 @@ def prepare_instance(port: int, app: Path = None,
             ["codesign", "--force", "--deep", "--sign", "-", str(clone)],
             check=True, capture_output=True)
     seed_save_dir(bundle_id)
+    if prefs:
+        seed_prefs(bundle_id, slot=slot)
     return clone / "Contents" / "MacOS" / app.name
 
 
@@ -236,7 +278,7 @@ def main() -> None:
     apps = [args.app] * args.instances
     if args.instances > 1:
         if SAVE_ISOLATION_SUPPORTED:
-            apps = [prepare_instance(args.port + i, args.app)
+            apps = [prepare_instance(args.port + i, args.app, slot=i)
                     for i in range(args.instances)]
         else:
             print("WARNING: save isolation is not implemented on this "

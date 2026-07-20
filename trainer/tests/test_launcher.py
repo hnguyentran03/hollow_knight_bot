@@ -238,9 +238,11 @@ def test_prepare_instance_clones_the_app_with_a_per_port_bundle_id(
     (master_save / "user1.dat").write_text("save")
     monkeypatch.setattr(launch_instances, "APP_SUPPORT", tmp_path)
 
+    # sign=False (codesigning a fake bundle fails) and prefs=False (the
+    # real `defaults` domains must not be touched from a unit test).
     out = launch_instances.prepare_instance(9030, app=binary,
                                             root=tmp_path / "instances",
-                                            sign=False)
+                                            sign=False, prefs=False)
 
     assert out == (tmp_path / "instances" / "port-9030" /
                    "hollow_knight.app" / "Contents" / "MacOS" / "Hollow Knight")

@@ -258,8 +258,9 @@ def main() -> None:
             print(f"preparing {args.instances} isolated game copies under "
                   f"{args.root / 'instances'} (APFS clones; instant, "
                   f"near-zero disk)", flush=True)
-            apps = [prepare_instance(p, args.app, args.root / "instances")
-                    for p in ports]
+            apps = [prepare_instance(p, args.app, args.root / "instances",
+                                     slot=i)
+                    for i, p in enumerate(ports)]
         else:
             print("WARNING: save isolation is not implemented on this "
                   "platform; all instances will share one save slot and "
