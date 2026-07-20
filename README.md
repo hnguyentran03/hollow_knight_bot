@@ -38,9 +38,12 @@ trainer/
     game.py                 launches/kills the game process
     supervisor.py           VecEnv wrapper that recovers from crashes/wedges
     generations.py          checkpointing + manifest + resume
+    rundata.py              read-only parsing/aggregation of run directories
+    dashboard.py            HTTP server for the web dashboard (+ dashboard.html)
     fake_game.py            scripted in-process game for tests
   scripts/
     train.py                the training entry point
+    dashboard.py            serve the web dashboard (default port 9021)
     random_agent.py         random-policy smoke test (game must already be running)
     replay.py               watch a saved generation play
     launch_instances.py     manually launch a game instance (for random_agent/replay)
@@ -118,6 +121,16 @@ caffeinate -dims ./.venv/bin/python scripts/train.py --timesteps 500000 --run-id
 Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (PPO rollout/update shape), `--seed`, `--root` (default `~/hkrl`).
 
 ### Monitor progress
+
+The web dashboard shows every run under `~/hkrl/runs/`: live/stopped status,
+timestep progress and ETA, steps/hour, the learning curves (boss damage, win
+rate, reward, episode length per generation), and a per-episode reward chart
+that updates between checkpoints. It is read-only — it never touches the game
+port — so it is safe to leave up beside a live run:
+
+```bash
+./.venv/bin/python scripts/dashboard.py --open   # http://127.0.0.1:9021
+```
 
 Each run lives in `~/hkrl/runs/<run-id>/`. The per-generation manifest is the health record:
 
