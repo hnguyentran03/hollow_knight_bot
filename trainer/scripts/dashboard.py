@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Serve the training dashboard: live status and learning curves for every
-run under <root>/runs, read straight from the run directories.
-
-Read-only -- it never writes to a run directory or touches the game port,
-so it is safe to leave up beside a live training run.
+run under <root>/runs, read straight from the run directories -- plus a
+launch panel that can start, resume, and stop training runs (the one
+mutating surface; everything else only reads, and runs it launches
+survive this server exiting).
 """
 import argparse
 import sys

@@ -54,9 +54,69 @@
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: radial-gradient(1100px 520px at 50% -140px, #131a2b 0%, var(--page) 62%) fixed var(--page);
+    /* The atmosphere (glow, fog, motes, vignette) lives in .void so it can
+       layer and animate independently; the body is just the black. */
+    background: var(--page);
     color: var(--ink);
     font: 14px/1.5 var(--body);
+  }
+
+  /* ---- The main-menu void: pale glow, drifting fog banks, rising motes,
+     dark-edged vignette. Fixed and non-interactive; sits behind all
+     content (panels carry their own surfaces, so readability is theirs). */
+  .void { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+  .void::before {
+    content: ""; position: absolute; inset: -20%;
+    /* The menu's light is bone-pale, not blue: a faint warm glow high
+       center, over the cold slate depth below. */
+    background:
+      radial-gradient(920px 500px at 50% 15%, rgba(196, 200, 190, 0.07), transparent 62%),
+      radial-gradient(700px 360px at 50% 12%, rgba(146, 168, 205, 0.055), transparent 60%),
+      radial-gradient(1500px 950px at 50% 60%, rgba(13, 19, 33, 0.9), transparent 76%);
+  }
+  .void::after {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(120% 92% at 50% 42%, transparent 48%, rgba(1, 2, 4, 0.8) 100%);
+  }
+  .fog { position: absolute; left: -50%; width: 200%; height: 46%; bottom: -6%;
+         filter: blur(38px); opacity: 0.5; }
+  .fog.f1 {
+    opacity: 0.6;
+    background:
+      radial-gradient(48% 85% at 22% 78%, #2b3c5c 0%, transparent 70%),
+      radial-gradient(38% 70% at 58% 92%, #23324e 0%, transparent 70%),
+      radial-gradient(42% 75% at 85% 80%, #2a3a58 0%, transparent 72%);
+    animation: fog-drift 150s ease-in-out infinite alternate;
+  }
+  .fog.f2 {
+    bottom: -12%; height: 42%; opacity: 0.42;
+    background:
+      radial-gradient(45% 80% at 35% 85%, #3a4d72 0%, transparent 70%),
+      radial-gradient(30% 55% at 60% 70%, #46587c 0%, transparent 64%),
+      radial-gradient(35% 65% at 78% 78%, #32456a 0%, transparent 68%);
+    animation: fog-drift 110s ease-in-out infinite alternate-reverse;
+  }
+  .fog.f3 {
+    top: -14%; bottom: auto; height: 34%; opacity: 0.22; filter: blur(46px);
+    background:
+      radial-gradient(40% 80% at 30% 15%, #1d2a44 0%, transparent 70%),
+      radial-gradient(45% 70% at 75% 8%, #16223a 0%, transparent 72%);
+    animation: fog-drift 180s ease-in-out infinite alternate;
+  }
+  @keyframes fog-drift { from { transform: translateX(-6%); } to { transform: translateX(6%); } }
+  .mote { position: absolute; bottom: -12px; border-radius: 50%;
+          background: rgba(190, 210, 240, 0.8); filter: blur(1px);
+          box-shadow: 0 0 6px rgba(120, 170, 240, 0.7);
+          animation: mote-rise linear infinite; opacity: 0; }
+  @keyframes mote-rise {
+    0%   { transform: translate(0, 0); opacity: 0; }
+    8%   { opacity: var(--mote-a, 0.5); }
+    85%  { opacity: var(--mote-a, 0.5); }
+    100% { transform: translate(var(--mote-dx, 20px), calc(-100vh - 40px)); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fog { animation: none; }
+    .mote { display: none; }
   }
   .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
 
@@ -67,7 +127,7 @@
     font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px;
   }
-  .status-line { display: flex; align-items: center; gap: 8px; color: var(--ink-2); margin-left: auto; }
+  .status-line { display: flex; align-items: center; gap: 8px; color: var(--ink-2); }
   .badge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: 0.04em; }
   .badge .dot { width: 8px; height: 8px; border-radius: 50%; }
   .badge.live .dot { background: var(--good); box-shadow: 0 0 8px var(--good); animation: breathe 2.4s ease-in-out infinite; }
@@ -156,10 +216,50 @@
   .config-table td { padding: 3px 18px 3px 0; font-variant-numeric: tabular-nums; }
   .config-table td:first-child { color: var(--muted); }
 
+  /* Launch panel: the one part of the page that acts instead of watches. */
+  .launch { margin: 0 0 18px; padding: 14px 16px; }
+  .launch h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 0 0 10px; }
+  .launch form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  .launch form[hidden] { display: none; }  /* .launch form's display:grid outranks the UA's [hidden] rule */
+  .launch label { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .launch input {
+    width: 100%; font: inherit; color: var(--ink); background: var(--raised);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+  }
+  .btn {
+    font: inherit; cursor: pointer; color: var(--ink); background: var(--raised);
+    border: 1px solid var(--border); border-radius: 4px; padding: 6px 14px;
+  }
+  .btn:hover { border-color: var(--tick); }
+  .btn.danger { color: var(--critical); border-color: var(--critical); background: transparent; }
+  .launch .actions { display: flex; gap: 8px; grid-column: 1 / -1; }
+  .launch .advanced { grid-column: 1 / -1; margin: 0; }
+  .launch .advanced .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 8px; }
+  .launch .error { margin-top: 8px; color: var(--critical); font-size: 13px; }
+  a.btn { text-decoration: none; display: inline-block; }
+  a.btn[hidden] { display: none; }  /* same [hidden]-vs-display specificity trap as .launch form above */
+  .page-links { margin-left: auto; }
+  .prev-runs h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 16px 0 4px; }
+  .prev-run { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+  .prev-run .prev-run-id { font-family: var(--display); font-size: 15px; }
+  .prev-run .prev-run-meta { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .active-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--ink-2); }
+  #launch-log {
+    margin: 10px 0 0; padding: 8px 10px; max-height: 260px; overflow: auto;
+    background: var(--page); border: 1px solid var(--border); border-radius: 4px;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--ink-2); white-space: pre-wrap;
+  }
+
   .empty { margin: 48px auto; text-align: center; color: var(--ink-2); }
 </style>
 </head>
 <body>
+<div class="void" aria-hidden="true">
+  <div class="fog f3"></div>
+  <div class="fog f2"></div>
+  <div class="fog f1"></div>
+</div>
 <div class="wrap">
   <header>
     <div>
@@ -167,6 +267,10 @@
       <h1 id="run-title">…</h1>
     </div>
     <select id="run-select" aria-label="Training run"></select>
+    <span class="page-links">
+      <a class="btn" id="summon-link" href="/summon" hidden>Summon a run →</a>
+      <a class="btn" id="telemetry-link" href="/" hidden>← Telemetry</a>
+    </span>
     <div class="status-line">
       <span id="badge" class="badge"><span class="dot"></span><span id="badge-text"></span></span>
       <span id="activity"></span>
@@ -174,6 +278,41 @@
   </header>
   <div id="banner">Dashboard server unreachable — showing the last data received. Retrying…</div>
   <div class="rule" aria-hidden="true"><span class="gem"></span></div>
+
+  <div class="panel launch" id="launch" hidden>
+    <h2>Summon a run</h2>
+    <div id="launch-active" hidden>
+      <div class="active-line">
+        <span class="badge live"><span class="dot"></span><span id="launch-run"></span></span>
+        <span id="launch-uptime"></span>
+        <button type="button" class="btn danger" id="stop-btn">Stop run</button>
+      </div>
+      <pre id="launch-log"></pre>
+    </div>
+    <form id="launch-form" hidden>
+      <div><label for="f-run-id">Run id</label><input id="f-run-id" name="run_id" autocomplete="off"></div>
+      <div><label for="f-instances">Instances</label><input id="f-instances" name="instances" type="number" min="1" max="3" value="1"></div>
+      <div><label for="f-timesteps">Timesteps</label><input id="f-timesteps" name="timesteps" type="number" min="1" value="500000"></div>
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div class="fields">
+          <div><label for="f-gen-every">Gen every</label><input id="f-gen-every" name="gen_every" type="number" min="1"></div>
+          <div><label for="f-n-steps">N steps</label><input id="f-n-steps" name="n_steps" type="number" min="1" placeholder="auto"></div>
+          <div><label for="f-batch-size">Batch size</label><input id="f-batch-size" name="batch_size" type="number" min="1"></div>
+          <div><label for="f-n-epochs">N epochs</label><input id="f-n-epochs" name="n_epochs" type="number" min="1"></div>
+          <div><label for="f-seed">Seed</label><input id="f-seed" name="seed" type="number" placeholder="random"></div>
+        </div>
+      </details>
+      <div class="actions">
+        <button type="submit" class="btn" id="start-btn">Start new run</button>
+      </div>
+    </form>
+    <div class="prev-runs" id="prev-runs" hidden>
+      <h2>Previous runs</h2>
+      <div id="prev-runs-list"></div>
+    </div>
+    <div class="error" id="launch-error" hidden></div>
+  </div>
 
   <div id="content" hidden>
     <div class="bossbar">
@@ -230,8 +369,28 @@
 
 <script>
 "use strict";
+
+/* ---------- the void's motes (menu dust drifting up through the dark) ---------- */
+(function summonMotes() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const voidEl = document.querySelector(".void");
+  for (let i = 0; i < 16; i++) {
+    const m = document.createElement("div");
+    m.className = "mote";
+    const size = 2 + Math.random() * 2.5;
+    m.style.width = m.style.height = size.toFixed(1) + "px";
+    m.style.left = (Math.random() * 100).toFixed(1) + "%";
+    m.style.setProperty("--mote-a", (0.25 + Math.random() * 0.4).toFixed(2));
+    m.style.setProperty("--mote-dx", ((Math.random() - 0.5) * 120).toFixed(0) + "px");
+    m.style.animationDuration = (26 + Math.random() * 30).toFixed(1) + "s";
+    // Negative delay: the field is mid-drift on load, not queued at the floor.
+    m.style.animationDelay = (-Math.random() * 40).toFixed(1) + "s";
+    voidEl.appendChild(m);
+  }
+})();
 const POLL_MS = 10000;
 const state = { runId: null, run: null, runs: [] };
+const SUMMON = location.pathname === "/summon";
 
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
@@ -560,8 +719,173 @@ addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(render, 150);
 });
-refresh();
-setInterval(refresh, POLL_MS);
+/* ---------- launch panel ---------- */
+const LAUNCH_POLL_MS = 2000;
+let launchDefaultsApplied = false;
+// Tracks the previous poll's active/idle state so refreshLauncher() can
+// detect the active -> idle transition (a run finishing or being stopped)
+// and refill the run-id default exactly once for the next run.
+let wasActive = false;
+
+async function postJSON(path, body) {
+  const resp = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || resp.statusText);
+  return data;
+}
+
+function launchError(msg) {
+  const el = document.getElementById("launch-error");
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+
+function formParams() {
+  const params = {};
+  for (const input of document.querySelectorAll("#launch-form input")) {
+    if (input.value !== "") params[input.name] = input.value;
+  }
+  return params;
+}
+
+async function refreshLauncher() {
+  let data;
+  try {
+    data = await (await fetch("/api/launcher")).json();
+  } catch (err) {
+    return; // the banner already reports a lost server
+  }
+  document.getElementById("launch").hidden = false;
+  const active = data.active;
+  document.getElementById("launch-active").hidden = !active;
+  document.getElementById("launch-form").hidden = !!active;
+  if (!active && wasActive) {
+    // The run that just finished (or was stopped) owns whatever run-id is
+    // still sitting in the field. Left alone it collides with that same
+    // finished run on the very next Start -- clearing it, along with the
+    // "defaults already applied" flag, lets the block below refill a
+    // fresh timestamp on this same poll.
+    document.getElementById("f-run-id").value = "";
+    launchDefaultsApplied = false;
+  }
+  wasActive = !!active;
+  if (SUMMON) renderPrevRuns(!!active);
+  if (!active && !launchDefaultsApplied && data.defaults) {
+    launchDefaultsApplied = true;
+    for (const [key, value] of Object.entries(data.defaults)) {
+      const input = document.querySelector(`#launch-form input[name="${key}"]`);
+      if (input && input.value === "") input.value = value;
+    }
+  }
+  if (active) {
+    document.getElementById("launch-run").textContent = active.run_id;
+    document.getElementById("launch-uptime").textContent =
+      "up " + fmtDur(Date.now() / 1000 - active.started);
+    const log = await fetch("/api/launcher/log?n=200").catch(() => null);
+    if (log && log.ok) {
+      const el = document.getElementById("launch-log");
+      // Stick to the bottom only if the reader was already there.
+      const follow = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+      el.textContent = await log.text();
+      if (follow) el.scrollTop = el.scrollHeight;
+    }
+  }
+}
+
+async function renderPrevRuns(activeNow) {
+  const wrap = document.getElementById("prev-runs");
+  if (activeNow) { wrap.hidden = true; return; }
+  let runs;
+  try { runs = await (await fetch("/api/runs")).json(); }
+  catch (err) { return; }  // banner-less page: just try again next poll
+  wrap.hidden = runs.length === 0;
+  const list = document.getElementById("prev-runs-list");
+  list.replaceChildren();
+  for (const r of runs) {
+    const row = document.createElement("div");
+    row.className = "prev-run";
+    const name = document.createElement("span");
+    name.className = "prev-run-id";
+    name.textContent = r.id;
+    const meta = document.createElement("span");
+    meta.className = "prev-run-meta";
+    meta.textContent = (r.live ? "live" : "stopped") +
+      (r.last_activity ? " · " + fmtAgo(r.last_activity) : "");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn";
+    btn.textContent = "Resume";
+    // Live without being panel-managed = started from a terminal; a
+    // resume would only 409 or fight for the bridge ports.
+    btn.disabled = r.live;
+    btn.addEventListener("click", () => resumeRun(r.id, btn));
+    row.append(name, meta, btn);
+    list.appendChild(row);
+  }
+}
+
+async function resumeRun(runId, btn) {
+  launchError("");
+  const params = formParams();
+  btn.disabled = true;
+  startBtn.disabled = true;
+  try {
+    await postJSON("/api/launch", { mode: "resume", run_id: runId,
+                                    timesteps: params.timesteps,
+                                    instances: params.instances,
+                                    gen_every: params.gen_every });
+    refreshLauncher();
+  } catch (err) { launchError(err.message); btn.disabled = false; }
+  finally { startBtn.disabled = false; }
+}
+
+const startBtn = document.getElementById("start-btn");
+const stopBtn = document.getElementById("stop-btn");
+
+document.getElementById("launch-form").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  launchError("");
+  // Disable both: a double-click is exactly the concurrent-POST case A3's
+  // server-side lock guards against, and the button should not invite it
+  // even though the lock makes it harmless.
+  startBtn.disabled = true;
+  try {
+    await postJSON("/api/launch", { mode: "new", ...formParams() });
+    refreshLauncher();
+  } catch (err) { launchError(err.message); }
+  finally { startBtn.disabled = false; }
+});
+document.getElementById("stop-btn").addEventListener("click", async () => {
+  launchError("");
+  stopBtn.disabled = true;
+  try {
+    await postJSON("/api/stop", {});
+    refreshLauncher();
+  } catch (err) { launchError(err.message); }
+  finally { stopBtn.disabled = false; }
+});
+document.getElementById("summon-link").hidden = SUMMON;
+document.getElementById("telemetry-link").hidden = !SUMMON;
+if (SUMMON) {
+  // Launch-only page: the telemetry poll never runs, #content/#empty stay
+  // hidden, and the header reads as the page title.
+  document.title = "hkrl — Summon a run";
+  document.getElementById("run-title").textContent = "Summon a run";
+  document.getElementById("run-select").hidden = true;
+  document.getElementById("badge").hidden = true;
+  document.getElementById("activity").hidden = true;
+  refreshLauncher();
+  setInterval(refreshLauncher, LAUNCH_POLL_MS);
+} else {
+  // Telemetry-only page: the launch panel stays hidden (its poll never
+  // runs); the Summon button is the only launch surface here.
+  refresh();
+  setInterval(refresh, POLL_MS);
+}
 </script>
 </body>
 </html>

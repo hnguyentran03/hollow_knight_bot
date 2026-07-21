@@ -1,30 +1,115 @@
-"""Local read-only web dashboard over the run directories.
+"""Local web dashboard over the run directories.
 
-Serves the single page in dashboard.html plus two JSON endpoints backed by
-hkrl.rundata. It only ever reads run files and never touches the game port,
-so it is safe to leave up beside a live training run.
+Serves the single page in dashboard.html, JSON endpoints backed by
+hkrl.rundata, and -- via hkrl.launcher, the one module allowed to mutate
+anything -- endpoints that start, resume, stop, and tail training runs.
+Run directories themselves are still only ever written by train.py, and
+the server binds 127.0.0.1 only.
 """
 import json
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
+from hkrl import launcher
 from hkrl.rundata import load_run, scan_runs
 
 PAGE = Path(__file__).with_name("dashboard.html")
 
 
 class _Handler(BaseHTTPRequestHandler):
+    def _local_host(self) -> bool:
+        # DNS rebinding makes a page origin same-origin with us after the
+        # attacker's DNS entry re-resolves to 127.0.0.1, so the browser's
+        # same-origin policy no longer protects a bare fetch() -- checking
+        # the Host header the browser sent is what actually pins the
+        # request to this server.
+        port = self.server.server_address[1]
+        return self.headers.get("Host") in (f"127.0.0.1:{port}",
+                                            f"localhost:{port}")
+
     def do_GET(self):
         path = unquote(self.path.split("?", 1)[0])
-        if path == "/":
+        # Only the /api/ routes are data-bearing; "/" is just the static
+        # page and stays unguarded so an odd local setup (e.g. a hostname
+        # other than localhost/127.0.0.1) can still load it.
+        if path.startswith("/api/") and not self._local_host():
+            self.send_error(403, "cross-origin request refused")
+            return
+        if path in ("/", "/summon"):
+            # /summon is the same page; the page JS branches on
+            # location.pathname so the embedded fonts aren't duplicated
+            # into a second file.
             self._send(200, "text/html; charset=utf-8", PAGE.read_bytes())
         elif path == "/api/runs":
             self._json(scan_runs(self.server.root))
         elif path.startswith("/api/run/"):
             self._run(path[len("/api/run/"):])
+        elif path == "/api/launcher":
+            self._json({
+                "active": launcher.status(self.server.root),
+                # Mirrors train.py's own defaults so the form and the CLI
+                # start from the same place.
+                "defaults": {
+                    "run_id": time.strftime("%Y%m%d_%H%M%S"),
+                    "instances": 1, "timesteps": 500_000,
+                    "gen_every": 15_000, "batch_size": 64, "n_epochs": 5,
+                },
+            })
+        elif path == "/api/launcher/log":
+            query = parse_qs(urlsplit(self.path).query)
+            try:
+                n = max(1, min(5000, int(query.get("n", ["200"])[0])))
+            except ValueError:
+                n = 200
+            text = launcher.tail(self.server.root, n)
+            if text is None:
+                self.send_error(404)
+            else:
+                self._send(200, "text/plain; charset=utf-8",
+                           text.encode("utf-8"))
         else:
             self.send_error(404)
+
+    def do_POST(self):
+        # Mutating endpoints get two cheap guards a read-only page never
+        # needed: the Host check stops DNS-rebinding, and the JSON
+        # content-type forces a CORS preflight (which we never answer),
+        # so a malicious web page cannot fire a plain form POST at the
+        # localhost port.
+        if not self._local_host():
+            self.send_error(403, "cross-origin request refused")
+            return
+        if not (self.headers.get("Content-Type") or "").startswith(
+                "application/json"):
+            self.send_error(415, "expected application/json")
+            return
+        path = unquote(self.path.split("?", 1)[0])
+        try:
+            # A non-numeric Content-Length raises plain ValueError, and
+            # json.JSONDecodeError is itself a ValueError subclass, so one
+            # except clause covers both a malformed header and malformed
+            # JSON. Clamp negative lengths to 0 rather than letting them
+            # reach rfile.read(-1), which would read until EOF.
+            length = max(0, int(self.headers.get("Content-Length", 0)))
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            self._json({"error": "invalid request body"}, status=400)
+            return
+        try:
+            if path == "/api/launch":
+                self._json({"run_id": launcher.launch(self.server.root,
+                                                      body)})
+            elif path == "/api/stop":
+                self._json({"stopped":
+                            launcher.stop(self.server.root)["run_id"]})
+            else:
+                self.send_error(404)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, status=400)
+        except RuntimeError as exc:
+            self._json({"error": str(exc)}, status=409)
 
     def _run(self, run_id):
         # The id is a directory name, never a path: anything with a
@@ -40,8 +125,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._json(load_run(run_dir))
 
-    def _json(self, payload):
-        self._send(200, "application/json",
+    def _json(self, payload, status: int = 200):
+        self._send(status, "application/json",
                    json.dumps(payload).encode("utf-8"))
 
     def _send(self, status, content_type, body):

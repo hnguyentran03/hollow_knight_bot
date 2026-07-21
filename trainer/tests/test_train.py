@@ -150,3 +150,17 @@ def test_resume_continues_timesteps_norm_stats_and_generation_numbering(tmp_path
             for line in (tmp_path / "generations.jsonl").read_text().splitlines()]
     assert [g["gen"] for g in gens] == [1, 2, 3]
     assert gens[-1]["timestep"] == 24
+
+
+def test_confirm_ready_auto_skips_the_prompt(monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input",
+                        lambda *a: pytest.fail("input() called in auto mode"))
+    train.confirm_ready(auto=True)
+    assert "skipping the ready prompt" in capsys.readouterr().out
+
+
+def test_confirm_ready_interactive_waits_on_input(monkeypatch):
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt))
+    train.confirm_ready(auto=False)
+    assert prompts and "Hall of Gods" in prompts[0]
