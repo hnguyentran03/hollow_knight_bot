@@ -207,6 +207,27 @@ def confirm_ready(auto: bool) -> None:
           "itself in via the boot macro; expect a few reset retries.) ")
 
 
+def build_apps(ports, app, instances_root):
+    """Per-port clone binaries for the fleet, or None when unsupported.
+
+    Every instance -- N=1 included -- runs on its own per-port APFS clone so
+    the clone-save prep (Godhome-only profile) applies uniformly and no game
+    ever plays the master save directly. On platforms without save isolation
+    there is no clone: returns None and the caller falls back to the master app.
+    """
+    if not SAVE_ISOLATION_SUPPORTED:
+        print("WARNING: save isolation is not implemented on this "
+              "platform; the game will play the master save slot directly "
+              "and concurrent autosaves can corrupt it. Back up the save "
+              "directory first.", file=sys.stderr, flush=True)
+        return None
+    print(f"preparing {len(ports)} isolated game copies under "
+          f"{instances_root} (APFS clones; instant, near-zero disk)",
+          flush=True)
+    return [prepare_instance(p, app, instances_root, slot=i)
+            for i, p in enumerate(ports)]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--timesteps", type=int, default=500_000,
@@ -291,27 +312,12 @@ def main() -> None:
         print(session_banner(args.timesteps), flush=True)
 
     ports = [args.port + i for i in range(args.instances)]
-    # At N>1 the instances must not share the game's save directory: they
-    # all autosave the same slot throughout a run (observed corrupting the
-    # master save live, 2026-07-20 -- see seed_save_dir). Each slot gets
-    # its own app clone with a per-port bundle id (own save dir, own
-    # ModLog), refreshed from the master app and save at every start. N=1
-    # keeps the historical behavior: the single game plays the master save
-    # directly.
-    apps = None
-    if args.instances > 1:
-        if SAVE_ISOLATION_SUPPORTED:
-            print(f"preparing {args.instances} isolated game copies under "
-                  f"{args.root / 'instances'} (APFS clones; instant, "
-                  f"near-zero disk)", flush=True)
-            apps = [prepare_instance(p, args.app, args.root / "instances",
-                                     slot=i)
-                    for i, p in enumerate(ports)]
-        else:
-            print("WARNING: save isolation is not implemented on this "
-                  "platform; all instances will share one save slot and "
-                  "concurrent autosaves can corrupt it. Back up the save "
-                  "directory first.", file=sys.stderr, flush=True)
+    # Instances must not share the game's save directory: they all autosave
+    # the same slot throughout a run (observed corrupting the master save
+    # live, 2026-07-20 -- see seed_save_dir). Each slot gets its own app
+    # clone with a per-port bundle id (own save dir, own ModLog), refreshed
+    # from the master app and save at every start -- see build_apps.
+    apps = build_apps(ports, args.app, args.root / "instances")
     game = GameFleet(ports, app=args.app, apps=apps)
     env = None
     exit_code = 0

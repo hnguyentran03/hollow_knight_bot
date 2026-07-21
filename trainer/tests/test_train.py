@@ -182,3 +182,19 @@ def test_confirm_ready_interactive_waits_on_input(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt))
     train.confirm_ready(auto=False)
     assert prompts and "Hall of Gods" in prompts[0]
+
+
+def test_build_apps_clones_even_at_n1(monkeypatch):
+    monkeypatch.setattr(train, "SAVE_ISOLATION_SUPPORTED", True)
+    monkeypatch.setattr(train, "prepare_instance",
+                        lambda port, app, root, slot: f"clone-{port}")
+    apps = train.build_apps(ports=[9020], app="master.app",
+                            instances_root="/tmp/instances")
+    assert apps == ["clone-9020"]
+
+
+def test_build_apps_none_when_isolation_unsupported(monkeypatch):
+    monkeypatch.setattr(train, "SAVE_ISOLATION_SUPPORTED", False)
+    apps = train.build_apps(ports=[9020], app="master.app",
+                            instances_root="/tmp/instances")
+    assert apps is None

@@ -328,14 +328,13 @@ def main() -> None:
     # autosave over each other. Manual multi-instance gates get the same
     # per-port app clones a training fleet would.
     apps = [args.app] * args.instances
-    if args.instances > 1:
-        if SAVE_ISOLATION_SUPPORTED:
-            apps = [prepare_instance(args.port + i, args.app, slot=i)
-                    for i in range(args.instances)]
-        else:
-            print("WARNING: save isolation is not implemented on this "
-                  "platform; all instances share one save slot and "
-                  "concurrent autosaves can corrupt it.", flush=True)
+    if SAVE_ISOLATION_SUPPORTED:
+        apps = [prepare_instance(args.port + i, args.app, slot=i)
+                for i in range(args.instances)]
+    else:
+        print("WARNING: save isolation is not implemented on this "
+              "platform; all instances share one save slot and "
+              "concurrent autosaves can corrupt it.", flush=True)
 
     procs = []
     try:
