@@ -268,3 +268,50 @@ def test_stop_raises_runtime_error_if_process_exits_first(tmp_path,
     monkeypatch.setattr(launcher.os, "getpgid", boom)
     with pytest.raises(RuntimeError):
         launcher.stop(tmp_path)
+
+
+def _make_run(tmp_path, run_id, mtime=None):
+    d = tmp_path / "runs" / run_id
+    d.mkdir(parents=True)
+    (d / "generations.jsonl").write_text('{"gen": 1, "timestep": 5}\n')
+    (d / "checkpoints").mkdir()
+    (d / "checkpoints" / "gen_0001.zip").write_text("weights")
+    if mtime is not None:
+        for p in [d, *d.rglob("*")]:
+            os.utime(p, (mtime, mtime))
+    return d
+
+
+def test_delete_moves_the_run_to_trash_intact(tmp_path):
+    _make_run(tmp_path, "done-run", mtime=1000.0)
+    trashed = launcher.delete(tmp_path, "done-run")
+    assert not (tmp_path / "runs" / "done-run").exists()
+    dest = tmp_path / "trash" / trashed
+    assert dest.is_dir() and trashed.startswith("done-run-")
+    # Moved, not destroyed: checkpoints ride along untouched.
+    assert (dest / "checkpoints" / "gen_0001.zip").read_text() == "weights"
+
+
+def test_delete_refuses_the_active_launched_run(tmp_path, monkeypatch):
+    _make_run(tmp_path, "busy", mtime=1000.0)
+    monkeypatch.setattr(launcher, "status",
+                        lambda root: {"run_id": "busy", "pid": 1, "started": 0})
+    with pytest.raises(RuntimeError):
+        launcher.delete(tmp_path, "busy")
+    assert (tmp_path / "runs" / "busy").exists()
+
+
+def test_delete_refuses_a_recently_active_run(tmp_path):
+    # Fresh mtimes = a run something is still writing (e.g. started from a
+    # terminal, invisible to the pidfiles); deleting under it would race.
+    _make_run(tmp_path, "warm")
+    with pytest.raises(RuntimeError):
+        launcher.delete(tmp_path, "warm")
+    assert (tmp_path / "runs" / "warm").exists()
+
+
+def test_delete_rejects_missing_and_bad_run_ids(tmp_path):
+    with pytest.raises(ValueError):
+        launcher.delete(tmp_path, "nope")
+    with pytest.raises(ValueError):
+        launcher.delete(tmp_path, "../escape")

@@ -249,21 +249,22 @@
   .prev-run { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
   .prev-run .prev-run-id { font-family: var(--display); font-size: 15px; }
   .prev-run .prev-run-meta { color: var(--muted); font-size: 12px; margin-left: auto; }
-  #resume-dialog {
+  #resume-dialog, #delete-dialog {
     background: var(--raised); color: var(--ink);
     border: 1px solid var(--border); border-radius: 4px;
     padding: 18px 20px; min-width: 320px;
   }
-  #resume-dialog::backdrop { background: rgba(2, 3, 6, 0.65); }
-  #resume-dialog h2 { font-family: var(--display); font-size: 17px; font-weight: 400; letter-spacing: 0.04em; margin: 0 0 6px; }
-  #resume-dialog .resume-facts { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
+  #resume-dialog::backdrop, #delete-dialog::backdrop { background: rgba(2, 3, 6, 0.65); }
+  #resume-dialog h2, #delete-dialog h2 { font-family: var(--display); font-size: 17px; font-weight: 400; letter-spacing: 0.04em; margin: 0 0 6px; }
+  #resume-dialog .resume-facts, #delete-dialog .resume-facts { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
   #resume-dialog .choice { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
   #resume-dialog input[type="number"] {
     width: 140px; font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px;
     margin: 2px 0 12px 26px;
   }
-  #resume-dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #resume-dialog .dialog-actions, #delete-dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #delete-dialog .delete-note { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 340px; }
   .active-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--ink-2); }
   #launch-log {
     margin: 10px 0 0; padding: 8px 10px; max-height: 260px; overflow: auto;
@@ -349,6 +350,19 @@
         <div class="dialog-actions">
           <button type="submit" class="btn" value="resume">Resume</button>
           <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="delete-dialog">
+      <form method="dialog">
+        <h2 id="delete-title">Delete run</h2>
+        <p class="resume-facts" id="delete-facts"></p>
+        <p class="delete-note">Moves the run's directory to
+          <code>trash/</code> under the dashboard root. Nothing is
+          destroyed until you empty that folder yourself.</p>
+        <div class="dialog-actions">
+          <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
+          <button type="submit" class="btn danger" value="delete">Move to trash</button>
         </div>
       </form>
     </dialog>
@@ -871,7 +885,15 @@ async function renderPrevRuns(activeNow) {
     // resume would only 409 or fight for the bridge ports.
     btn.disabled = r.live;
     btn.addEventListener("click", () => openResumeDialog(r));
-    row.append(name, meta, btn);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn danger";
+    del.textContent = "Delete";
+    // Same rule as Resume: a live run (panel-managed or terminal-started)
+    // is not deletable; the server refuses it too, this just says so first.
+    del.disabled = r.live;
+    del.addEventListener("click", () => openDeleteDialog(r));
+    row.append(name, meta, btn, del);
     list.appendChild(row);
   }
 }
@@ -913,6 +935,34 @@ function openResumeDialog(r) {
 // training budget from "finish" to "+500k".
 document.getElementById("resume-extra").addEventListener("input", () => {
   document.getElementById("resume-add").checked = true;
+});
+
+/* Delete confirmation: destructive, so it takes a deliberate second
+   click; Cancel is the autofocused default. The server moves the run to
+   trash/ rather than erasing it, but the confirm still guards a mis-click
+   that would make a run vanish from the list. */
+const deleteDialog = document.getElementById("delete-dialog");
+let deleteRun = null;
+
+function openDeleteDialog(r) {
+  deleteRun = r;
+  document.getElementById("delete-title").textContent = "Delete " + r.id;
+  document.getElementById("delete-facts").textContent =
+    fmtK(r.timestep) + " steps" +
+    (r.instances ? " · " + r.instances + " instance" + (r.instances === 1 ? "" : "s") : "") +
+    " · last active " + (r.last_activity ? fmtAgo(r.last_activity) : "unknown");
+  deleteDialog.showModal();
+}
+
+deleteDialog.addEventListener("close", async () => {
+  const r = deleteRun;
+  deleteRun = null;
+  if (deleteDialog.returnValue !== "delete" || !r) return;
+  launchError("");
+  try {
+    await postJSON("/api/delete", { run_id: r.id });
+    if (SUMMON) refreshLauncher();  // rebuilds the run list without it
+  } catch (err) { launchError(err.message); }
 });
 
 resumeDialog.addEventListener("close", async () => {

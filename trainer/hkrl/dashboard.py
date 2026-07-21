@@ -104,6 +104,10 @@ class _Handler(BaseHTTPRequestHandler):
             elif path == "/api/stop":
                 self._json({"stopped":
                             launcher.stop(self.server.root)["run_id"]})
+            elif path == "/api/delete":
+                self._json({"trashed":
+                            launcher.delete(self.server.root,
+                                            body.get("run_id"))})
             else:
                 self.send_error(404)
         except ValueError as exc:
