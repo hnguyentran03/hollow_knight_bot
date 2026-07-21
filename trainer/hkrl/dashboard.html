@@ -178,7 +178,13 @@
   .panel::before { top: -1px; left: -1px; border-top: 1px solid var(--tick); border-left: 1px solid var(--tick); }
   .panel::after { bottom: -1px; right: -1px; border-bottom: 1px solid var(--tick); border-right: 1px solid var(--tick); }
 
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 18px; }
+  /* One row always on desktop: column flow gives every tile an equal
+     share however many tiles there are. Narrow screens wrap again --
+     seven abreast on a phone would be unreadable. */
+  .tiles { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; margin: 0 0 18px; }
+  @media (max-width: 760px) {
+    .tiles { grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  }
   .tile { padding: 10px 12px; }
   .tile .label { font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
   .tile .value { font-family: var(--display); font-size: 26px; font-weight: 400; margin-top: 3px; }
