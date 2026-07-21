@@ -21,9 +21,12 @@ import threading
 import time
 from pathlib import Path
 
+from hkrl.game import DEFAULT_PORT
+from hkrl.generations import checkpoint_paths
 from hkrl.rundata import LIVE_WINDOW_S
 
 TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "train.py"
+REPLAY_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "replay.py"
 
 # Popen handles for children this process spawned, so _alive() can reap
 # them once they exit: os.kill(pid, 0) cannot tell a zombie from a live
@@ -131,6 +134,17 @@ def _validate(params: dict) -> dict:
     return clean
 
 
+def _caffeinate(cmd: list[str], platform: str = sys.platform) -> list[str]:
+    """Wrap a spawn in caffeinate on macOS so display/idle/disk/system sleep
+    can't suspend the game mid-run (a suspended game holds its port open while
+    wedged -- see train.py). The same wrapper the README hands a human for an
+    overnight run; shared by launch() and replay() so the platform check lives
+    in exactly one place."""
+    if platform == "darwin":
+        return ["caffeinate", "-dims"] + cmd
+    return cmd
+
+
 def command(root, params: dict, platform: str = sys.platform) -> list[str]:
     """The argv a launch() will spawn.
 
@@ -147,11 +161,7 @@ def command(root, params: dict, platform: str = sys.platform) -> list[str]:
     for key in (_ALWAYS if p["mode"] == "resume" else _INT_PARAMS):
         if key in p:
             cmd += ["--" + key.replace("_", "-"), str(p[key])]
-    if platform == "darwin":
-        # -dims: display, idle, disk, system -- the same wrapper the README
-        # tells a human to type for an overnight run.
-        cmd = ["caffeinate", "-dims"] + cmd
-    return cmd
+    return _caffeinate(cmd, platform)
 
 
 def launch(root, params: dict) -> str:
@@ -210,6 +220,75 @@ def launch(root, params: dict) -> str:
             {"run_id": p["run_id"], "pid": child.pid, "started": time.time()}))
         os.replace(tmp, pidfile)
         return p["run_id"]
+
+
+def replay(root, run_id, gen, episodes: int = 3,
+           platform: str = sys.platform) -> str:
+    """Spawn a detached replay of one generation; returns its run id.
+
+    Mirrors launch(): the replay launches its own game and occupies the same
+    single active slot a training run would (they own the bridge port and the
+    game, so neither can run while the other does). It is refused
+    (RuntimeError) while any launched run is alive, and validated up front so
+    a bad request is a clean 400 rather than a spawn that dies silently.
+
+    The pidfile carries two extra fields beyond a run's -- mode="replay" and
+    the gen -- so the active-run card can read "Replaying generation N".
+    status() returns the whole record, and stop() SIGINTs the group exactly as
+    it does a run (replay.py --auto handles the signal), so neither needs any
+    change.
+    """
+    if not run_id:
+        raise ValueError("run_id is required")
+    # Same directory-name discipline launch() applies (path/dash/length).
+    run_id = _validate({"run_id": run_id})["run_id"]
+    try:
+        gen = int(gen)
+    except (TypeError, ValueError):
+        raise ValueError("gen must be an integer") from None
+    if gen < 1:
+        raise ValueError("gen must be a positive integer")
+    try:
+        episodes = int(episodes)
+    except (TypeError, ValueError):
+        raise ValueError("episodes must be an integer") from None
+    if episodes < 1:
+        raise ValueError("episodes must be positive")
+    root = Path(root).expanduser()
+    run_dir = root / "runs" / run_id
+    # Both files or nothing: the weights are meaningless without the
+    # VecNormalize statistics they were trained under (see replay.py), and
+    # catching it here is the difference between a 400 on the page and a
+    # spawn that dies the moment it tries to load them.
+    weights, vecnorm = checkpoint_paths(run_dir, gen)
+    if not (weights.exists() and vecnorm.exists()):
+        raise ValueError(
+            f"generation {gen} of {run_id!r} has no checkpoint to replay")
+    with _lock:
+        if status(root) is not None:
+            raise RuntimeError("a launched run is already active; stop it "
+                               "before replaying")
+        cmd = _caffeinate(
+            [sys.executable, str(REPLAY_SCRIPT), "--auto",
+             "--root", str(root), "--run-dir", str(run_dir),
+             "--gen", str(gen), "--episodes", str(episodes),
+             "--port", str(DEFAULT_PORT)],
+            platform)
+        d = _dir(root)
+        with (d / f"{run_id}.log").open("ab") as log:
+            child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log,
+                                     stderr=subprocess.STDOUT,
+                                     start_new_session=True)
+        _children[child.pid] = child
+        # Write-then-rename, atomic like launch()'s: the 2s status() poll must
+        # never read a half-written pidfile and unlink a live replay.
+        pidfile = d / f"{run_id}.pid"
+        tmp = d / f"{run_id}.pid.tmp"
+        tmp.write_text(json.dumps(
+            {"run_id": run_id, "pid": child.pid, "started": time.time(),
+             "mode": "replay", "gen": gen}))
+        os.replace(tmp, pidfile)
+        return run_id
 
 
 def stop(root) -> dict:

@@ -34,6 +34,37 @@ def stub_trainer(tmp_path, monkeypatch):
         os.killpg(os.getpgid(active["pid"]), signal.SIGKILL)
 
 
+@pytest.fixture()
+def stub_replay(tmp_path, monkeypatch):
+    # Same stand-in as stub_trainer, pointed at REPLAY_SCRIPT: replay() spawns
+    # scripts/replay.py, which we must not run for real (it launches a game).
+    script = tmp_path / "stub_replay.py"
+    script.write_text(STUB)
+    monkeypatch.setattr(launcher, "REPLAY_SCRIPT", script)
+    yield script
+    active = launcher.status(tmp_path)
+    if active:  # never leak a stub past a failed test
+        try:
+            os.killpg(os.getpgid(active["pid"]), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            # A test that monkeypatched status() to a fake pid (e.g. the
+            # "refused while active" case spawned nothing) has nothing to reap.
+            pass
+
+
+def _make_checkpoint(tmp_path, run_id="r1", gen=2):
+    """A run dir with gen NNNN's two checkpoint files present -- the pair
+    replay() requires before it will spawn. Contents are irrelevant here;
+    only their existence is checked."""
+    from hkrl.generations import checkpoint_paths
+    run_dir = tmp_path / "runs" / run_id
+    weights, vecnorm = checkpoint_paths(run_dir, gen)
+    weights.parent.mkdir(parents=True, exist_ok=True)
+    weights.write_text("weights")
+    vecnorm.write_text("vecnorm")
+    return run_dir
+
+
 def wait_for(cond, timeout=10.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -268,6 +299,64 @@ def test_stop_raises_runtime_error_if_process_exits_first(tmp_path,
     monkeypatch.setattr(launcher.os, "getpgid", boom)
     with pytest.raises(RuntimeError):
         launcher.stop(tmp_path)
+
+
+def test_replay_spawns_with_the_right_argv_and_pidfile(tmp_path, stub_replay):
+    _make_checkpoint(tmp_path, "r1", gen=2)
+    run_id = launcher.replay(tmp_path, "r1", gen=2, episodes=5)
+    assert run_id == "r1"
+    log = _log(tmp_path, "r1")
+    assert wait_for(lambda: "stub trainer:" in log.read_text(errors="replace"))
+    argv = log.read_text(errors="replace")
+    assert "--auto" in argv
+    assert "--gen 2" in argv
+    assert "--episodes 5" in argv
+    assert str(tmp_path / "runs" / "r1") in argv  # --run-dir points at the run
+    # The pidfile carries the extra fields the UI reads to say "replaying".
+    active = launcher.status(tmp_path)
+    assert active["run_id"] == "r1"
+    assert active["mode"] == "replay"
+    assert active["gen"] == 2
+    # Detached, exactly like launch(): its own session survives a dashboard exit.
+    assert os.getsid(active["pid"]) != os.getsid(os.getpid())
+
+
+def test_replay_is_refused_while_a_run_is_active(tmp_path, stub_replay,
+                                                  monkeypatch):
+    _make_checkpoint(tmp_path, "r1", gen=1)
+    monkeypatch.setattr(launcher, "status",
+                        lambda root: {"run_id": "busy", "pid": 1, "started": 0})
+    with pytest.raises(RuntimeError):
+        launcher.replay(tmp_path, "r1", gen=1)
+
+
+def test_replay_refuses_a_missing_checkpoint(tmp_path, stub_replay):
+    # Run dir exists but the generation's files do not -> a clean 400.
+    (tmp_path / "runs" / "r1").mkdir(parents=True)
+    with pytest.raises(ValueError):
+        launcher.replay(tmp_path, "r1", gen=9)
+
+
+def test_replay_rejects_bad_gen_and_missing_run_id(tmp_path, stub_replay):
+    _make_checkpoint(tmp_path, "r1", gen=1)
+    for gen in (0, -1, None, "two"):
+        with pytest.raises(ValueError):
+            launcher.replay(tmp_path, "r1", gen=gen)
+    for run_id in (None, "", "../evil"):
+        with pytest.raises(ValueError):
+            launcher.replay(tmp_path, run_id, gen=1)
+
+
+def test_replay_is_stoppable_like_a_run(tmp_path, stub_replay):
+    _make_checkpoint(tmp_path, "r1", gen=1)
+    launcher.replay(tmp_path, "r1", gen=1)
+    assert wait_for(lambda: "stub trainer:" in
+                    _log(tmp_path, "r1").read_text(errors="replace"))
+    stopped = launcher.stop(tmp_path)
+    assert stopped["run_id"] == "r1"
+    assert wait_for(lambda: "sigint received" in
+                    _log(tmp_path, "r1").read_text(errors="replace"))
+    assert wait_for(lambda: launcher.status(tmp_path) is None)
 
 
 def _make_run(tmp_path, run_id, mtime=None):
