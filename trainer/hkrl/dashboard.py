@@ -104,6 +104,14 @@ class _Handler(BaseHTTPRequestHandler):
             elif path == "/api/stop":
                 self._json({"stopped":
                             launcher.stop(self.server.root)["run_id"]})
+            elif path == "/api/replay":
+                # launcher.replay validates run_id/gen (missing or bad -> a
+                # ValueError the handler below maps to 400); echo the gen back
+                # so the page can label the active-run card without a re-fetch.
+                run_id = launcher.replay(self.server.root, body.get("run_id"),
+                                         body.get("gen"),
+                                         body.get("episodes", 3))
+                self._json({"replaying": run_id, "gen": body.get("gen")})
             elif path == "/api/delete":
                 self._json({"trashed":
                             launcher.delete(self.server.root,
