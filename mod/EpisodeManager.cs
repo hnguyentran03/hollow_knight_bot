@@ -60,10 +60,40 @@ namespace HKRLBot
 
         // Wall-clock budget for the reset macro. MUST stay strictly below the
         // trainer's 30s socket timeout (Connection(timeout=30.0) in
-        // trainer/hkrl/protocol.py): at 30s or above the client times out and
+        // trainer/hkrl/env.py): at 30s or above the client times out and
         // tears down the connection before TickReset's budget check runs, so
-        // the stuck-macro diagnostic never gets logged.
-        private const float ResetMacroBudgetSeconds = 22.5f; // must stay below the 30s trainer socket timeout (trainer/hkrl/protocol.py)
+        // the stuck-macro diagnostic never gets logged, and a socket-timeout
+        // drop propagates as a wedged-instance failure that triggers full
+        // supervisor recovery -- not the lightweight reconnect-and-retry a
+        // budget-expiry drop gets.
+        //
+        // A cold boot-to-fight (title screen -> stand up -> walk to statue ->
+        // challenge menu) measured ~24-26s end-to-end (2026-07-21) -- well
+        // over this 22.5s budget on its own. This is intentional, not a bug
+        // to fix by raising the budget past the trainer's socket timeout (as
+        // a prior version of this constant did, at 40s): trainer/hkrl/env.py
+        // reset()'s reconnect-and-retry loop treats a mod-side budget-expiry
+        // drop as normal protocol rhythm, and menu/scene progress persists
+        // across drops, so successive resets ratchet forward -- each one
+        // picking up from wherever the last one left off (further along in
+        // boot, or with the challenge menu already open) -- until the fight
+        // is live. A cold boot is therefore EXPECTED to span several resets
+        // at 22.5s each, never one reset that runs long. Raising this past
+        // 30s trades that cheap, designed ratchet for the trainer's
+        // heavyweight socket-timeout recovery path on every cold boot -- the
+        // exact failure the ratchet exists to avoid. See ResetMacro's
+        // GateConfirm for the real gap the ratchet exposed (a leftover open
+        // menu from a prior attempt being blind-confirmed outside the tier
+        // gate), which is what actually needed fixing here.
+        private const float ResetMacroBudgetSeconds = 22.5f; // must stay below the 30s trainer socket timeout (trainer/hkrl/env.py)
+
+        // Attuned Hornet 1's max HP is 900 (704/704 Attuned bossMaxHp readings
+        // in the archived ModLogs); wrong-tier readings seen were 1250
+        // (Ascended) and 1186. A fight that goes live above this ceiling is a
+        // wrong-tier fight the statue tier gate (GateConfirm) should have
+        // prevented; 1000 sits safely above the stable 900 and below both
+        // higher tiers. Last resort only -- see the note at its use site.
+        private const int MaxAttunedHornetHp = 1000;
 
         private string Scene => GameManager.instance != null
             ? GameManager.instance.sceneName : "";
@@ -430,6 +460,34 @@ namespace HKRLBot
             bool fightLive = live && sawNotLiveSinceReset && sawSceneReentrySinceReset;
             if (fightLive)
             {
+                // Backstop B (last resort, not a recovery path). The statue tier
+                // gate (GateConfirm) should mean only Attuned is ever entered,
+                // but if that ever fails, a fight that goes live above the
+                // Attuned HP ceiling is the wrong tier. We cannot fix the tier
+                // from here -- a Godhome retry restarts the SAME tier -- so the
+                // only safe move is to drop, exactly like the budget-expiry
+                // path below. A supervisor relaunch re-execs the SAME
+                // already-prepped clone (GameProcess.relaunch in
+                // trainer/hkrl/game.py: no prepare_instance, no re-seed), so if
+                // the statue tier gate is broken the reboot reaches the same
+                // wrong tier and this fires again until recovery attempts
+                // exhaust and the run ends in InstanceDown. Fail-loud by design
+                // -- a dead run, never hours against the wrong boss. With the
+                // statue tier gate in place this should essentially never fire.
+                if (b.Hp > MaxAttunedHornetHp)
+                {
+                    HKRLBotMod.Instance.Log(
+                        $"EpisodeManager: fight went live at bossMaxHp={b.Hp}, above the "
+                        + $"Attuned Hornet ceiling ({MaxAttunedHornetHp}) -- wrong difficulty "
+                        + "tier. Clearing input and dropping the connection.");
+                    HKRLBotMod.Instance.Input.Clear();
+                    server.Drop();
+                    awaitingReset = false;
+                    episodeActive = false;
+                    nextMacroTickTime = 0f;
+                    return;
+                }
+
                 awaitingReset = false;
                 episodeActive = true;
                 phase = Phase.AwaitingAction;
@@ -449,16 +507,14 @@ namespace HKRLBot
                 // above), this is a fresh (re)spawn's HP, not a stale
                 // mid-fight reading, so b.Hp here IS the fight's max HP,
                 // before any damage has been dealt. Hornet 1 Attuned has a
-                // known/expected HP pool; an
-                // Ascended or Radiant tier being accepted by mistake (the
-                // statue macro cannot see which tier is highlighted) would
-                // show up here as an unexpectedly large number, which is
-                // otherwise invisible (the trainer's _max_bhp normalizes it
-                // away). This is deliberately just the raw HP reading: no
-                // PlayerData field for the selected challenge tier exists to
-                // verify against, and guessing at one risks logging a
-                // confidently wrong value that looks like real diagnostic
-                // signal.
+                // known/expected HP pool; an Ascended or Radiant tier being
+                // accepted by mistake would show up here as an unexpectedly
+                // large number, which is otherwise invisible (the trainer's
+                // _max_bhp normalizes it away). The reset macro's GateConfirm
+                // governs every confirm while the challenge menu is open (tier
+                // read, one highlight-correction attempt, then LoadBoss(0) by
+                // value -- see DISCOVERED.md), so this bossMaxHp log is a
+                // secondary sanity check.
                 HKRLBotMod.Instance.Log(
                     $"Episode {attempt} starting: scene={Scene} bossMaxHp={b.Hp} knightHp={k.Hp}");
                 server.SendState(k, b, false, false, Scene, attempt);
@@ -481,10 +537,14 @@ namespace HKRLBot
             // trainer's own timeout would otherwise fire. Sized against the
             // macro's own real timings: the retry-confirm cycle is
             // RetryPulsePeriodSeconds=2.0s and the statue menu/confirm cycle
-            // is StatueMenuPeriodSeconds=3.0s -- any legitimate reset
+            // is StatueMenuPeriodSeconds=3.0s -- any legitimate mid-run reset
             // (death-retry, or win-path walk-to-statue plus at most a couple
             // of menu cycles) should complete within a handful of those
-            // cycles, comfortably inside 22.5s.
+            // cycles, comfortably inside 22.5s. A cold boot-to-fight
+            // (~24-26s end-to-end, measured 2026-07-21) legitimately exceeds
+            // this on its own -- see the constant's own comment above for why
+            // that's the intended ratchet-across-drops behavior, not a case
+            // this budget needs to cover in one shot.
             if (ResetMacro.ElapsedSeconds >= ResetMacroBudgetSeconds)
             {
                 HKRLBotMod.Instance.Log(
@@ -606,6 +666,46 @@ namespace HKRLBot
         private static float stepOffLastX = float.NaN;
         private static float stepOffProgressAt = -1f;
 
+        // Count of Attuned-selection attempts made this menu-open visit
+        // while the menu is open with the wrong tier highlighted (tier > 0,
+        // a human on a focused session) or nothing selected at all (tier ==
+        // -1, the trainer-context case verified 2026-07-21: an unfocused
+        // game never auto-selects a tier on menu-open and refuses
+        // SetSelectedGameObject too -- see StateReader.cs / DISCOVERED.md).
+        // Capped at 1 attempt (reduced from 2): selection is known-refused
+        // unfocused, so a second attempt would only cost time before
+        // falling through to ConfirmAttunedChallenge() below; one cycle
+        // still keeps the corrected-highlight path reachable for a
+        // focused/manual session where the correction actually sticks. Once
+        // the cap is hit and the tier is still wrong, the gate moves on to
+        // requesting Attuned by value (see attunedConfirmedViaLoadBoss)
+        // rather than retrying the highlight forever. Zeroed every tick the
+        // menu is NOT open (via IsChallengeMenuOpen(), checked once per Tick()
+        // for the whole GG_Workshop branch -- see GateConfirm below and its
+        // call site), so every fresh menu-open visit gets its own attempt --
+        // not reset only in Reset() because the same reset can revisit an
+        // open menu more than once (e.g. after a step-off-menu-recover, or a
+        // leftover menu from a prior ratchet attempt found open on this
+        // one's very first Workshop tick).
+        private static int tierGateAttempts;
+
+        // Latches true once StateReader.ConfirmAttunedChallenge() (LoadBoss(0)
+        // invoked reflectively -- see StateReader.cs) has successfully
+        // requested Attuned directly for the current menu-open visit. The
+        // scene change into GG_Hornet_1 follows on its own once LoadBoss(0)
+        // runs; without this latch the gate would call it again every
+        // Tick() while the menu object briefly remains, which is at best
+        // redundant and at worst re-enters LoadBoss mid-transition. Reset
+        // alongside tierGateAttempts (menu-not-open, scene-clear, Reset())
+        // so every fresh menu-open visit starts unlatched.
+        private static bool attunedConfirmedViaLoadBoss;
+
+        // Logs the last-resort blind-confirm fallback (only reached when
+        // ConfirmAttunedChallenge() itself returns false) exactly once per
+        // menu-open visit rather than every tick for the rest of it. Reset
+        // alongside tierGateAttempts/attunedConfirmedViaLoadBoss.
+        private static bool blindConfirmFallbackLogged;
+
         // How far to step off before walking back in. Comfortably outside the
         // deadband so the return walk is a real trigger-enter, short enough to
         // cost well under a second at walking speed.
@@ -662,6 +762,9 @@ namespace HKRLBot
             statueTriggerRearmed = false;
             stepOffLastX = float.NaN;
             stepOffProgressAt = -1f;
+            tierGateAttempts = 0;
+            attunedConfirmedViaLoadBoss = false;
+            blindConfirmFallbackLogged = false;
         }
 
         // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
@@ -701,6 +804,127 @@ namespace HKRLBot
         private const float ConfirmPulseSeconds = 0.3f;
         private const float StatueConfirmOffsetSeconds = 1.0f;
 
+        // Hoisted whole-menu-open confirm gate. Originally lived only inside
+        // the statue-menu branch below (that is the ONE branch that itself
+        // opens the challenge menu via its own Up press), but a real in-game
+        // run (2026-07-21) showed the leftover-menu case this gate exists to
+        // handle is not confined to that branch: the reset macro's own
+        // budget-expiry drop (ResetMacroBudgetSeconds above) never closes an
+        // open menu before dropping the connection, and the trainer's
+        // reconnect-and-retry ratchet (trainer/hkrl/env.py's reset()) then
+        // starts the NEXT reset macro from scratch -- Reset() zeroes
+        // statueMenuLatched, so the fresh attempt re-derives its branch from
+        // knight position and restarts at workshop-settling -> step-off-statue
+        // with that PRIOR attempt's challenge menu still open on screen. In
+        // that state, step-off-statue's own step-off-menu-recover stall-clear
+        // pulsed a BLIND Jump confirm (no tier read at all) into the leftover
+        // menu, bypassing the tier gate entirely: observed twice as a scene
+        // change straight into GG_Hornet_1 during step-off-statue, the
+        // statue-menu branch never reached at all that reset.
+        //
+        // Fix: the tier gate's decision table -- read the selected tier, make
+        // at most one SelectAttunedChallengeTier() correction attempt (logged),
+        // then ConfirmAttunedChallenge() (LoadBoss(0), latched so it fires once
+        // per open-menu visit), falling back to a logged blind confirm only if
+        // that call itself fails -- is centralized here and invoked from ONE
+        // site in Tick() below that runs on every GG_Workshop tick where
+        // StateReader.IsChallengeMenuOpen() is true, regardless of which
+        // branch (workshop-settling, step-off-statue, walk-to-statue,
+        // statue-menu) the position-based branch selection landed on that
+        // tick. The returned value is applied to b.Jump -- the confirm-capable
+        // input -- AFTER branch selection, so it overrides any confirm a
+        // branch generated on its own (e.g. step-off-menu-recover's blind
+        // pulse) without touching that branch's movement inputs (Left/Right/
+        // Up), which are computed separately and stay branch-owned. When the
+        // menu is not open, this method is not called at all and every branch
+        // behaves exactly as it did before the hoist.
+        //
+        // wantConfirmPulse below is deliberately computed from `elapsed`
+        // alone (not statueMenuEnteredAt-relative like the statue-menu
+        // branch's own pre-open pulse still is, below): statueMenuEnteredAt
+        // is only meaningful once statueMenuLatched, which a leftover menu
+        // found open on a fresh reset's very first Workshop tick has not
+        // (yet, or ever, if the fight enters before the knight walks back to
+        // the statue) reached.
+        private static bool GateConfirm(HKRLBotMod mod, float elapsed)
+        {
+            bool wantConfirmPulse = (elapsed % StatueMenuPeriodSeconds) < ConfirmPulseSeconds;
+            int tier = mod.Reader.ReadSelectedChallengeTier();
+
+            if (tier == 0)
+            {
+                // Attuned selected: let the confirm pulse fire. Silent
+                // healthy path, unchanged.
+                return wantConfirmPulse;
+            }
+
+            if (attunedConfirmedViaLoadBoss)
+            {
+                // ConfirmAttunedChallenge() (LoadBoss(0)) already succeeded
+                // this visit -- the scene change into GG_Hornet_1 follows on
+                // its own. Don't re-invoke LoadBoss every cycle while the
+                // menu object briefly lingers, and don't fire the manual
+                // confirm pulse either.
+                return false;
+            }
+
+            if (tierGateAttempts < 1)
+            {
+                // Menu open with the wrong tier highlighted (tier > 0, e.g.
+                // Ascended/Radiant left over from a prior manual session) or
+                // nothing selected at all (tier == -1 -- the trainer-context
+                // case, verified 2026-07-21: an unfocused game never
+                // auto-selects a tier on menu-open). One correction attempt
+                // (capped at 1, down from 2 -- selection is known-refused
+                // unfocused, so a second try only costs time before falling
+                // through below; one cycle still lets a focused/manual
+                // session, where the correction actually sticks, resolve
+                // here). Withhold this cycle's confirm regardless of whether
+                // the correction lands.
+                tierGateAttempts++;
+                bool selected = mod.Reader.SelectAttunedChallengeTier();
+                mod.Log(
+                    "ResetMacro: menu open with tier=" + tier
+                    + " (not Attuned); selecting Attuned (attempt "
+                    + tierGateAttempts + "/1), select returned "
+                    + selected + ".");
+                return false;
+            }
+
+            // Still not Attuned one cycle after the one selection attempt --
+            // selection is refused (unfocused game). Request Attuned
+            // directly BY VALUE instead of by highlight: LoadBoss(0), invoked
+            // reflectively via StateReader.ConfirmAttunedChallenge(), is the
+            // same call the tier button's own OnClick makes, with no
+            // EventSystem/focus dependency. See StateReader.cs and
+            // DISCOVERED.md.
+            bool confirmed = mod.Reader.ConfirmAttunedChallenge();
+            if (confirmed)
+            {
+                attunedConfirmedViaLoadBoss = true;
+                mod.Log("ResetMacro: entering Attuned directly via LoadBoss(0).");
+                return false;
+            }
+
+            // ConfirmAttunedChallenge() itself failed (null UI, reflection
+            // miss, or the invoked method threw). Never withhold the confirm
+            // indefinitely -- starving the macro turns a readability problem
+            // into a dead run (budget expiry -> InstanceDown) -- so fall back
+            // to the blind confirm, the pre-gate behavior already verified to
+            // land Attuned on a fresh process. Backstop B (EpisodeManager.
+            // TickReset's fightLive branch) still guards against a wrong
+            // tier slipping through. Log once per visit.
+            if (!blindConfirmFallbackLogged)
+            {
+                blindConfirmFallbackLogged = true;
+                mod.Log(
+                    "ResetMacro: tier still not Attuned and LoadBoss(0) failed "
+                    + "-- falling back to blind confirm; backstop B still "
+                    + "guards the fight.");
+            }
+            return wantConfirmPulse;
+        }
+
         public static void Tick()
         {
             var mod = HKRLBotMod.Instance;
@@ -727,6 +951,9 @@ namespace HKRLBot
                 // instant stall). Mirrors Reset()'s initialization.
                 stepOffLastX = float.NaN;
                 stepOffProgressAt = -1f;
+                tierGateAttempts = 0;
+                attunedConfirmedViaLoadBoss = false;
+                blindConfirmFallbackLogged = false;
             }
             else if (workshopEnteredAt < 0f)
             {
@@ -858,22 +1085,63 @@ namespace HKRLBot
                     else
                     {
                         // At (or committed to) the statue: challenge once with
-                        // Up, then confirm the already-highlighted Attuned
-                        // difficulty with Jump, retrying the confirm every
-                        // StatueMenuPeriodSeconds if the fight hasn't started.
-                        // Both are measured from the branch's own start so the
-                        // confirm always trails the challenge.
+                        // Up. The confirm-capable input (Jump) for THIS
+                        // branch's own menu is no longer decided here -- it is
+                        // decided by GateConfirm below, hoisted out of this
+                        // branch and invoked once for the whole GG_Workshop
+                        // scene (see GateConfirm's own comment for why: a
+                        // leftover menu from a prior reset attempt can be
+                        // found open in any branch, not only this one, and a
+                        // branch-local blind confirm must not bypass the tier
+                        // gate). What stays special to this branch is the
+                        // one-shot Up press that opens the menu in the first
+                        // place, and -- only while StateReader
+                        // .IsChallengeMenuOpen() has not YET read true for
+                        // this visit -- a blind pre-open confirm pulse timed
+                        // off statueMenuEnteredAt: the gate below only runs
+                        // once the menu reads open, so this is what actually
+                        // lands the confirm in the instant the menu becomes
+                        // ready, without waiting on a read of "open" that can
+                        // lag the game's own state by a frame or two. Once the
+                        // menu is confirmed open, the gate takes over and this
+                        // pulse is irrelevant (overridden below).
                         branch = "statue-menu";
                         float sinceMenu = elapsed - statueMenuEnteredAt;
                         b.Up = sinceMenu < ConfirmPulseSeconds;
-                        float confirmPos = sinceMenu - StatueConfirmOffsetSeconds;
-                        b.Jump = confirmPos >= 0f
-                                 && (confirmPos % StatueMenuPeriodSeconds) < ConfirmPulseSeconds;
+                        if (!mod.Reader.IsChallengeMenuOpen())
+                        {
+                            float confirmPos = sinceMenu - StatueConfirmOffsetSeconds;
+                            b.Jump = confirmPos >= 0f
+                                     && (confirmPos % StatueMenuPeriodSeconds) < ConfirmPulseSeconds;
+                        }
                     }
                 }
                 else
                 {
                     branch = "workshop-knight-unreadable";
+                }
+
+                // Whole-menu-open confirm gate (GateConfirm, above): governs
+                // the confirm-capable input (Jump) for EVERY branch above,
+                // not just statue-menu, whenever the menu actually reads
+                // open -- overriding any Jump value a branch set on its own
+                // (e.g. step-off-menu-recover's blind stall-clear pulse).
+                // Branch-set movement inputs (Left/Right/Up) are untouched.
+                // When the menu is not open, this is a no-op on b.Jump and
+                // every branch above behaves exactly as it did before the
+                // hoist; the gate's per-visit state is zeroed here instead so
+                // the next open menu -- whichever branch finds it -- starts
+                // with fresh attempts (mirrors Reset() and the scene-clear
+                // branch above).
+                if (mod.Reader.IsChallengeMenuOpen())
+                {
+                    b.Jump = GateConfirm(mod, elapsed);
+                }
+                else
+                {
+                    tierGateAttempts = 0;
+                    attunedConfirmedViaLoadBoss = false;
+                    blindConfirmFallbackLogged = false;
                 }
             }
             else

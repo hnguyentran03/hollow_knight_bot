@@ -1,6 +1,8 @@
 // mod/StateReader.cs
+using System.Reflection;
 using Modding;
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace HKRLBot
 {
@@ -113,6 +115,138 @@ namespace HKRLBot
                 s.NeedleY = needleGo.transform.position.y;
             }
             return s;
+        }
+
+        // Whether the boss statue's challenge/difficulty menu is currently
+        // open, independent of whether a tier is selected within it. Exposed
+        // separately from ReadSelectedChallengeTier() below because a
+        // trainer-driven run (2026-07-21) showed those two questions are NOT
+        // interchangeable: with the game window unfocused/automated, the
+        // menu opens with NO initial EventSystem selection at all (the
+        // engine's select-on-open apparently depends on window focus), so
+        // ReadSelectedChallengeTier() read -1 through an ENTIRE statue-menu
+        // phase in that run -- the same -1 it returns when the menu isn't
+        // open yet. A caller that only sees that reader cannot tell "menu
+        // not open" apart from "menu open, nothing selected", and the old
+        // gate collapsed both into "proceed unchanged", which meant the
+        // tier gate never actually verified anything in that run. This
+        // method lets EpisodeManager split the two cases: menu open,
+        // whatever ReadSelectedChallengeTier() says. Exception-safe: any
+        // FindObjectOfType failure reads as "not open" (false), never
+        // throws.
+        public bool IsChallengeMenuOpen()
+        {
+            try { return UnityEngine.Object.FindObjectOfType<BossChallengeUI>() != null; }
+            catch { return false; }
+        }
+
+        // The challenge menu's currently-selected difficulty tier
+        // (0=Attuned, 1=Ascended, 2=Radiant), or -1 when the menu is not
+        // open or the signal cannot be read. The menu-open check
+        // (FindObjectOfType<BossChallengeUI>() != null) is what makes -1
+        // trustworthy: a PlayerData field (bossStatueTargetLevel) is
+        // readable at all times and would return a stale tier with no menu
+        // on screen -- confirmed dead pre-confirm in-game (it read a global
+        // -1 through a full tier-cycling session). Called only from the
+        // statue-menu macro cycles (a few seconds per reset), so the
+        // FindObjectOfType scan cost is bounded. See DISCOVERED.md for how
+        // this signal -- EventSystem.current.currentSelectedGameObject
+        // compared against the three tier buttons -- was identified
+        // in-game (verified 0->1->2->0 while a human cycled tiers).
+        //
+        // Trainer-context caveat (2026-07-21, verified in a real N=1 run):
+        // with the game window unfocused/automated, opening the menu does
+        // NOT auto-select a tier the way it does for a focused human
+        // session -- currentSelectedGameObject stays null right through the
+        // menu-open window, so this reads -1 for the ENTIRE visit, not just
+        // before the menu opens. That -1 is still correct (nothing IS
+        // selected), but it means -1 no longer distinguishes "menu not open"
+        // from "menu open, unselected" in this environment -- callers that
+        // need that distinction should check IsChallengeMenuOpen() above
+        // first. EpisodeManager's statue-menu gate does exactly that: on an
+        // open-but-unselected menu it calls SelectAttunedChallengeTier()
+        // itself rather than waiting for a selection that a headless/
+        // unfocused game will never produce on its own.
+        public int ReadSelectedChallengeTier()
+        {
+            var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();
+            if (ui == null) return -1;   // menu not open
+            try
+            {
+                var cur = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
+                if (cur == null) return -1;
+                if (cur == ui.tier1Button.button.gameObject) return 0;
+                if (cur == ui.tier2Button.button.gameObject) return 1;
+                if (cur == ui.tier3Button.button.gameObject) return 2;
+                return -1;
+            }
+            catch { return -1; }
+        }
+
+        // Corrects the challenge menu's selection to Attuned (tier1) by
+        // writing the EventSystem's selected GameObject directly. The read
+        // side above proved the EventSystem selection IS the highlight (it
+        // tracks the highlight live, not just on a selection event, unlike
+        // BossChallengeUI's rejected static lastSelectedButton), so setting
+        // it selects Attuned with no synthetic navigation input needed.
+        // Returns true on success, false on "menu not open" or any
+        // exception, so a caller can treat both the same way. Kept here
+        // rather than in EpisodeManager to keep all scene/EventSystem
+        // access for this signal in one file. See DISCOVERED.md.
+        public bool SelectAttunedChallengeTier()
+        {
+            var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();
+            if (ui == null) return false;
+            try
+            {
+                EventSystem.current.SetSelectedGameObject(ui.tier1Button.button.gameObject);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // Requests the Attuned challenge tier BY VALUE, instead of by
+        // correcting/confirming a highlight: invokes BossChallengeUI's own
+        // `LoadBoss(int level)` (level 0 = Attuned) -- the same method the
+        // tier buttons themselves call on click -- via reflection.
+        //
+        // Why reflection: LoadBoss's member visibility on the disassembled
+        // BossChallengeUI is unknown/unverified (could be private, could be
+        // an overload set -- there is also a `LoadBoss(int, bool
+        // doHideAnim)`), and reflection with an explicit parameter-type
+        // filter (new[] { typeof(int) }) sidesteps both problems: it finds
+        // the single-int overload regardless of its visibility, and
+        // BindingFlags.Public | BindingFlags.NonPublic means we don't have
+        // to know or trust which one it is.
+        //
+        // Why this beats SelectAttunedChallengeTier()+confirm: that path
+        // requests Attuned by correcting/confirming an EventSystem highlight,
+        // which is exactly the signal a real trainer run (2026-07-21, game
+        // unfocused) verified the engine refuses to move --
+        // SetSelectedGameObject did not stick across 2 attempts (see
+        // DISCOVERED.md). LoadBoss(0) instead asks the menu to load the tier
+        // directly, with no EventSystem/focus dependency at all -- it is the
+        // same call the tier button's OnClick makes, just invoked ourselves.
+        //
+        // Exception-safe like this file's other helpers: null UI or any
+        // reflection/invoke failure (missing method, target exception from
+        // inside LoadBoss, etc.) returns false rather than throwing, so the
+        // caller can fall back to the blind confirm.
+        public bool ConfirmAttunedChallenge()
+        {
+            var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();
+            if (ui == null) return false;
+            try
+            {
+                var method = ui.GetType().GetMethod(
+                    "LoadBoss",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new[] { typeof(int) }, null);
+                if (method == null) return false;
+                method.Invoke(ui, new object[] { 0 });
+                return true;
+            }
+            catch { return false; }
         }
     }
 }

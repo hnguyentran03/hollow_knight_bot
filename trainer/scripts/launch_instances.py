@@ -16,6 +16,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from hkrl.cloneprep import prepare_clone_save  # noqa: E402
+
 if sys.platform == "win32":
     DEFAULT_APP = Path(
         r"C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight"
@@ -187,7 +190,8 @@ def prepare_instance(port: int, app: Path = None,
         subprocess.run(
             ["codesign", "--force", "--deep", "--sign", "-", str(clone)],
             check=True, capture_output=True)
-    seed_save_dir(bundle_id)
+    save_dir = seed_save_dir(bundle_id)
+    prepare_clone_save(save_dir)
     if prefs:
         seed_prefs(bundle_id, slot=slot)
     return clone / "Contents" / "MacOS" / app.name
@@ -324,14 +328,13 @@ def main() -> None:
     # autosave over each other. Manual multi-instance gates get the same
     # per-port app clones a training fleet would.
     apps = [args.app] * args.instances
-    if args.instances > 1:
-        if SAVE_ISOLATION_SUPPORTED:
-            apps = [prepare_instance(args.port + i, args.app, slot=i)
-                    for i in range(args.instances)]
-        else:
-            print("WARNING: save isolation is not implemented on this "
-                  "platform; all instances share one save slot and "
-                  "concurrent autosaves can corrupt it.", flush=True)
+    if SAVE_ISOLATION_SUPPORTED:
+        apps = [prepare_instance(args.port + i, args.app, slot=i)
+                for i in range(args.instances)]
+    else:
+        print("WARNING: save isolation is not implemented on this "
+              "platform; all instances share one save slot and "
+              "concurrent autosaves can corrupt it.", flush=True)
 
     procs = []
     try:
