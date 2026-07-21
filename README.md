@@ -209,6 +209,22 @@ Healthy: `episodes` > 0 each generation, `mean_boss_damage` trending up, `recove
 ./.venv/bin/tensorboard --logdir ~/hkrl/runs/my-run/tb
 ```
 
+### Launching runs from the dashboard
+
+The dashboard's "Summon a run" panel can start, resume, and stop training
+without a terminal: it spawns `train.py --auto` detached (wrapped in
+`caffeinate -dims` on macOS), so the run keeps going if the dashboard
+exits, and a restarted dashboard picks the live run back up. `--auto`
+skips the Hall-of-Gods prompt and lets the boot macro drive the game in —
+expect a few `reset ... reconnecting` retries in the panel's log tail.
+
+One launched run at a time (the bridge ports allow no more). Stop is the
+same graceful path as Ctrl-C: finish the episode, save a final
+generation, shut the games down. Console output and pidfiles live under
+`~/hkrl/launcher/`; run directories are still written only by `train.py`.
+Runs started from a terminal are not tracked by the panel — stop those in
+their own terminal.
+
 ### Pause and resume
 
 **Pause:** press Ctrl-C once. The run finishes the current episode (≤ ~3 minutes), saves a final generation, and shuts the game down. A second Ctrl-C forces an immediate abort (it still attempts a save).
