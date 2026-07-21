@@ -137,6 +137,10 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        # Everything here is dynamic and polled at a fixed URL (the log and
+        # status every 2s). Without this a browser is free to serve a stale
+        # cached body, freezing the live view on a new run's first poll.
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 

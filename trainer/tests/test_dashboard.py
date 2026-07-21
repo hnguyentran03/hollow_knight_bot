@@ -283,3 +283,17 @@ def test_post_delete_delegates_and_maps_errors(base_url, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as err:
         _post(base_url + "/api/delete", {"run_id": "nope"})
     assert err.value.code == 400
+
+
+def _headers(url):
+    with urllib.request.urlopen(url) as resp:
+        return resp.headers
+
+
+def test_polled_endpoints_are_not_cached(base_url):
+    # The page polls these at fixed URLs every 2s; without an explicit
+    # no-store, a real browser serves a stale cached body and the live
+    # log/status freeze (Playwright disables its cache, hiding this).
+    for path in ["/api/runs", "/api/run/r1", "/api/launcher"]:
+        h = _headers(base_url + path)
+        assert "no-store" in (h.get("Cache-Control") or ""), path
