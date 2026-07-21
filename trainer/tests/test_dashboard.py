@@ -224,3 +224,10 @@ def test_malformed_content_length_gets_a_400_not_a_dropped_socket(base_url):
                    "Connection: close\r\n\r\n").encode())
         reply = s.recv(4096).decode(errors="replace")
     assert " 400 " in reply.splitlines()[0]
+
+
+def test_page_ships_the_launch_panel(base_url):
+    _, _, body = _get(base_url + "/")
+    assert b'id="launch-form"' in body
+    assert b"/api/launch" in body
+    assert b'id="stop-btn"' in body

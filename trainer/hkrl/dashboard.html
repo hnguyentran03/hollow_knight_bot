@@ -156,6 +156,33 @@
   .config-table td { padding: 3px 18px 3px 0; font-variant-numeric: tabular-nums; }
   .config-table td:first-child { color: var(--muted); }
 
+  /* Launch panel: the one part of the page that acts instead of watches. */
+  .launch { margin: 0 0 18px; padding: 14px 16px; }
+  .launch h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 0 0 10px; }
+  .launch form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  .launch label { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .launch input {
+    width: 100%; font: inherit; color: var(--ink); background: var(--raised);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+  }
+  .btn {
+    font: inherit; cursor: pointer; color: var(--ink); background: var(--raised);
+    border: 1px solid var(--border); border-radius: 4px; padding: 6px 14px;
+  }
+  .btn:hover { border-color: var(--tick); }
+  .btn.danger { color: var(--critical); border-color: var(--critical); background: transparent; }
+  .launch .actions { display: flex; gap: 8px; grid-column: 1 / -1; }
+  .launch .advanced { grid-column: 1 / -1; margin: 0; }
+  .launch .advanced .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 8px; }
+  .launch .error { margin-top: 8px; color: var(--critical); font-size: 13px; }
+  .active-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--ink-2); }
+  #launch-log {
+    margin: 10px 0 0; padding: 8px 10px; max-height: 260px; overflow: auto;
+    background: var(--page); border: 1px solid var(--border); border-radius: 4px;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--ink-2); white-space: pre-wrap;
+  }
+
   .empty { margin: 48px auto; text-align: center; color: var(--ink-2); }
 </style>
 </head>
@@ -174,6 +201,38 @@
   </header>
   <div id="banner">Dashboard server unreachable — showing the last data received. Retrying…</div>
   <div class="rule" aria-hidden="true"><span class="gem"></span></div>
+
+  <div class="panel launch" id="launch" hidden>
+    <h2>Summon a run</h2>
+    <div id="launch-active" hidden>
+      <div class="active-line">
+        <span class="badge live"><span class="dot"></span><span id="launch-run"></span></span>
+        <span id="launch-uptime"></span>
+        <button type="button" class="btn danger" id="stop-btn">Stop run</button>
+      </div>
+      <pre id="launch-log"></pre>
+    </div>
+    <form id="launch-form" hidden>
+      <div><label for="f-run-id">Run id</label><input id="f-run-id" name="run_id" autocomplete="off"></div>
+      <div><label for="f-instances">Instances</label><input id="f-instances" name="instances" type="number" min="1" max="3" value="1"></div>
+      <div><label for="f-timesteps">Timesteps</label><input id="f-timesteps" name="timesteps" type="number" min="1" value="500000"></div>
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div class="fields">
+          <div><label for="f-gen-every">Gen every</label><input id="f-gen-every" name="gen_every" type="number" min="1"></div>
+          <div><label for="f-n-steps">N steps</label><input id="f-n-steps" name="n_steps" type="number" min="1" placeholder="auto"></div>
+          <div><label for="f-batch-size">Batch size</label><input id="f-batch-size" name="batch_size" type="number" min="1"></div>
+          <div><label for="f-n-epochs">N epochs</label><input id="f-n-epochs" name="n_epochs" type="number" min="1"></div>
+          <div><label for="f-seed">Seed</label><input id="f-seed" name="seed" type="number" placeholder="random"></div>
+        </div>
+      </details>
+      <div class="actions">
+        <button type="submit" class="btn" id="start-btn">Start new run</button>
+        <button type="button" class="btn" id="resume-btn">Resume selected run</button>
+      </div>
+    </form>
+    <div class="error" id="launch-error" hidden></div>
+  </div>
 
   <div id="content" hidden>
     <div class="bossbar">
@@ -560,6 +619,98 @@ addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(render, 150);
 });
+/* ---------- launch panel ---------- */
+const LAUNCH_POLL_MS = 2000;
+let launchDefaultsApplied = false;
+
+async function postJSON(path, body) {
+  const resp = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || resp.statusText);
+  return data;
+}
+
+function launchError(msg) {
+  const el = document.getElementById("launch-error");
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+
+function formParams() {
+  const params = {};
+  for (const input of document.querySelectorAll("#launch-form input")) {
+    if (input.value !== "") params[input.name] = input.value;
+  }
+  return params;
+}
+
+async function refreshLauncher() {
+  let data;
+  try {
+    data = await (await fetch("/api/launcher")).json();
+  } catch (err) {
+    return; // the banner already reports a lost server
+  }
+  document.getElementById("launch").hidden = false;
+  const active = data.active;
+  document.getElementById("launch-active").hidden = !active;
+  document.getElementById("launch-form").hidden = !!active;
+  if (!active && !launchDefaultsApplied && data.defaults) {
+    launchDefaultsApplied = true;
+    for (const [key, value] of Object.entries(data.defaults)) {
+      const input = document.querySelector(`#launch-form input[name="${key}"]`);
+      if (input && input.value === "") input.value = value;
+    }
+  }
+  if (active) {
+    document.getElementById("launch-run").textContent = active.run_id;
+    document.getElementById("launch-uptime").textContent =
+      "up " + fmtDur(Date.now() / 1000 - active.started);
+    const log = await fetch("/api/launcher/log?n=200").catch(() => null);
+    if (log && log.ok) {
+      const el = document.getElementById("launch-log");
+      // Stick to the bottom only if the reader was already there.
+      const follow = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+      el.textContent = await log.text();
+      if (follow) el.scrollTop = el.scrollHeight;
+    }
+  }
+}
+
+document.getElementById("launch-form").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  launchError("");
+  try {
+    await postJSON("/api/launch", { mode: "new", ...formParams() });
+    refreshLauncher();
+  } catch (err) { launchError(err.message); }
+});
+document.getElementById("resume-btn").addEventListener("click", async () => {
+  launchError("");
+  if (!state.runId) { launchError("no run selected to resume"); return; }
+  const params = formParams();
+  try {
+    await postJSON("/api/launch", { mode: "resume", run_id: state.runId,
+                                    timesteps: params.timesteps,
+                                    instances: params.instances,
+                                    gen_every: params.gen_every });
+    refreshLauncher();
+  } catch (err) { launchError(err.message); }
+});
+document.getElementById("stop-btn").addEventListener("click", async () => {
+  launchError("");
+  try {
+    await postJSON("/api/stop", {});
+    refreshLauncher();
+  } catch (err) { launchError(err.message); }
+});
+refreshLauncher();
+setInterval(refreshLauncher, LAUNCH_POLL_MS);
+
 refresh();
 setInterval(refresh, POLL_MS);
 </script>
