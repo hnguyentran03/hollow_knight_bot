@@ -244,11 +244,14 @@ def test_api_gets_refuse_foreign_host(base_url):
     assert status == 200
 
 
-def test_page_ships_the_launch_panel(base_url):
+def test_page_ships_the_launch_panel_and_summon_links(base_url):
     _, _, body = _get(base_url + "/")
     assert b'id="launch-form"' in body
     assert b"/api/launch" in body
     assert b'id="stop-btn"' in body
+    assert b'id="summon-link"' in body
+    assert b'id="prev-runs"' in body
+    assert b'id="resume-btn"' not in body
 
 
 def test_summon_serves_the_same_page_as_root(base_url):
