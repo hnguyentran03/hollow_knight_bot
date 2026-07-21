@@ -39,6 +39,13 @@ namespace HKRLBot
         // note above ComputeWon for why this exists.
         private bool wonLatched;
 
+        // Task 3 discovery (temporary): log candidate selected-tier signals
+        // while a human cycles the statue menu. Lives ABOVE the Connected
+        // early-return so it runs during a manual session with no trainer
+        // attached (the statue-menu macro branch never runs then).
+        private const bool DiscoverStatueTier = true;
+        private float nextDiscoverLogAt;
+
         // True once TickReset has observed at least one NOT-live frame (fight
         // over / wrong scene / boss not yet respawned) since the current
         // reset was requested. Cleared to false every time a "reset" message
@@ -117,6 +124,18 @@ namespace HKRLBot
         // Also folds in the boss-latch handling documented above ComputeWon.
         private void LateUpdate()
         {
+            if (DiscoverStatueTier && Time.unscaledTime >= nextDiscoverLogAt)
+            {
+                nextDiscoverLogAt = Time.unscaledTime + 2f;
+                int target = -999;
+                try { target = PlayerData.instance.bossStatueTargetLevel; }
+                catch { }
+                var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();
+                HKRLBotMod.Instance.Log(
+                    $"DISCOVER statue-tier: menuOpen={(ui != null)} "
+                    + $"bossStatueTargetLevel={target}");
+            }
+
             var server = HKRLBotMod.Instance.Server;
             if (!server.Connected)
             {
