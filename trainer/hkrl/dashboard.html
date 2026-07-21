@@ -972,10 +972,16 @@ async function renderPrevRuns(activeNow) {
     gensBox.className = "prev-run-gens";
     const expanded = expandedRuns.has(r.id);
     gensBox.hidden = !expanded;
-    // A replay owns the single slot, so it's refused while any run is active
-    // (activeNow) or the run itself is live (terminal-started) -- same rule
-    // as Resume/Delete below.
-    const disabled = activeNow || r.live;
+    // Actions (Replay/Resume/Delete) are gated on whether the panel is
+    // running a fleet, NOT on mtime-liveness: a run stopped seconds ago via
+    // the panel still has a fresh final-save mtime and so reads r.live=true
+    // for the whole LIVE_WINDOW_S, which used to disable its own management
+    // buttons -- after Stop, Resume and Delete were dead for 5 minutes. When
+    // a panel run IS active the whole section is hidden (top of this
+    // function), so in practice these stay enabled for every stopped run
+    // shown; the server still refuses a resume/delete that would actually
+    // collide with a live fleet, and surfaces that as an inline error.
+    const disabled = activeNow;
 
     const disc = document.createElement("button");
     disc.type = "button";
@@ -1007,17 +1013,19 @@ async function renderPrevRuns(activeNow) {
     btn.type = "button";
     btn.className = "btn";
     btn.textContent = "Resume";
-    // Live without being panel-managed = started from a terminal; a
-    // resume would only 409 or fight for the bridge ports.
-    btn.disabled = r.live;
+    // Disabled only while the panel owns a fleet (then this section is hidden
+    // anyway); a resume that would collide with a live run is refused by the
+    // server and shown inline. See `disabled` above.
+    btn.disabled = disabled;
     btn.addEventListener("click", () => openResumeDialog(r));
     const del = document.createElement("button");
     del.type = "button";
     del.className = "btn danger";
     del.textContent = "Delete";
-    // Same rule as Resume: a live run (panel-managed or terminal-started)
-    // is not deletable; the server refuses it too, this just says so first.
-    del.disabled = r.live;
+    // Same rule as Resume. The server still guards deletion of a run with
+    // fresh file activity (its LIVE_WINDOW_S recency check), so a genuinely
+    // training run is refused with an inline message rather than a dead button.
+    del.disabled = disabled;
     del.addEventListener("click", () => openDeleteDialog(r));
     row.append(disc, name, meta, btn, del);
     item.append(row, gensBox);
