@@ -72,3 +72,59 @@ def status(root) -> dict | None:
         else:
             pidfile.unlink(missing_ok=True)
     return active
+
+
+# Flags that shape a fresh model only: on resume, PPO hyperparameters come
+# from the checkpoint zip (see train.py), so forwarding them would be
+# misleading noise. The runtime topology flags are forwarded always.
+_NEW_ONLY = ("n_steps", "batch_size", "n_epochs", "seed")
+_ALWAYS = ("instances", "timesteps", "gen_every")
+_INT_PARAMS = _ALWAYS + _NEW_ONLY
+
+
+def _validate(params: dict) -> dict:
+    mode = params.get("mode", "new")
+    if mode not in ("new", "resume"):
+        raise ValueError(f"unknown mode {mode!r}")
+    run_id = params.get("run_id") or time.strftime("%Y%m%d_%H%M%S")
+    # The same rule the dashboard's GET handler applies: a run id is a
+    # directory name, never a path.
+    if "/" in run_id or "\\" in run_id or run_id in (".", ".."):
+        raise ValueError("run id must be a plain directory name")
+    clean = {"mode": mode, "run_id": run_id}
+    for key in _INT_PARAMS:
+        value = params.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            clean[key] = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be an integer") from None
+    if not 1 <= clean.get("instances", 1) <= 3:
+        raise ValueError("instances must be between 1 and 3")
+    if clean.get("timesteps", 1) < 1:
+        raise ValueError("timesteps must be positive")
+    return clean
+
+
+def command(root, params: dict, platform: str = sys.platform) -> list[str]:
+    """The argv a launch() will spawn.
+
+    Split out from launch() so tests -- and a curious operator reading
+    the log -- can see exactly what would run without spawning anything.
+    """
+    p = _validate(params)
+    root = Path(root).expanduser()
+    cmd = [sys.executable, str(TRAIN_SCRIPT), "--auto", "--root", str(root)]
+    if p["mode"] == "resume":
+        cmd += ["--resume", str(root / "runs" / p["run_id"])]
+    else:
+        cmd += ["--run-id", p["run_id"]]
+    for key in (_ALWAYS if p["mode"] == "resume" else _INT_PARAMS):
+        if key in p:
+            cmd += ["--" + key.replace("_", "-"), str(p[key])]
+    if platform == "darwin":
+        # -dims: display, idle, disk, system -- the same wrapper the README
+        # tells a human to type for an overnight run.
+        cmd = ["caffeinate", "-dims"] + cmd
+    return cmd
