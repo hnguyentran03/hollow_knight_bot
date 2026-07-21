@@ -596,10 +596,43 @@ namespace HKRLBot
         // from the statue takes, which is the case that has always worked.
         private static bool statueTriggerRearmed;
 
+        // Self-correcting step-off state (see StepOffStallSeconds above).
+        // stepOffLeft is the current step-off direction; it starts true (Left)
+        // to match the original always-Left behavior, and flips whenever the
+        // walk stalls against blocked geometry. stepOffLastX is the last
+        // knightX sampled while stepping off, and stepOffProgressAt is the
+        // ElapsedSeconds timestamp of the last tick that made meaningful
+        // progress in the intended direction -- together they detect a stall
+        // (no progress for StepOffStallSeconds) without needing to know which
+        // side the obstacle is on. -1f markers mean "not yet sampled this
+        // reset"; they are re-initialized in Reset().
+        private static bool stepOffLeft = true;
+        private static float stepOffLastX = float.NaN;
+        private static float stepOffProgressAt = -1f;
+
         // How far to step off before walking back in. Comfortably outside the
         // deadband so the return walk is a real trigger-enter, short enough to
         // cost well under a second at walking speed.
         private const float StepOffDistance = 2.5f;
+
+        // The step-off walks one direction until clear of the statue trigger,
+        // but the GG_Workshop arena is not symmetric: one instance in live
+        // testing pinned at knightX~60.67 walking LEFT into the Hall of Gods
+        // bench beside the statue, never reaching the StepOffDistance re-arm
+        // threshold, and burned its whole ResetMacroBudgetSeconds on
+        // branch=step-off-statue every reset (a marginal, timing-sensitive
+        // stall that only bit the slower/occluded instance). We do not know
+        // which side is blocked in every arena/build, and hardcoding the
+        // opposite direction only moves the risk. So the step-off is
+        // self-correcting: if no meaningful progress is made in the intended
+        // direction for StepOffStallSeconds, flip direction. StepOffProgressEps
+        // is the per-tick movement (in the intended direction) that counts as
+        // progress -- above the position-read jitter, below a real walking
+        // step. StepOffStallSeconds is long enough that the healthy ~2s
+        // clear-through is not falsely flipped, short enough that several
+        // attempts still fit inside the 22.5s budget.
+        private const float StepOffStallSeconds = 2.0f;
+        private const float StepOffProgressEps = 0.15f;
 
         // How long after entering GG_Workshop to wait before pressing Up.
         // Costs a fixed delay on every statue reset, well inside
@@ -634,6 +667,9 @@ namespace HKRLBot
             statueMenuEnteredAt = -1f;
             workshopEnteredAt = -1f;
             statueTriggerRearmed = false;
+            stepOffLeft = true;
+            stepOffLastX = float.NaN;
+            stepOffProgressAt = -1f;
         }
 
         // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
@@ -769,8 +805,50 @@ namespace HKRLBot
                     else if (!statueTriggerRearmed)
                     {
                         // Walk away from the statue until clear of its trigger.
+                        // The direction is self-correcting: if the walk makes
+                        // no meaningful progress for StepOffStallSeconds (the
+                        // Hall of Gods bench blocks the leftward step on some
+                        // instances -- see StepOffStallSeconds above), flip to
+                        // the other side. Whichever side is open eventually
+                        // carries the knight past StepOffDistance and re-arms
+                        // the trigger, with no dependence on knowing the arena
+                        // geometry ahead of time.
                         branch = "step-off-statue";
-                        b.Left = WalkHold(elapsed);
+                        if (float.IsNaN(stepOffLastX))
+                        {
+                            // First step-off tick this reset: anchor progress
+                            // tracking to the current position and clock.
+                            stepOffLastX = k.X;
+                            stepOffProgressAt = elapsed;
+                        }
+                        else
+                        {
+                            // Movement in the intended direction since the last
+                            // progress anchor. Only advancing the anchor on real
+                            // progress lets slow-but-genuine movement accumulate
+                            // across ticks (the WalkHold repress gap drops a
+                            // tick each period) instead of being read as a stall.
+                            float progress = stepOffLeft
+                                ? stepOffLastX - k.X
+                                : k.X - stepOffLastX;
+                            if (progress > StepOffProgressEps)
+                            {
+                                stepOffProgressAt = elapsed;
+                                stepOffLastX = k.X;
+                            }
+                            else if (elapsed - stepOffProgressAt >= StepOffStallSeconds)
+                            {
+                                // Blocked on this side for the whole stall
+                                // window: reverse and reset tracking so the
+                                // opposite direction gets a fresh window.
+                                stepOffLeft = !stepOffLeft;
+                                stepOffLastX = k.X;
+                                stepOffProgressAt = elapsed;
+                                mod.Log($"ResetMacro: step-off reversed to {(stepOffLeft ? "Left" : "Right")} (stalled at knightX={k.X:F2})");
+                            }
+                        }
+                        if (stepOffLeft) b.Left = WalkHold(elapsed);
+                        else b.Right = WalkHold(elapsed);
                     }
                     else if (!statueMenuLatched)
                     {
