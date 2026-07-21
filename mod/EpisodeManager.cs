@@ -90,9 +90,9 @@ namespace HKRLBot
         // Attuned Hornet 1's max HP is 900 (704/704 Attuned bossMaxHp readings
         // in the archived ModLogs); wrong-tier readings seen were 1250
         // (Ascended) and 1186. A fight that goes live above this ceiling is a
-        // wrong-tier fight the Task-3 statue check should have prevented; 1000
-        // sits safely above the stable 900 and below both higher tiers. Last
-        // resort only -- see the note at its use site.
+        // wrong-tier fight the statue tier gate (GateConfirm) should have
+        // prevented; 1000 sits safely above the stable 900 and below both
+        // higher tiers. Last resort only -- see the note at its use site.
         private const int MaxAttunedHornetHp = 1000;
 
         private string Scene => GameManager.instance != null
@@ -460,20 +460,20 @@ namespace HKRLBot
             bool fightLive = live && sawNotLiveSinceReset && sawSceneReentrySinceReset;
             if (fightLive)
             {
-                // Backstop B (last resort, not a recovery path). Task 3's
-                // statue check should mean only Attuned is ever entered, but if
-                // that ever fails, a fight that goes live above the Attuned HP
-                // ceiling is the wrong tier. We cannot fix the tier from here --
-                // a Godhome retry restarts the SAME tier -- so the only safe
-                // move is to drop, exactly like the budget-expiry path below.
-                // A supervisor relaunch re-execs the SAME already-prepped
-                // clone (GameProcess.relaunch in trainer/hkrl/game.py: no
-                // prepare_instance, no re-seed), so if the Task-3 check is
-                // broken the reboot reaches the same wrong tier and this
-                // fires again until recovery attempts exhaust and the run
-                // ends in InstanceDown. Fail-loud by design -- a dead run,
-                // never hours against the wrong boss. With the Task-3 check
-                // in place this should essentially never fire.
+                // Backstop B (last resort, not a recovery path). The statue tier
+                // gate (GateConfirm) should mean only Attuned is ever entered,
+                // but if that ever fails, a fight that goes live above the
+                // Attuned HP ceiling is the wrong tier. We cannot fix the tier
+                // from here -- a Godhome retry restarts the SAME tier -- so the
+                // only safe move is to drop, exactly like the budget-expiry
+                // path below. A supervisor relaunch re-execs the SAME
+                // already-prepped clone (GameProcess.relaunch in
+                // trainer/hkrl/game.py: no prepare_instance, no re-seed), so if
+                // the statue tier gate is broken the reboot reaches the same
+                // wrong tier and this fires again until recovery attempts
+                // exhaust and the run ends in InstanceDown. Fail-loud by design
+                // -- a dead run, never hours against the wrong boss. With the
+                // statue tier gate in place this should essentially never fire.
                 if (b.Hp > MaxAttunedHornetHp)
                 {
                     HKRLBotMod.Instance.Log(
@@ -510,13 +510,11 @@ namespace HKRLBot
                 // known/expected HP pool; an Ascended or Radiant tier being
                 // accepted by mistake would show up here as an unexpectedly
                 // large number, which is otherwise invisible (the trainer's
-                // _max_bhp normalizes it away). The statue macro's
-                // statue-menu branch now reads and corrects the highlighted
-                // tier before confirming (StateReader.ReadSelectedChallengeTier,
-                // via the EventSystem selection vs. the tier buttons -- see
-                // DISCOVERED.md), so this log is a secondary sanity check on
-                // top of that gate, not the only defense against a wrong
-                // tier.
+                // _max_bhp normalizes it away). The reset macro's GateConfirm
+                // governs every confirm while the challenge menu is open (tier
+                // read, one highlight-correction attempt, then LoadBoss(0) by
+                // value -- see DISCOVERED.md), so this bossMaxHp log is a
+                // secondary sanity check.
                 HKRLBotMod.Instance.Log(
                     $"Episode {attempt} starting: scene={Scene} bossMaxHp={b.Hp} knightHp={k.Hp}");
                 server.SendState(k, b, false, false, Scene, attempt);
