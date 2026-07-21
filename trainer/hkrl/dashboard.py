@@ -19,8 +19,24 @@ PAGE = Path(__file__).with_name("dashboard.html")
 
 
 class _Handler(BaseHTTPRequestHandler):
+    def _local_host(self) -> bool:
+        # DNS rebinding makes a page origin same-origin with us after the
+        # attacker's DNS entry re-resolves to 127.0.0.1, so the browser's
+        # same-origin policy no longer protects a bare fetch() -- checking
+        # the Host header the browser sent is what actually pins the
+        # request to this server.
+        port = self.server.server_address[1]
+        return self.headers.get("Host") in (f"127.0.0.1:{port}",
+                                            f"localhost:{port}")
+
     def do_GET(self):
         path = unquote(self.path.split("?", 1)[0])
+        # Only the /api/ routes are data-bearing; "/" is just the static
+        # page and stays unguarded so an odd local setup (e.g. a hostname
+        # other than localhost/127.0.0.1) can still load it.
+        if path.startswith("/api/") and not self._local_host():
+            self.send_error(403, "cross-origin request refused")
+            return
         if path == "/":
             self._send(200, "text/html; charset=utf-8", PAGE.read_bytes())
         elif path == "/api/runs":
@@ -59,9 +75,7 @@ class _Handler(BaseHTTPRequestHandler):
         # content-type forces a CORS preflight (which we never answer),
         # so a malicious web page cannot fire a plain form POST at the
         # localhost port.
-        port = self.server.server_address[1]
-        if self.headers.get("Host") not in (f"127.0.0.1:{port}",
-                                            f"localhost:{port}"):
+        if not self._local_host():
             self.send_error(403, "cross-origin request refused")
             return
         if not (self.headers.get("Content-Type") or "").startswith(

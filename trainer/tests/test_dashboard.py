@@ -38,8 +38,11 @@ def base_url(tmp_path):
     server.server_close()
 
 
-def _get(url):
-    with urllib.request.urlopen(url) as resp:
+def _get(url, host=None):
+    req = urllib.request.Request(url)
+    if host is not None:
+        req.add_unredirected_header("Host", host)
+    with urllib.request.urlopen(req) as resp:
         return resp.status, resp.headers.get("Content-Type"), resp.read()
 
 
@@ -224,6 +227,21 @@ def test_malformed_content_length_gets_a_400_not_a_dropped_socket(base_url):
                    "Connection: close\r\n\r\n").encode())
         reply = s.recv(4096).decode(errors="replace")
     assert " 400 " in reply.splitlines()[0]
+
+
+def test_api_gets_refuse_foreign_host(base_url):
+    # DNS rebinding makes the attacker's page same-origin with us post
+    # rebind, so a plain GET fetch would otherwise read run data straight
+    # off the wire -- the Host header is what pins the request to us.
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _get(base_url + "/api/runs", host="evil.example:9700")
+    assert err.value.code == 403
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _get(base_url + "/api/launcher/log", host="evil.example:9700")
+    assert err.value.code == 403
+    # A normal same-origin GET still works.
+    status, _, _ = _get(base_url + "/api/runs")
+    assert status == 200
 
 
 def test_page_ships_the_launch_panel(base_url):

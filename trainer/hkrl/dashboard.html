@@ -623,6 +623,10 @@ addEventListener("resize", () => {
 /* ---------- launch panel ---------- */
 const LAUNCH_POLL_MS = 2000;
 let launchDefaultsApplied = false;
+// Tracks the previous poll's active/idle state so refreshLauncher() can
+// detect the active -> idle transition (a run finishing or being stopped)
+// and refill the run-id default exactly once for the next run.
+let wasActive = false;
 
 async function postJSON(path, body) {
   const resp = await fetch(path, {
@@ -660,6 +664,16 @@ async function refreshLauncher() {
   const active = data.active;
   document.getElementById("launch-active").hidden = !active;
   document.getElementById("launch-form").hidden = !!active;
+  if (!active && wasActive) {
+    // The run that just finished (or was stopped) owns whatever run-id is
+    // still sitting in the field. Left alone it collides with that same
+    // finished run on the very next Start -- clearing it, along with the
+    // "defaults already applied" flag, lets the block below refill a
+    // fresh timestamp on this same poll.
+    document.getElementById("f-run-id").value = "";
+    launchDefaultsApplied = false;
+  }
+  wasActive = !!active;
   if (!active && !launchDefaultsApplied && data.defaults) {
     launchDefaultsApplied = true;
     for (const [key, value] of Object.entries(data.defaults)) {
@@ -682,18 +696,30 @@ async function refreshLauncher() {
   }
 }
 
+const startBtn = document.getElementById("start-btn");
+const resumeBtn = document.getElementById("resume-btn");
+const stopBtn = document.getElementById("stop-btn");
+
 document.getElementById("launch-form").addEventListener("submit", async ev => {
   ev.preventDefault();
   launchError("");
+  // Disable both: a double-click is exactly the concurrent-POST case A3's
+  // server-side lock guards against, and the button should not invite it
+  // even though the lock makes it harmless.
+  startBtn.disabled = true;
+  resumeBtn.disabled = true;
   try {
     await postJSON("/api/launch", { mode: "new", ...formParams() });
     refreshLauncher();
   } catch (err) { launchError(err.message); }
+  finally { startBtn.disabled = false; resumeBtn.disabled = false; }
 });
 document.getElementById("resume-btn").addEventListener("click", async () => {
   launchError("");
   if (!state.runId) { launchError("no run selected to resume"); return; }
   const params = formParams();
+  startBtn.disabled = true;
+  resumeBtn.disabled = true;
   try {
     await postJSON("/api/launch", { mode: "resume", run_id: state.runId,
                                     timesteps: params.timesteps,
@@ -701,13 +727,16 @@ document.getElementById("resume-btn").addEventListener("click", async () => {
                                     gen_every: params.gen_every });
     refreshLauncher();
   } catch (err) { launchError(err.message); }
+  finally { startBtn.disabled = false; resumeBtn.disabled = false; }
 });
 document.getElementById("stop-btn").addEventListener("click", async () => {
   launchError("");
+  stopBtn.disabled = true;
   try {
     await postJSON("/api/stop", {});
     refreshLauncher();
   } catch (err) { launchError(err.message); }
+  finally { stopBtn.disabled = false; }
 });
 refreshLauncher();
 setInterval(refreshLauncher, LAUNCH_POLL_MS);
