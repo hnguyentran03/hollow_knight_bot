@@ -301,10 +301,10 @@ def main() -> None:
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }) + "\n")
 
-    # Unconditional, N=1 included: the single-instance game plays the
-    # master save directly, and even the isolated N>1 path seeds its clones
-    # FROM the master -- a quietly corrupt master would propagate. A run
-    # must never be the event that loses someone's save.
+    # Unconditional: every clone is seeded FROM the master save (N=1 on
+    # save-isolation platforms, the master itself on others), so a quietly
+    # corrupt master would propagate. A run must never be the event that
+    # loses someone's save.
     backup = backup_saves(args.root)
     if backup is not None:
         print(f"master save backed up to {backup}", flush=True)
