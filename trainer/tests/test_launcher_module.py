@@ -180,3 +180,38 @@ def test_tail_returns_the_last_lines_of_the_newest_log(tmp_path):
 
 def test_tail_is_none_with_no_logs(tmp_path):
     assert launcher.tail(tmp_path) is None
+
+
+def test_launch_uses_one_run_id_even_when_omitted(tmp_path, stub_trainer,
+                                                    monkeypatch):
+    # _validate() defaults a missing run_id from time.strftime(); launch()
+    # must compute it exactly once and thread the same value through to
+    # the spawned command, not let a second _validate() call mint a new
+    # timestamp that desyncs the pidfile from the run the child reports.
+    generated = iter(f"TS{i:06d}" for i in (1, 2))
+    monkeypatch.setattr(launcher.time, "strftime",
+                        lambda *a, **k: next(generated))
+    launcher.launch(tmp_path, {})
+    active = launcher.status(tmp_path)
+    assert active is not None and active["run_id"] == "TS000001"
+    assert wait_for(lambda: "--run-id TS000001" in
+                    _log(tmp_path, "TS000001").read_text(errors="replace"))
+
+
+def test_stop_raises_runtime_error_if_process_exits_first(tmp_path,
+                                                            monkeypatch):
+    # Simulate the check-then-signal race: status() sees the pid as alive,
+    # but it exits before killpg() reaches it. getpgid() is what raises
+    # ProcessLookupError in that window, so stub that directly rather than
+    # sending any real signal against our own process.
+    d = tmp_path / "launcher"
+    d.mkdir()
+    (d / "r1.pid").write_text(json.dumps(
+        {"run_id": "r1", "pid": os.getpid(), "started": 0.0}))
+
+    def boom(pid):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(launcher.os, "getpgid", boom)
+    with pytest.raises(RuntimeError):
+        launcher.stop(tmp_path)

@@ -144,7 +144,12 @@ def launch(root, params: dict) -> str:
             and not (Path(root).expanduser() / "runs" / p["run_id"]).is_dir():
         raise ValueError(f"no run named {p['run_id']!r} to resume")
     d = _dir(root)
-    cmd = command(root, params)
+    # Pass the already-cleaned dict, not the raw params: command() calls
+    # _validate() again (it's public and validates on its own), and a
+    # second call on raw params with run_id omitted would mint its own
+    # timestamp, desyncing the spawned --run-id from this pidfile's name.
+    # _validate() is idempotent on an already-clean dict, so this is safe.
+    cmd = command(root, p)
     with (d / f"{p['run_id']}.log").open("ab") as log:
         # start_new_session: the run must not die with the dashboard, and
         # it makes the child a process-group leader so stop() can SIGINT
@@ -167,7 +172,15 @@ def stop(root) -> dict:
     active = status(root)
     if active is None:
         raise RuntimeError("no launched run is active")
-    os.killpg(os.getpgid(active["pid"]), signal.SIGINT)
+    # status() only just confirmed the pid was alive; it can still exit in
+    # the window between that check and this signal, which would surface
+    # as an uncaught ProcessLookupError instead of stop()'s documented
+    # "nothing to stop" contract.
+    try:
+        os.killpg(os.getpgid(active["pid"]), signal.SIGINT)
+    except ProcessLookupError:
+        raise RuntimeError(
+            "run exited before it could be stopped") from None
     return active
 
 
