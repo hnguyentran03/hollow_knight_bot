@@ -139,9 +139,33 @@ namespace HKRLBot
                 try { target = PlayerData.instance.bossStatueTargetLevel; }
                 catch { }
                 var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();
+                int lastSel = -999;
+                try
+                {
+                    lastSel = (int)typeof(BossChallengeUI)
+                        .GetField("lastSelectedButton",
+                            System.Reflection.BindingFlags.NonPublic
+                            | System.Reflection.BindingFlags.Static)
+                        .GetValue(null);
+                }
+                catch { }
+                int evSel = -1;
+                try
+                {
+                    var es = UnityEngine.EventSystems.EventSystem.current;
+                    var cur = es == null ? null : es.currentSelectedGameObject;
+                    if (ui != null && cur != null)
+                    {
+                        if (cur == ui.tier1Button.button.gameObject) evSel = 0;
+                        else if (cur == ui.tier2Button.button.gameObject) evSel = 1;
+                        else if (cur == ui.tier3Button.button.gameObject) evSel = 2;
+                    }
+                }
+                catch { }
                 HKRLBotMod.Instance.Log(
                     $"DISCOVER statue-tier: menuOpen={(ui != null)} "
-                    + $"bossStatueTargetLevel={target}");
+                    + $"bossStatueTargetLevel={target} lastSelectedButton={lastSel} "
+                    + $"eventSystemSel={evSel}");
             }
 
             var server = HKRLBotMod.Instance.Server;
