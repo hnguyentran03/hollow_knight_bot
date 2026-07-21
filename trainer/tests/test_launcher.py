@@ -288,3 +288,38 @@ def test_backup_saves_is_a_noop_without_a_master_save_dir(tmp_path):
     assert launch_instances.backup_saves(root=tmp_path / "hkrl",
                                          source=tmp_path / "absent") is None
     assert not (tmp_path / "hkrl" / "save-backups").exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin",
+                    reason="app-clone isolation is macOS-only")
+def test_prepare_instance_strips_foreign_profiles_from_the_clone(tmp_path,
+                                                                 monkeypatch):
+    bundle = tmp_path / "game" / "hollow_knight.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    binary = bundle / "Contents" / "MacOS" / "Hollow Knight"
+    binary.write_text("#!/bin/sh\n")
+    (bundle / "Contents" / "Info.plist").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0"><dict>'
+        "<key>CFBundleIdentifier</key>"
+        "<string>unity.Team Cherry.Hollow Knight</string>"
+        "</dict></plist>\n")
+
+    master_save = tmp_path / "unity.Team Cherry.Hollow Knight"
+    master_save.mkdir()
+    (master_save / "user1.dat").write_text("godhome")
+    (master_save / "user4.dat").write_text("foreign profile")
+    monkeypatch.setattr(launch_instances, "APP_SUPPORT", tmp_path)
+
+    launch_instances.prepare_instance(9031, app=binary,
+                                      root=tmp_path / "instances",
+                                      sign=False, prefs=False)
+
+    clone_save = tmp_path / "unity.Team Cherry.Hollow Knight.hkrl9031"
+    assert (clone_save / "user1.dat").exists()          # Godhome kept
+    assert not (clone_save / "user4.dat").exists()      # foreign stripped
+    # Master is untouched.
+    assert (master_save / "user1.dat").exists()
+    assert (master_save / "user4.dat").exists()

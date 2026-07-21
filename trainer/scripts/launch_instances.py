@@ -16,6 +16,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from hkrl.cloneprep import prepare_clone_save  # noqa: E402
+
 if sys.platform == "win32":
     DEFAULT_APP = Path(
         r"C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight"
@@ -187,7 +190,8 @@ def prepare_instance(port: int, app: Path = None,
         subprocess.run(
             ["codesign", "--force", "--deep", "--sign", "-", str(clone)],
             check=True, capture_output=True)
-    seed_save_dir(bundle_id)
+    save_dir = seed_save_dir(bundle_id)
+    prepare_clone_save(save_dir)
     if prefs:
         seed_prefs(bundle_id, slot=slot)
     return clone / "Contents" / "MacOS" / app.name
