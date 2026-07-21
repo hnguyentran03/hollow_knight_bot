@@ -236,22 +236,31 @@ def test_launch_new_refuses_an_existing_run_dir(tmp_path, stub_trainer):
         launcher.launch(tmp_path, {"run_id": "r1"})
 
 
-def test_restart_params_recovers_the_aborted_runs_config(tmp_path):
-    # An aborted run's own config is the source for its fresh restart.
+def test_restart_params_merges_request_over_the_aborted_config(tmp_path):
+    # The aborted run's config is the base; model-shaping params always come
+    # from it, while a step budget the request carries overrides the config's.
     run_dir = tmp_path / "runs" / "r2"
     run_dir.mkdir(parents=True)
     (run_dir / "config.jsonl").write_text(json.dumps(
         {"run_id": "ignored", "timesteps": 40000, "instances": 2,
          "gen_every": 8000, "batch_size": 32, "n_epochs": 7, "n_steps": 512,
          "seed": 5}) + "\n")
-    p = launcher._restart_params(run_dir)
+    base = {"mode": "resume", "run_id": "r2"}
+
+    p = launcher._restart_params(run_dir, {**base, "timesteps": 90000})
     assert p["mode"] == "new" and p["run_id"] == "r2"  # id from the dir, reused
-    cmd = launcher.command(tmp_path, p, platform="linux")  # no caffeinate wrap
-    assert "--run-id" in cmd and "r2" in cmd and "--resume" not in cmd
-    for flag, val in [("--timesteps", "40000"), ("--instances", "2"),
-                      ("--gen-every", "8000"), ("--batch-size", "32"),
-                      ("--n-epochs", "7"), ("--n-steps", "512"), ("--seed", "5")]:
-        assert flag in cmd and val in cmd
+    over = launcher.command(tmp_path, p, platform="linux")  # no caffeinate wrap
+    assert "--run-id" in over and "r2" in over and "--resume" not in over
+    assert "90000" in over and "40000" not in over  # request budget wins
+    for flag, val in [("--instances", "2"), ("--gen-every", "8000"),
+                      ("--batch-size", "32"), ("--n-epochs", "7"),
+                      ("--n-steps", "512"), ("--seed", "5")]:
+        assert flag in over and val in over
+
+    # With no override in the request, the config's own timesteps is used.
+    base_cmd = launcher.command(tmp_path, launcher._restart_params(run_dir, base),
+                                platform="linux")
+    assert "40000" in base_cmd
 
 
 def test_resume_without_a_checkpoint_restarts_fresh(tmp_path, stub_trainer):

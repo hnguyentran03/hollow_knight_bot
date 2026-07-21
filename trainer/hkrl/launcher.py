@@ -77,16 +77,18 @@ def _trash(root, run_dir: Path) -> str:
     return dest.name
 
 
-def _restart_params(run_dir: Path) -> dict:
-    """Fresh-start params for an aborted (checkpoint-less) run, recovered from
-    the config its aborted attempt recorded so the rerun matches it. Returns a
-    'new'-mode param dict reusing the same run_id; _validate() (via command())
-    coerces and range-checks it like any other launch."""
+def _restart_params(run_dir: Path, request: dict) -> dict:
+    """Fresh-start params for an aborted (checkpoint-less) run. Model-shaping
+    params (n_steps, batch_size, n_epochs, seed) come from the config the
+    aborted attempt recorded -- a resume request drops them -- while the
+    request's own values win where present, so the page can hand the restart a
+    new step budget (timesteps) instead of the original. Returns a 'new'-mode
+    dict reusing the run_id; command()'s _validate() coerces/range-checks it."""
     configs = read_jsonl(run_dir / "config.jsonl")
     cfg = configs[-1] if configs else {}
     params = {"mode": "new", "run_id": run_dir.name}
     for key in _INT_PARAMS:
-        value = cfg.get(key)
+        value = request.get(key, cfg.get(key))
         if value is not None:
             params[key] = value
     return params
@@ -228,9 +230,10 @@ def launch(root, params: dict) -> str:
                 # Aborted before its first checkpoint: there is nothing to
                 # resume FROM (train.py's latest_checkpoint would raise), so
                 # restart the run fresh with the config its aborted attempt
-                # recorded, reusing the id. Move the empty attempt to trash
-                # (recoverable) and continue below as an ordinary 'new' run.
-                p = _restart_params(run_dir)
+                # recorded (overlaid with any params the request set, e.g. a
+                # new timesteps budget), reusing the id. Move the empty attempt
+                # to trash (recoverable) and continue below as a 'new' run.
+                p = _restart_params(run_dir, p)
                 _trash(root_dir, run_dir)
         elif run_dir.exists():
             # train.py exits instantly on an existing run dir; catching it

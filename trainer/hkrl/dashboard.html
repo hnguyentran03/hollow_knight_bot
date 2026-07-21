@@ -368,7 +368,7 @@
       </label>
       <label class="choice">
         <input type="radio" name="resume-mode" id="resume-add">
-        <span>Add more steps:</span>
+        <span id="resume-add-label">Add more steps:</span>
       </label>
       <input type="number" id="resume-extra" min="1" value="500000"
              aria-label="Additional steps to collect">
@@ -1059,41 +1059,48 @@ function openResumeDialog(r) {
   resumeDialog.returnValue = "";
   const title = document.getElementById("resume-title");
   const facts = document.getElementById("resume-facts");
-  const choices = resumeDialog.querySelectorAll(".choice");
+  const finish = document.getElementById("resume-finish");
+  const finishLabel = document.getElementById("resume-finish-label");
+  const addLabel = document.getElementById("resume-add-label");
   const extra = document.getElementById("resume-extra");
   const confirmBtn = resumeDialog.querySelector('button[value="resume"]');
+  const noCheckpoint = !r.timestep;  // aborted before its first generation
   const instanceStr = r.instances
     ? " · " + r.instances + " instance" + (r.instances === 1 ? "" : "s") : "";
 
-  if (!r.timestep) {
-    // No checkpoint (aborted before its first generation): nothing to resume
-    // FROM, so this restarts the run from scratch with its original config.
-    // Drop the additive-steps choice -- there is no progress to add to -- and
-    // rename the action so the confirm reads honestly.
-    title.textContent = "Restart " + r.id;
+  title.textContent = (noCheckpoint ? "Restart " : "Resume ") + r.id;
+  confirmBtn.textContent = noCheckpoint ? "Restart" : "Resume";
+  extra.value = "500000";  // fresh per open
+
+  if (noCheckpoint) {
+    // No checkpoint (nothing to resume FROM): this restarts the run from
+    // scratch with its config -- but the step budget is still the user's to
+    // set, either the original target (default) or a different amount.
     facts.textContent =
-      "No checkpoint yet — restarts from scratch with the run's original config"
+      "No checkpoint yet — starts over from scratch with the run's config"
       + instanceStr + ".";
-    choices.forEach(c => { c.hidden = true; });
-    extra.hidden = true;
-    confirmBtn.textContent = "Restart";
+    addLabel.textContent = "A different number of steps:";
+    finish.parentElement.hidden = !r.target_timestep;  // no "target" if none recorded
+    if (r.target_timestep) {
+      finish.disabled = false;
+      finish.checked = true;  // default: the original target
+      finishLabel.textContent =
+        "The original target (" + fmtK(r.target_timestep) + " steps)";
+    } else {
+      document.getElementById("resume-add").checked = true;
+    }
     resumeDialog.showModal();
     return;
   }
 
-  // Normal resume: reveal the choice UI (a prior restart open may have hidden it).
-  choices.forEach(c => { c.hidden = false; });
-  extra.hidden = false;
-  confirmBtn.textContent = "Resume";
+  // Normal resume: --timesteps is additive on a real resume.
+  finish.parentElement.hidden = false;
+  addLabel.textContent = "Add more steps:";
   const remaining = (r.target_timestep || 0) - r.timestep;
-  title.textContent = "Resume " + r.id;
   facts.textContent =
     fmtK(r.timestep) + " of " +
     (r.target_timestep ? fmtK(r.target_timestep) : "—") + " steps collected" +
     instanceStr;
-  const finish = document.getElementById("resume-finish");
-  const finishLabel = document.getElementById("resume-finish-label");
-  extra.value = "500000";  // fresh per open
   if (remaining > 0) {
     finish.disabled = false;
     finish.checked = true;  // the default: not additive
@@ -1149,14 +1156,21 @@ resumeDialog.addEventListener("close", async () => {
   const r = resumeRun;
   resumeRun = null;
   if (resumeDialog.returnValue !== "resume" || !r) return;
+  const finish = document.getElementById("resume-finish").checked;
+  const extra = parseInt(document.getElementById("resume-extra").value, 10);
   let body;
   if (!r.timestep) {
-    // No checkpoint: a bare resume; the server restarts from the run's own
-    // recorded config, so the page sends nothing to override it.
-    body = { mode: "resume", run_id: r.id };
+    // No checkpoint: the server restarts from the run's own config, but honors
+    // the step budget chosen here -- the original target, or a custom amount.
+    // Everything else (instances, gen_every, the model params) comes from the
+    // run's config, so the page sends only the timesteps it is overriding.
+    const timesteps = finish ? (r.target_timestep || 0) : extra;
+    if (!timesteps || timesteps < 1) {
+      launchError("no steps to collect — enter how many");
+      return;
+    }
+    body = { mode: "resume", run_id: r.id, timesteps: timesteps };
   } else {
-    const finish = document.getElementById("resume-finish").checked;
-    const extra = parseInt(document.getElementById("resume-extra").value, 10);
     const timesteps = finish ? (r.target_timestep || 0) - r.timestep : extra;
     if (!timesteps || timesteps < 1) {
       launchError("no steps to collect — enter how many to add");
