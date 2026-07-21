@@ -37,7 +37,10 @@ class _Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/") and not self._local_host():
             self.send_error(403, "cross-origin request refused")
             return
-        if path == "/":
+        if path in ("/", "/summon"):
+            # /summon is the same page; the page JS branches on
+            # location.pathname so the embedded fonts aren't duplicated
+            # into a second file.
             self._send(200, "text/html; charset=utf-8", PAGE.read_bytes())
         elif path == "/api/runs":
             self._json(scan_runs(self.server.root))

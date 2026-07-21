@@ -249,3 +249,11 @@ def test_page_ships_the_launch_panel(base_url):
     assert b'id="launch-form"' in body
     assert b"/api/launch" in body
     assert b'id="stop-btn"' in body
+
+
+def test_summon_serves_the_same_page_as_root(base_url):
+    status_root, ctype_root, body_root = _get(base_url + "/")
+    status, ctype, body = _get(base_url + "/summon")
+    assert status == 200
+    assert ctype.startswith("text/html")
+    assert body == body_root
