@@ -721,6 +721,15 @@ namespace HKRLBot
                 statueMenuLatched = false;
                 workshopEnteredAt = -1f;
                 statueTriggerRearmed = false;
+                // Clear the self-correcting step-off state alongside the
+                // re-arm flag: a Workshop -> elsewhere -> Workshop transition
+                // within one reset must re-anchor the step-off from scratch,
+                // not compare against a stale stepOffLastX/stepOffProgressAt
+                // (which could read as an instant stall and flip direction on
+                // the first tick). Mirrors Reset()'s initialization.
+                stepOffLeft = true;
+                stepOffLastX = float.NaN;
+                stepOffProgressAt = -1f;
             }
             else if (workshopEnteredAt < 0f)
             {

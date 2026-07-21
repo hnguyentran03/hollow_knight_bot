@@ -256,15 +256,22 @@ def replay(root, run_id, gen, episodes: int = 3,
         raise ValueError("episodes must be positive")
     root = Path(root).expanduser()
     run_dir = root / "runs" / run_id
-    # Both files or nothing: the weights are meaningless without the
-    # VecNormalize statistics they were trained under (see replay.py), and
-    # catching it here is the difference between a 400 on the page and a
-    # spawn that dies the moment it tries to load them.
     weights, vecnorm = checkpoint_paths(run_dir, gen)
-    if not (weights.exists() and vecnorm.exists()):
-        raise ValueError(
-            f"generation {gen} of {run_id!r} has no checkpoint to replay")
     with _lock:
+        # Both the existence check and the status check live inside the lock,
+        # like launch()'s filesystem preconditions: a delete() (which also
+        # takes _lock) could otherwise trash runs/<id> between an unlocked
+        # check and the spawn, leaving us booting a whole game only for
+        # load_policy to die on the now-missing checkpoint. Checked before
+        # status() so a bad request stays a 400 even when the slot is busy.
+        #
+        # Both files or nothing: the weights are meaningless without the
+        # VecNormalize statistics they were trained under (see replay.py), and
+        # catching it here is the difference between a 400 on the page and a
+        # spawn that dies the moment it tries to load them.
+        if not (weights.exists() and vecnorm.exists()):
+            raise ValueError(
+                f"generation {gen} of {run_id!r} has no checkpoint to replay")
         if status(root) is not None:
             raise RuntimeError("a launched run is already active; stop it "
                                "before replaying")
