@@ -243,7 +243,9 @@ missing method, or an exception from inside `LoadBoss` itself) --
 exception-safe like this file's other helpers.
 
 **Updated decision table** (`EpisodeManager.cs`'s `ResetMacro.Tick()`
-statue-menu branch):
+statue-menu branch at the time; hoisted into `ResetMacro.GateConfirm()` and
+generalized to run for any `GG_Workshop` branch -- see the budget-correction
+entry below):
 - menu not open: proceed unchanged, no log (silent, unchanged from
   section 4).
 - menu open, tier `0` (Attuned): allow the confirm pulse (silent, healthy
@@ -268,16 +270,57 @@ statue-menu branch):
   Backstop B (`EpisodeManager.TickReset`'s `fightLive` HP-ceiling check)
   still guards against a wrong tier slipping through even here.
 
-**Budget raise (same run):** a cold boot from the title screen measured
-~8.8s to reach `GG_Workshop` plus ~11.6s walking to the statue (including
-an occasional multi-second stall at walk start), reaching the statue-menu
-branch at ~20.4s of the then-22.5s `ResetMacroBudgetSeconds` -- no room left
-for the menu-open + gate cycles, so the macro expired and dropped before
-ever confirming; the fight was only entered by accident on the next
-attempt, via a menu an earlier expired macro had left open. Cold boots
-measured ~24-26s end-to-end including the statue-menu work. Mid-run resets
-(~9s total) fit the old budget fine and are unaffected.
-`ResetMacroBudgetSeconds` is raised from 22.5s to 40s to give a slow cold
-boot real headroom while staying fail-loud and finite -- see the constant's
-own comment in `mod/EpisodeManager.cs` for the corresponding trade-off
-against the Python trainer's socket timeout.
+**Budget correction (2026-07-21, corrects the entry above from commit
+`0413062`):** that commit raised `ResetMacroBudgetSeconds` from 22.5s to 40s
+in response to the cold-boot measurement above (title screen to statue-menu
+at ~20.4s of the then-22.5s budget, cold boots measured ~24-26s end-to-end).
+This was reverted back to 22.5s: the budget is a deliberate INVARIANT, not a
+timing knob to raise past a slow cold boot. It must stay strictly under the
+Python trainer's 30s socket timeout (`Connection(timeout=30.0)` in
+`trainer/hkrl/env.py`) -- at or above 30s, the trainer's own `reset()` call
+times out and tears down the connection before the mod's budget-expiry check
+ever runs, which trades the mod's own lightweight "log where it got stuck,
+drop, let the trainer reconnect" path for the trainer's heavyweight
+wedged-instance recovery (full supervisor relaunch) on every cold boot --
+exactly the failure the design below avoids. A cold boot-to-fight
+legitimately runs longer than one 22.5s budget; `trainer/hkrl/env.py`
+documents this as intentional: a dropped/expired reset is retried by
+reconnecting, and because menu/scene progress (title screen -> save select
+-> stood up at the bench -> walk-to-statue -> challenge menu) persists
+across drops, successive resets ratchet forward -- each one picking up
+further along than the last -- until the fight is live. A cold boot is
+therefore expected to span SEVERAL 22.5s budgets, never one long one. Mid-run
+resets (~9s total) fit comfortably inside a single budget either way.
+
+**The real gap the ratchet exposed (also verified in-game 2026-07-21):** the
+40s budget masked, but did not cause, a second bug in the ratchet itself.
+On the ratchet's second (or later) attempt, `ResetMacro.Reset()` zeroes
+`statueMenuLatched`, so the fresh attempt re-derives its branch purely from
+knight position and restarts at `workshop-settling` -> `step-off-statue` --
+but the PRIOR attempt's challenge menu can still be open on screen (its
+budget expired, or its connection dropped, before the resulting scene change
+was ever observed). `step-off-statue`'s own `step-off-menu-recover`
+stall-clear pulsed a **blind** `Jump` confirm into that leftover menu -- no
+tier read, no gate -- bypassing the tier gate entirely. Observed twice: a
+scene change straight into `GG_Hornet_1` during `step-off-statue`, the
+`statue-menu` branch never reached that reset at all.
+
+**Fix:** the tier gate's decision table (unchanged itself -- read tier, one
+`SelectAttunedChallengeTier()` attempt logged, `ConfirmAttunedChallenge()`
+latched, blind-confirm last resort) is hoisted out of the `statue-menu`
+branch into `ResetMacro.GateConfirm()` (`mod/EpisodeManager.cs`) and invoked
+from ONE site at the end of the `GG_Workshop` scene handling in `Tick()`,
+after branch selection, on every tick where `StateReader
+.IsChallengeMenuOpen()` reads true -- regardless of which branch
+(`workshop-settling`, `step-off-statue`, `walk-to-statue`, `statue-menu`)
+position-based selection landed on. Its return value overrides `b.Jump` --
+the confirm-capable input -- for that tick; branch-generated movement inputs
+(`Left`/`Right`/`Up`) are computed separately and are left alone. When the
+menu is not open, the gate is not invoked and every branch behaves exactly
+as before the hoist; the `statue-menu` branch's own Up-press-then-blind-pulse
+behavior before the menu is detected open is preserved as the special case
+it becomes (it is the one branch that itself presses Up to open the menu).
+`tierGateAttempts`/`attunedConfirmedViaLoadBoss`/`blindConfirmFallbackLogged`
+now reset whenever `IsChallengeMenuOpen()` reads false on ANY `GG_Workshop`
+tick (previously only checked inside the `statue-menu` branch), matching
+their existing "zeroed every tick the menu is not open" contract.
