@@ -54,9 +54,69 @@
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: radial-gradient(1100px 520px at 50% -140px, #131a2b 0%, var(--page) 62%) fixed var(--page);
+    /* The atmosphere (glow, fog, motes, vignette) lives in .void so it can
+       layer and animate independently; the body is just the black. */
+    background: var(--page);
     color: var(--ink);
     font: 14px/1.5 var(--body);
+  }
+
+  /* ---- The main-menu void: pale glow, drifting fog banks, rising motes,
+     dark-edged vignette. Fixed and non-interactive; sits behind all
+     content (panels carry their own surfaces, so readability is theirs). */
+  .void { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+  .void::before {
+    content: ""; position: absolute; inset: -20%;
+    /* The menu's light is bone-pale, not blue: a faint warm glow high
+       center, over the cold slate depth below. */
+    background:
+      radial-gradient(920px 500px at 50% 15%, rgba(196, 200, 190, 0.07), transparent 62%),
+      radial-gradient(700px 360px at 50% 12%, rgba(146, 168, 205, 0.055), transparent 60%),
+      radial-gradient(1500px 950px at 50% 60%, rgba(13, 19, 33, 0.9), transparent 76%);
+  }
+  .void::after {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(120% 92% at 50% 42%, transparent 48%, rgba(1, 2, 4, 0.8) 100%);
+  }
+  .fog { position: absolute; left: -50%; width: 200%; height: 46%; bottom: -6%;
+         filter: blur(38px); opacity: 0.5; }
+  .fog.f1 {
+    opacity: 0.6;
+    background:
+      radial-gradient(48% 85% at 22% 78%, #2b3c5c 0%, transparent 70%),
+      radial-gradient(38% 70% at 58% 92%, #23324e 0%, transparent 70%),
+      radial-gradient(42% 75% at 85% 80%, #2a3a58 0%, transparent 72%);
+    animation: fog-drift 150s ease-in-out infinite alternate;
+  }
+  .fog.f2 {
+    bottom: -12%; height: 42%; opacity: 0.42;
+    background:
+      radial-gradient(45% 80% at 35% 85%, #3a4d72 0%, transparent 70%),
+      radial-gradient(30% 55% at 60% 70%, #46587c 0%, transparent 64%),
+      radial-gradient(35% 65% at 78% 78%, #32456a 0%, transparent 68%);
+    animation: fog-drift 110s ease-in-out infinite alternate-reverse;
+  }
+  .fog.f3 {
+    top: -14%; bottom: auto; height: 34%; opacity: 0.22; filter: blur(46px);
+    background:
+      radial-gradient(40% 80% at 30% 15%, #1d2a44 0%, transparent 70%),
+      radial-gradient(45% 70% at 75% 8%, #16223a 0%, transparent 72%);
+    animation: fog-drift 180s ease-in-out infinite alternate;
+  }
+  @keyframes fog-drift { from { transform: translateX(-6%); } to { transform: translateX(6%); } }
+  .mote { position: absolute; bottom: -12px; border-radius: 50%;
+          background: rgba(190, 210, 240, 0.8); filter: blur(1px);
+          box-shadow: 0 0 6px rgba(120, 170, 240, 0.7);
+          animation: mote-rise linear infinite; opacity: 0; }
+  @keyframes mote-rise {
+    0%   { transform: translate(0, 0); opacity: 0; }
+    8%   { opacity: var(--mote-a, 0.5); }
+    85%  { opacity: var(--mote-a, 0.5); }
+    100% { transform: translate(var(--mote-dx, 20px), calc(-100vh - 40px)); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fog { animation: none; }
+    .mote { display: none; }
   }
   .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
 
@@ -195,6 +255,11 @@
 </style>
 </head>
 <body>
+<div class="void" aria-hidden="true">
+  <div class="fog f3"></div>
+  <div class="fog f2"></div>
+  <div class="fog f1"></div>
+</div>
 <div class="wrap">
   <header>
     <div>
@@ -304,6 +369,25 @@
 
 <script>
 "use strict";
+
+/* ---------- the void's motes (menu dust drifting up through the dark) ---------- */
+(function summonMotes() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const voidEl = document.querySelector(".void");
+  for (let i = 0; i < 16; i++) {
+    const m = document.createElement("div");
+    m.className = "mote";
+    const size = 2 + Math.random() * 2.5;
+    m.style.width = m.style.height = size.toFixed(1) + "px";
+    m.style.left = (Math.random() * 100).toFixed(1) + "%";
+    m.style.setProperty("--mote-a", (0.25 + Math.random() * 0.4).toFixed(2));
+    m.style.setProperty("--mote-dx", ((Math.random() - 0.5) * 120).toFixed(0) + "px");
+    m.style.animationDuration = (26 + Math.random() * 30).toFixed(1) + "s";
+    // Negative delay: the field is mid-drift on load, not queued at the floor.
+    m.style.animationDelay = (-Math.random() * 40).toFixed(1) + "s";
+    voidEl.appendChild(m);
+  }
+})();
 const POLL_MS = 10000;
 const state = { runId: null, run: null, runs: [] };
 const SUMMON = location.pathname === "/summon";
