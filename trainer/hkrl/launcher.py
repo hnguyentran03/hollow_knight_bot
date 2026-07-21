@@ -254,17 +254,25 @@ def delete(root, run_id) -> str:
     file activity -- a terminal-started training process is invisible to
     the pidfiles, but it cannot hide its mtimes.
     """
+    if not run_id:
+        raise ValueError("run_id is required")
     run_id = _validate({"run_id": run_id})["run_id"]
     root = Path(root).expanduser()
     run_dir = root / "runs" / run_id
-    if not run_dir.is_dir():
-        raise ValueError(f"no run named {run_id!r}")
     with _lock:
+        # Everything inside the lock, like launch()/stop(): otherwise two
+        # concurrent deletes of one id both pass is_dir(), and the loser
+        # rglobs a directory the winner already moved -- an uncaught
+        # FileNotFoundError surfacing as a 500 instead of a clean 404.
+        if not run_dir.is_dir():
+            raise ValueError(f"no run named {run_id!r}")
         active = status(root)
         if active is not None and active.get("run_id") == run_id:
             raise RuntimeError(f"{run_id!r} is the active run; stop it first")
-        newest = max((p.stat().st_mtime for p in run_dir.rglob("*")),
-                     default=run_dir.stat().st_mtime)
+        # lstat, not stat: a broken symlink under the run dir would make
+        # stat() raise instead of reporting the link's own mtime.
+        newest = max((p.lstat().st_mtime for p in run_dir.rglob("*")),
+                     default=run_dir.lstat().st_mtime)
         if time.time() - newest < LIVE_WINDOW_S:
             raise RuntimeError(
                 f"{run_id!r} shows activity in the last {LIVE_WINDOW_S}s; "

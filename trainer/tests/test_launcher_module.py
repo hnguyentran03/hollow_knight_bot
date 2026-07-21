@@ -315,3 +315,9 @@ def test_delete_rejects_missing_and_bad_run_ids(tmp_path):
         launcher.delete(tmp_path, "nope")
     with pytest.raises(ValueError):
         launcher.delete(tmp_path, "../escape")
+
+
+def test_delete_requires_a_run_id(tmp_path):
+    for bad in (None, ""):
+        with pytest.raises(ValueError):
+            launcher.delete(tmp_path, bad)

@@ -252,19 +252,22 @@
   #resume-dialog, #delete-dialog {
     background: var(--raised); color: var(--ink);
     border: 1px solid var(--border); border-radius: 4px;
-    padding: 18px 20px; min-width: 320px;
+    padding: 18px 20px; width: 360px; max-width: calc(100vw - 32px);
   }
   #resume-dialog::backdrop, #delete-dialog::backdrop { background: rgba(2, 3, 6, 0.65); }
-  #resume-dialog h2, #delete-dialog h2 { font-family: var(--display); font-size: 17px; font-weight: 400; letter-spacing: 0.04em; margin: 0 0 6px; }
-  #resume-dialog .resume-facts, #delete-dialog .resume-facts { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
-  #resume-dialog .choice { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
-  #resume-dialog input[type="number"] {
-    width: 140px; font: inherit; color: var(--ink); background: var(--surface);
-    border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px;
-    margin: 2px 0 12px 26px;
+  #resume-dialog form, #delete-dialog form { display: flex; flex-direction: column; align-items: stretch; }
+  #resume-dialog h2, #delete-dialog h2 { font-family: var(--display); font-size: 17px; font-weight: 400; letter-spacing: 0.04em; text-transform: none; margin: 0 0 6px; }
+  #resume-dialog .resume-facts, #delete-dialog .resume-facts { color: var(--ink-2); font-size: 13px; margin: 0 0 14px; }
+  #resume-dialog .choice { display: flex; align-items: center; gap: 8px; padding: 3px 0; margin: 0; font-family: var(--body); font-size: 14px; letter-spacing: normal; text-transform: none; color: var(--ink); }
+  #resume-dialog .choice input { width: auto; margin: 0; }
+  #resume-dialog #resume-extra {
+    width: 160px; font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+    margin: 6px 0 4px 24px;
   }
-  #resume-dialog .dialog-actions, #delete-dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
-  #delete-dialog .delete-note { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 340px; }
+  #resume-dialog .dialog-actions, #delete-dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  #delete-dialog .delete-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
+  #delete-dialog .delete-note code { color: var(--ink-2); }
   .active-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--ink-2); }
   #launch-log {
     margin: 10px 0 0; padding: 8px 10px; max-height: 260px; overflow: auto;
@@ -333,41 +336,45 @@
       <h2>Previous runs</h2>
       <div id="prev-runs-list"></div>
     </div>
-    <dialog id="resume-dialog">
-      <form method="dialog">
-        <h2 id="resume-title">Resume</h2>
-        <p class="resume-facts" id="resume-facts"></p>
-        <label class="choice">
-          <input type="radio" name="resume-mode" id="resume-finish" checked>
-          <span id="resume-finish-label">Finish the original target</span>
-        </label>
-        <label class="choice">
-          <input type="radio" name="resume-mode" id="resume-add">
-          <span>Add more steps:</span>
-        </label>
-        <input type="number" id="resume-extra" min="1" value="500000"
-               aria-label="Additional steps to collect">
-        <div class="dialog-actions">
-          <button type="submit" class="btn" value="resume">Resume</button>
-          <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
-        </div>
-      </form>
-    </dialog>
-    <dialog id="delete-dialog">
-      <form method="dialog">
-        <h2 id="delete-title">Delete run</h2>
-        <p class="resume-facts" id="delete-facts"></p>
-        <p class="delete-note">Moves the run's directory to
-          <code>trash/</code> under the dashboard root. Nothing is
-          destroyed until you empty that folder yourself.</p>
-        <div class="dialog-actions">
-          <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
-          <button type="submit" class="btn danger" value="delete">Move to trash</button>
-        </div>
-      </form>
-    </dialog>
     <div class="error" id="launch-error" hidden></div>
   </div>
+
+  <!-- Dialogs live OUTSIDE .launch: nested, the panel's own form/label/input
+       rules (grid layout, uppercase labels) bleed in and scramble them. A
+       <dialog> renders in the top layer regardless of DOM position. -->
+  <dialog id="resume-dialog">
+    <form method="dialog">
+      <h2 id="resume-title">Resume</h2>
+      <p class="resume-facts" id="resume-facts"></p>
+      <label class="choice">
+        <input type="radio" name="resume-mode" id="resume-finish" checked>
+        <span id="resume-finish-label">Finish the original target</span>
+      </label>
+      <label class="choice">
+        <input type="radio" name="resume-mode" id="resume-add">
+        <span>Add more steps:</span>
+      </label>
+      <input type="number" id="resume-extra" min="1" value="500000"
+             aria-label="Additional steps to collect">
+      <div class="dialog-actions">
+        <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
+        <button type="submit" class="btn" value="resume">Resume</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="delete-dialog">
+    <form method="dialog">
+      <h2 id="delete-title">Delete run</h2>
+      <p class="resume-facts" id="delete-facts"></p>
+      <p class="delete-note">Moves the run's directory to
+        <code>trash/</code> under the dashboard root. Nothing is
+        destroyed until you empty that folder yourself.</p>
+      <div class="dialog-actions">
+        <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
+        <button type="submit" class="btn danger" value="delete">Move to trash</button>
+      </div>
+    </form>
+  </dialog>
 
   <div id="content" hidden>
     <div class="bossbar">
@@ -906,6 +913,10 @@ let resumeRun = null;  // the /api/runs summary row the open dialog is for
 
 function openResumeDialog(r) {
   resumeRun = r;
+  // Escape closes a dialog WITHOUT setting returnValue, leaving whatever a
+  // prior confirm set -- so clear it, or an Escape-dismiss here could
+  // replay the last "resume".
+  resumeDialog.returnValue = "";
   const remaining = (r.target_timestep || 0) - r.timestep;
   document.getElementById("resume-title").textContent = "Resume " + r.id;
   document.getElementById("resume-facts").textContent =
@@ -946,6 +957,7 @@ let deleteRun = null;
 
 function openDeleteDialog(r) {
   deleteRun = r;
+  deleteDialog.returnValue = "";  // see openResumeDialog: Escape leaves it stale
   document.getElementById("delete-title").textContent = "Delete " + r.id;
   document.getElementById("delete-facts").textContent =
     fmtK(r.timestep) + " steps" +
