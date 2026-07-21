@@ -116,6 +116,29 @@ namespace HKRLBot
             return s;
         }
 
+        // Whether the boss statue's challenge/difficulty menu is currently
+        // open, independent of whether a tier is selected within it. Exposed
+        // separately from ReadSelectedChallengeTier() below because a
+        // trainer-driven run (2026-07-21) showed those two questions are NOT
+        // interchangeable: with the game window unfocused/automated, the
+        // menu opens with NO initial EventSystem selection at all (the
+        // engine's select-on-open apparently depends on window focus), so
+        // ReadSelectedChallengeTier() read -1 through an ENTIRE statue-menu
+        // phase in that run -- the same -1 it returns when the menu isn't
+        // open yet. A caller that only sees that reader cannot tell "menu
+        // not open" apart from "menu open, nothing selected", and the old
+        // gate collapsed both into "proceed unchanged", which meant the
+        // tier gate never actually verified anything in that run. This
+        // method lets EpisodeManager split the two cases: menu open,
+        // whatever ReadSelectedChallengeTier() says. Exception-safe: any
+        // FindObjectOfType failure reads as "not open" (false), never
+        // throws.
+        public bool IsChallengeMenuOpen()
+        {
+            try { return UnityEngine.Object.FindObjectOfType<BossChallengeUI>() != null; }
+            catch { return false; }
+        }
+
         // The challenge menu's currently-selected difficulty tier
         // (0=Attuned, 1=Ascended, 2=Radiant), or -1 when the menu is not
         // open or the signal cannot be read. The menu-open check
@@ -129,6 +152,20 @@ namespace HKRLBot
         // this signal -- EventSystem.current.currentSelectedGameObject
         // compared against the three tier buttons -- was identified
         // in-game (verified 0->1->2->0 while a human cycled tiers).
+        //
+        // Trainer-context caveat (2026-07-21, verified in a real N=1 run):
+        // with the game window unfocused/automated, opening the menu does
+        // NOT auto-select a tier the way it does for a focused human
+        // session -- currentSelectedGameObject stays null right through the
+        // menu-open window, so this reads -1 for the ENTIRE visit, not just
+        // before the menu opens. That -1 is still correct (nothing IS
+        // selected), but it means -1 no longer distinguishes "menu not open"
+        // from "menu open, unselected" in this environment -- callers that
+        // need that distinction should check IsChallengeMenuOpen() above
+        // first. EpisodeManager's statue-menu gate does exactly that: on an
+        // open-but-unselected menu it calls SelectAttunedChallengeTier()
+        // itself rather than waiting for a selection that a headless/
+        // unfocused game will never produce on its own.
         public int ReadSelectedChallengeTier()
         {
             var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();

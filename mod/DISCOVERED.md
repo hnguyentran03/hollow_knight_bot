@@ -161,7 +161,42 @@ Implemented in `mod/StateReader.cs` as `ReadSelectedChallengeTier()` and
 `SelectAttunedChallengeTier()`, and wired into the statue-menu branch of
 `ResetMacro.Tick()` in `mod/EpisodeManager.cs`: the confirm pulse only fires
 when the tier reads `0` (Attuned); a nonzero tier triggers the correction
-instead of a confirm that cycle; a `-1` reading (menu not open yet, or a
-broken signal) lets the previous unconditional confirm timing proceed,
-logged once every 2s so a broken signal is visible in ModLog instead of
-silently reverting to a blind confirm.
+instead of a confirm that cycle.
+
+**Trainer-context correction (verified in a real N=1 training run,
+2026-07-21):** the `-1` reading is NOT reliably "menu not open yet, or a
+broken signal" -- it also covers "menu open, nothing selected", and in a
+trainer-driven (unfocused/automated) game window that second case is the
+NORMAL one, not an edge case. A live run showed `ReadSelectedChallengeTier()`
+returning `-1` through the ENTIRE statue-menu phase of every reset,
+including the cycle right before the confirm landed on an open menu -- so
+the original gate (which let the existing confirm timing proceed unchanged
+on any `-1`) never actually verified a tier in that run; every fight entry
+was the blind-confirm fallback. A manual, focused session did not show this:
+the reader read live `0`/`1`/`2` as a human cycled tiers. Root cause: with
+the game window unfocused/automated, the menu's select-on-open never fires
+(Unity's EventSystem has no `currentSelectedGameObject` when the menu
+appears), so "menu open but unselected" and "menu not open" collapse into
+the same `-1`.
+
+**Fix:** `StateReader.cs` adds `IsChallengeMenuOpen()`
+(`FindObjectOfType<BossChallengeUI>() != null`, exception-safe), letting
+`EpisodeManager`'s gate split the two cases the old code couldn't tell
+apart:
+- menu not open: proceed unchanged, no log (this fires on every normal
+  pre-open window and previously spammed a "gate inactive" line for no
+  reason).
+- menu open, tier `0`: allow the confirm (silent, healthy path).
+- menu open, tier `>0`: correct to Attuned, veto the confirm (unchanged).
+- menu open, tier `-1`: call `SelectAttunedChallengeTier()` and veto the
+  confirm, up to 2 attempts per statue visit (logged per attempt). If still
+  `-1` after 2 attempts, fall back to the blind confirm with one loud log
+  line -- the gate never withholds the confirm indefinitely, since starving
+  the macro turns a readability problem into a dead run (budget expiry ->
+  `InstanceDown`), and the blind confirm is the pre-gate behavior already
+  verified to land Attuned on a fresh process.
+
+`SetSelectedGameObject` is focus-independent (it writes engine state
+directly rather than relying on input-driven UI navigation), which is why
+the mod can select Attuned itself even though the game never does so on its
+own in this environment.
