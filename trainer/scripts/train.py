@@ -176,6 +176,23 @@ class StopOnFlag(BaseCallback):
         return not any(self.locals["dones"])
 
 
+def confirm_ready(auto: bool) -> None:
+    """Gate between "games are up" and "training begins".
+
+    Interactive runs wait for a human to confirm the Hall of Gods.
+    --auto (dashboard-launched: no terminal, nobody to press Enter) skips
+    straight in and lets the boot macro drive the game there, at the cost
+    of a few reset retries.
+    """
+    if auto:
+        print("--auto: skipping the ready prompt; the boot macro will "
+              "drive the game(s) into the Hall of Gods", flush=True)
+        return
+    input("Bring the game(s) to the Hall of Gods near the Hornet statue, "
+          "then press Enter. (A freshly booted game can also challenge "
+          "itself in via the boot macro; expect a few reset retries.) ")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--timesteps", type=int, default=500_000,
@@ -211,6 +228,10 @@ def main() -> None:
                          "their live fights for the whole update. Raise "
                          "only if the net moves off CPU.")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--auto", action="store_true",
+                    help="skip the interactive ready prompt (unattended/"
+                         "dashboard launches); the boot macro drives the "
+                         "game into the Hall of Gods")
     args = ap.parse_args()
     if args.instances < 1:
         sys.exit("--instances must be at least 1")
@@ -297,9 +318,7 @@ def main() -> None:
                   "relaunch-and-reboot recovery. Suppress display sleep for "
                   "the run: caffeinate -d (in another terminal).",
                   flush=True)
-        input("Bring the game(s) to the Hall of Gods near the Hornet statue, "
-              "then press Enter. (A freshly booted game can also challenge "
-              "itself in via the boot macro; expect a few reset retries.) ")
+        confirm_ready(args.auto)
 
         stop = threading.Event()
 
