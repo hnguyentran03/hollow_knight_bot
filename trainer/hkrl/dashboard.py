@@ -70,11 +70,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         path = unquote(self.path.split("?", 1)[0])
         try:
-            body = json.loads(
-                self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                or b"{}")
-        except json.JSONDecodeError:
-            self._json({"error": "invalid JSON body"}, status=400)
+            # A non-numeric Content-Length raises plain ValueError, and
+            # json.JSONDecodeError is itself a ValueError subclass, so one
+            # except clause covers both a malformed header and malformed
+            # JSON. Clamp negative lengths to 0 rather than letting them
+            # reach rfile.read(-1), which would read until EOF.
+            length = max(0, int(self.headers.get("Content-Length", 0)))
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            self._json({"error": "invalid request body"}, status=400)
             return
         try:
             if path == "/api/launch":

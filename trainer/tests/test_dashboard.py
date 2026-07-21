@@ -211,3 +211,16 @@ def test_launcher_log_endpoint_tails_or_404s(base_url, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as err:
         _get(base_url + "/api/launcher/log")
     assert err.value.code == 404
+
+
+def test_malformed_content_length_gets_a_400_not_a_dropped_socket(base_url):
+    import socket
+    host, port = base_url.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as s:
+        s.sendall((f"POST /api/stop HTTP/1.1\r\n"
+                   f"Host: 127.0.0.1:{port}\r\n"
+                   "Content-Type: application/json\r\n"
+                   "Content-Length: banana\r\n"
+                   "Connection: close\r\n\r\n").encode())
+        reply = s.recv(4096).decode(errors="replace")
+    assert " 400 " in reply.splitlines()[0]
