@@ -11,6 +11,8 @@ if [ ! -d "$HK_MANAGED" ]; then
     exit 1
 fi
 
+./ensure_modding_api.sh "$HK_MANAGED"
+
 dotnet build -c Release
 mkdir -p "$HK_MANAGED/Mods/HKRLBot"
 cp "bin/Release/net472/HKRLBot.dll" "$HK_MANAGED/Mods/HKRLBot/"
