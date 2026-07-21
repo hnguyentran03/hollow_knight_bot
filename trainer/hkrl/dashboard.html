@@ -243,6 +243,21 @@
   .prev-run { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
   .prev-run .prev-run-id { font-family: var(--display); font-size: 15px; }
   .prev-run .prev-run-meta { color: var(--muted); font-size: 12px; margin-left: auto; }
+  #resume-dialog {
+    background: var(--raised); color: var(--ink);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 18px 20px; min-width: 320px;
+  }
+  #resume-dialog::backdrop { background: rgba(2, 3, 6, 0.65); }
+  #resume-dialog h2 { font-family: var(--display); font-size: 17px; font-weight: 400; letter-spacing: 0.04em; margin: 0 0 6px; }
+  #resume-dialog .resume-facts { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
+  #resume-dialog .choice { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  #resume-dialog input[type="number"] {
+    width: 140px; font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px;
+    margin: 2px 0 12px 26px;
+  }
+  #resume-dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
   .active-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--ink-2); }
   #launch-log {
     margin: 10px 0 0; padding: 8px 10px; max-height: 260px; overflow: auto;
@@ -311,6 +326,26 @@
       <h2>Previous runs</h2>
       <div id="prev-runs-list"></div>
     </div>
+    <dialog id="resume-dialog">
+      <form method="dialog">
+        <h2 id="resume-title">Resume</h2>
+        <p class="resume-facts" id="resume-facts"></p>
+        <label class="choice">
+          <input type="radio" name="resume-mode" id="resume-finish" checked>
+          <span id="resume-finish-label">Finish the original target</span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="resume-mode" id="resume-add">
+          <span>Add more steps:</span>
+        </label>
+        <input type="number" id="resume-extra" min="1" value="500000"
+               aria-label="Additional steps to collect">
+        <div class="dialog-actions">
+          <button type="submit" class="btn" value="resume">Resume</button>
+          <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
+        </div>
+      </form>
+    </dialog>
     <div class="error" id="launch-error" hidden></div>
   </div>
 
@@ -616,6 +651,9 @@ function render() {
     tsTile.appendChild(mini);
   }
   tiles.appendChild(tsTile);
+  tiles.appendChild(tile("Instances",
+    run.config && run.config.instances ? String(run.config.instances) : "—",
+    "game clients"));
   tiles.appendChild(tile("Steps / hour", st.steps_per_hour ? fmtK(st.steps_per_hour) : "—",
     "session average"));
   tiles.appendChild(tile("ETA", st.live ? fmtDur(st.eta_s) : "—",
@@ -663,7 +701,7 @@ function render() {
   const config = document.getElementById("config");
   config.replaceChildren();
   if (run.config) {
-    const keys = ["started_at", "timesteps", "resumed_from_gen", "gen_every",
+    const keys = ["started_at", "instances", "timesteps", "resumed_from_gen", "gen_every",
                   "n_steps", "batch_size", "n_epochs", "gamma", "ent_coef",
                   "n_stack", "seed", "port"];
     for (const k of keys) {
@@ -813,7 +851,11 @@ async function renderPrevRuns(activeNow) {
     name.textContent = r.id;
     const meta = document.createElement("span");
     meta.className = "prev-run-meta";
-    meta.textContent = (r.live ? "live" : "stopped") +
+    meta.textContent =
+      (r.instances ? r.instances + " instance" + (r.instances === 1 ? "" : "s") + " · " : "") +
+      fmtK(r.timestep) + " / " +
+      (r.target_timestep ? fmtK(r.target_timestep) : "—") + " steps · " +
+      (r.live ? "live" : "stopped") +
       (r.last_activity ? " · " + fmtAgo(r.last_activity) : "");
     const btn = document.createElement("button");
     btn.type = "button";
@@ -822,26 +864,71 @@ async function renderPrevRuns(activeNow) {
     // Live without being panel-managed = started from a terminal; a
     // resume would only 409 or fight for the bridge ports.
     btn.disabled = r.live;
-    btn.addEventListener("click", () => resumeRun(r.id, btn));
+    btn.addEventListener("click", () => openResumeDialog(r));
     row.append(name, meta, btn);
     list.appendChild(row);
   }
 }
 
-async function resumeRun(runId, btn) {
+/* The resume dialog: --timesteps is additive on resume, so "just finish
+   the run" needs the remainder computed for the user. Finishing the
+   original target is the default; adding more is the explicit choice. */
+const resumeDialog = document.getElementById("resume-dialog");
+let resumeRun = null;  // the /api/runs summary row the open dialog is for
+
+function openResumeDialog(r) {
+  resumeRun = r;
+  const remaining = (r.target_timestep || 0) - r.timestep;
+  document.getElementById("resume-title").textContent = "Resume " + r.id;
+  document.getElementById("resume-facts").textContent =
+    fmtK(r.timestep) + " of " +
+    (r.target_timestep ? fmtK(r.target_timestep) : "—") + " steps collected" +
+    (r.instances ? " · " + r.instances + " instance" + (r.instances === 1 ? "" : "s") : "");
+  const finish = document.getElementById("resume-finish");
+  const finishLabel = document.getElementById("resume-finish-label");
+  if (remaining > 0) {
+    finish.disabled = false;
+    finish.checked = true;  // the default: not additive
+    finishLabel.textContent =
+      "Finish the original target (" + fmtK(remaining) + " steps to go)";
+  } else {
+    finish.disabled = true;
+    finishLabel.textContent = "Finish the original target — already reached";
+    document.getElementById("resume-add").checked = true;
+  }
+  resumeDialog.showModal();
+}
+
+// Typing a number is choosing to add: flip the radio with the focus.
+document.getElementById("resume-extra").addEventListener("focus", () => {
+  document.getElementById("resume-add").checked = true;
+});
+
+resumeDialog.addEventListener("close", async () => {
+  const r = resumeRun;
+  resumeRun = null;
+  if (resumeDialog.returnValue !== "resume" || !r) return;
+  const finish = document.getElementById("resume-finish").checked;
+  const extra = parseInt(document.getElementById("resume-extra").value, 10);
+  const timesteps = finish ? (r.target_timestep || 0) - r.timestep : extra;
+  if (!timesteps || timesteps < 1) {
+    launchError("no steps to collect — enter how many to add");
+    return;
+  }
   launchError("");
-  const params = formParams();
-  btn.disabled = true;
   startBtn.disabled = true;
   try {
-    await postJSON("/api/launch", { mode: "resume", run_id: runId,
-                                    timesteps: params.timesteps,
-                                    instances: params.instances,
-                                    gen_every: params.gen_every });
+    // The run's own instance count, not the new-run form's: resuming a
+    // 2-instance run as 1 instance is a choice train.py supports, but it
+    // should never happen by accident of what the form held.
+    await postJSON("/api/launch", { mode: "resume", run_id: r.id,
+                                    timesteps: timesteps,
+                                    instances: r.instances || formParams().instances,
+                                    gen_every: formParams().gen_every });
     refreshLauncher();
-  } catch (err) { launchError(err.message); btn.disabled = false; }
+  } catch (err) { launchError(err.message); }
   finally { startBtn.disabled = false; }
-}
+});
 
 const startBtn = document.getElementById("start-btn");
 const stopBtn = document.getElementById("stop-btn");

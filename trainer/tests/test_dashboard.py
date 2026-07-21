@@ -251,6 +251,7 @@ def test_page_ships_the_launch_panel_and_summon_links(base_url):
     assert b'id="stop-btn"' in body
     assert b'id="summon-link"' in body
     assert b'id="prev-runs"' in body
+    assert b'id="resume-dialog"' in body
     assert b'id="resume-btn"' not in body
 
 
