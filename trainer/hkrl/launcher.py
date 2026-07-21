@@ -16,6 +16,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -26,6 +27,13 @@ TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "train.py"
 # process (it succeeds on both), and an unreaped child would stay a
 # zombie -- and read as "still running" -- for the dashboard's lifetime.
 _children: dict[int, subprocess.Popen] = {}
+
+# ThreadingHTTPServer runs each request on its own thread, so a
+# double-clicked Start button can send two concurrent POSTs. Both would
+# otherwise pass the status() check before either pidfile lands, and the
+# loser's write would leave a live, untracked fleet. launch() and stop()
+# each take this for their whole body.
+_lock = threading.Lock()
 
 
 def _dir(root) -> Path:
@@ -41,7 +49,9 @@ def _alive(pid: int) -> bool:
     if child is not None:
         if child.poll() is None:
             return True
-        del _children[pid]  # reaped; pidfile cleanup follows in status()
+        # pop, not del: two poll threads can race the same exited child,
+        # and the loser's del would raise KeyError into a 500.
+        _children.pop(pid, None)
         return False
     try:
         os.kill(pid, 0)
@@ -59,6 +69,9 @@ def status(root) -> dict | None:
     (reboot, hard crash) so they can never wedge the launch form shut.
     """
     active = None
+    # "*.pid" already excludes the "*.pid.tmp" staging files launch() writes
+    # before its atomic os.replace() -- fnmatch requires the name to end in
+    # ".pid", and ".pid.tmp" ends in ".tmp".
     for pidfile in sorted(_dir(root).glob("*.pid")):
         try:
             rec = json.loads(pidfile.read_text())
@@ -91,6 +104,14 @@ def _validate(params: dict) -> dict:
     # directory name, never a path.
     if "/" in run_id or "\\" in run_id or run_id in (".", ".."):
         raise ValueError("run id must be a plain directory name")
+    # A leading "-" would be smuggled into train.py's own argv parser as a
+    # flag instead of a value, which fails fast and silently. A run id also
+    # becomes a directory name and a pidfile stem; anything long enough to
+    # trip ENAMETOOLONG would otherwise surface as an unhandled OSError.
+    if run_id.startswith("-"):
+        raise ValueError("run id must not start with '-'")
+    if len(run_id) > 64:
+        raise ValueError("run id too long (max 64 chars)")
     clean = {"mode": mode, "run_id": run_id}
     for key in _INT_PARAMS:
         value = params.get(key)
@@ -136,31 +157,56 @@ def launch(root, params: dict) -> str:
     Refuses (RuntimeError) while a launched run is alive: the games own
     the bridge ports, so a second fleet could never come up anyway.
     """
-    if status(root) is not None:
-        raise RuntimeError("a launched run is already active; stop it "
-                           "before starting another")
-    p = _validate(params)
-    if p["mode"] == "resume" \
-            and not (Path(root).expanduser() / "runs" / p["run_id"]).is_dir():
-        raise ValueError(f"no run named {p['run_id']!r} to resume")
-    d = _dir(root)
-    # Pass the already-cleaned dict, not the raw params: command() calls
-    # _validate() again (it's public and validates on its own), and a
-    # second call on raw params with run_id omitted would mint its own
-    # timestamp, desyncing the spawned --run-id from this pidfile's name.
-    # _validate() is idempotent on an already-clean dict, so this is safe.
-    cmd = command(root, p)
-    with (d / f"{p['run_id']}.log").open("ab") as log:
-        # start_new_session: the run must not die with the dashboard, and
-        # it makes the child a process-group leader so stop() can SIGINT
-        # the whole group (caffeinate wrapper included) at once.
-        child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log,
-                                 stderr=subprocess.STDOUT,
-                                 start_new_session=True)
-    _children[child.pid] = child
-    (d / f"{p['run_id']}.pid").write_text(json.dumps(
-        {"run_id": p["run_id"], "pid": child.pid, "started": time.time()}))
-    return p["run_id"]
+    with _lock:
+        if status(root) is not None:
+            raise RuntimeError("a launched run is already active; stop it "
+                               "before starting another")
+        p = _validate(params)
+        run_dir = Path(root).expanduser() / "runs" / p["run_id"]
+        if p["mode"] == "resume":
+            if not run_dir.is_dir():
+                raise ValueError(f"no run named {p['run_id']!r} to resume")
+            # train.py's latest_checkpoint raises FileNotFoundError -- fast
+            # and silent from the page's point of view -- if there is no
+            # generation to resume from yet.
+            if not (run_dir / "generations.jsonl").exists():
+                raise ValueError(
+                    f"run {p['run_id']!r} has no checkpoint to resume from")
+        else:
+            # train.py exits instantly on an existing run dir; catching it
+            # here instead of letting the spawn die is the difference
+            # between a 400 on the page and a run that silently never
+            # started.
+            if run_dir.exists():
+                raise ValueError(
+                    f"run {p['run_id']!r} already exists; resume it or "
+                    "pick another id")
+        d = _dir(root)
+        # Pass the already-cleaned dict, not the raw params: command() calls
+        # _validate() again (it's public and validates on its own), and a
+        # second call on raw params with run_id omitted would mint its own
+        # timestamp, desyncing the spawned --run-id from this pidfile's name.
+        # _validate() is idempotent on an already-clean dict, so this is
+        # safe.
+        cmd = command(root, p)
+        with (d / f"{p['run_id']}.log").open("ab") as log:
+            # start_new_session: the run must not die with the dashboard, and
+            # it makes the child a process-group leader so stop() can SIGINT
+            # the whole group (caffeinate wrapper included) at once.
+            child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log,
+                                     stderr=subprocess.STDOUT,
+                                     start_new_session=True)
+        _children[child.pid] = child
+        # Write-then-rename: the page polls status() every 2s from another
+        # thread, and a reader landing mid-write would parse a truncated
+        # file as corrupt and unlink the pidfile of a run that is very much
+        # alive. os.replace() is atomic on both POSIX and Windows.
+        pidfile = d / f"{p['run_id']}.pid"
+        tmp = d / f"{p['run_id']}.pid.tmp"
+        tmp.write_text(json.dumps(
+            {"run_id": p["run_id"], "pid": child.pid, "started": time.time()}))
+        os.replace(tmp, pidfile)
+        return p["run_id"]
 
 
 def stop(root) -> dict:
@@ -169,19 +215,20 @@ def stop(root) -> dict:
     One SIGINT is the graceful path: train.py's handler finishes the
     episode in progress, saves a final generation, and reaps the games.
     """
-    active = status(root)
-    if active is None:
-        raise RuntimeError("no launched run is active")
-    # status() only just confirmed the pid was alive; it can still exit in
-    # the window between that check and this signal, which would surface
-    # as an uncaught ProcessLookupError instead of stop()'s documented
-    # "nothing to stop" contract.
-    try:
-        os.killpg(os.getpgid(active["pid"]), signal.SIGINT)
-    except ProcessLookupError:
-        raise RuntimeError(
-            "run exited before it could be stopped") from None
-    return active
+    with _lock:
+        active = status(root)
+        if active is None:
+            raise RuntimeError("no launched run is active")
+        # status() only just confirmed the pid was alive; it can still exit
+        # in the window between that check and this signal, which would
+        # surface as an uncaught ProcessLookupError instead of stop()'s
+        # documented "nothing to stop" contract.
+        try:
+            os.killpg(os.getpgid(active["pid"]), signal.SIGINT)
+        except ProcessLookupError:
+            raise RuntimeError(
+                "run exited before it could be stopped") from None
+        return active
 
 
 def tail(root, n: int = 200) -> str | None:

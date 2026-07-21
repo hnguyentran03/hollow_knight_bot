@@ -2,6 +2,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 
 import pytest
@@ -196,6 +197,58 @@ def test_launch_uses_one_run_id_even_when_omitted(tmp_path, stub_trainer,
     assert active is not None and active["run_id"] == "TS000001"
     assert wait_for(lambda: "--run-id TS000001" in
                     _log(tmp_path, "TS000001").read_text(errors="replace"))
+
+
+def test_launch_new_refuses_an_existing_run_dir(tmp_path, stub_trainer):
+    (tmp_path / "runs" / "r1").mkdir(parents=True)
+    with pytest.raises(ValueError):
+        launcher.launch(tmp_path, {"run_id": "r1"})
+
+
+def test_resume_without_a_checkpoint_is_refused(tmp_path, stub_trainer):
+    run_dir = tmp_path / "runs" / "r2"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.jsonl").write_text("{}\n")
+    with pytest.raises(ValueError):
+        launcher.launch(tmp_path, {"mode": "resume", "run_id": "r2"})
+    # Once a checkpoint exists, the same resume proceeds to a spawn.
+    (run_dir / "generations.jsonl").write_text("{}\n")
+    run_id = launcher.launch(tmp_path, {"mode": "resume", "run_id": "r2"})
+    assert run_id == "r2"
+
+
+def test_concurrent_launches_only_one_wins(tmp_path, stub_trainer):
+    barrier = threading.Barrier(2)
+    results = {}
+
+    def go(i):
+        barrier.wait()
+        try:
+            results[i] = ("ok", launcher.launch(tmp_path, {"run_id": f"c{i}"}))
+        except RuntimeError as exc:
+            results[i] = ("err", str(exc))
+
+    threads = [threading.Thread(target=go, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    outcomes = [results[i][0] for i in range(2)]
+    assert sorted(outcomes) == ["err", "ok"]
+    pidfiles = list((tmp_path / "launcher").glob("*.pid"))
+    assert len(pidfiles) == 1
+    launcher.stop(tmp_path)
+
+
+def test_command_rejects_run_id_starting_with_dash(tmp_path, stub_trainer):
+    with pytest.raises(ValueError):
+        launcher.command(tmp_path, {"run_id": "-rf"}, platform="linux")
+
+
+def test_command_rejects_run_id_too_long(tmp_path, stub_trainer):
+    with pytest.raises(ValueError):
+        launcher.command(tmp_path, {"run_id": "x" * 65}, platform="linux")
 
 
 def test_stop_raises_runtime_error_if_process_exits_first(tmp_path,
