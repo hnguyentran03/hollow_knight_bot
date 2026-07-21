@@ -1013,10 +1013,14 @@ async function renderPrevRuns(activeNow) {
     btn.type = "button";
     btn.className = "btn";
     btn.textContent = "Resume";
-    // Disabled only while the panel owns a fleet (then this section is hidden
-    // anyway); a resume that would collide with a live run is refused by the
-    // server and shown inline. See `disabled` above.
+    // Disabled only while the panel owns a fleet (that section is hidden
+    // anyway). A run with no checkpoint (stopped before its first generation,
+    // timestep 0) still resumes: with nothing to resume FROM, the server
+    // restarts it from scratch with its own recorded config -- the dialog says
+    // so. See `disabled` above and openResumeDialog.
+    const noCheckpoint = !r.timestep;
     btn.disabled = disabled;
+    if (noCheckpoint) btn.title = "No checkpoint yet — Resume restarts this run from scratch with its original config";
     btn.addEventListener("click", () => openResumeDialog(r));
     const del = document.createElement("button");
     del.type = "button";
@@ -1052,15 +1056,43 @@ function openResumeDialog(r) {
   // prior confirm set -- so clear it, or an Escape-dismiss here could
   // replay the last "resume".
   resumeDialog.returnValue = "";
+  const title = document.getElementById("resume-title");
+  const facts = document.getElementById("resume-facts");
+  const choices = resumeDialog.querySelectorAll(".choice");
+  const extra = document.getElementById("resume-extra");
+  const confirmBtn = resumeDialog.querySelector('button[value="resume"]');
+  const instanceStr = r.instances
+    ? " · " + r.instances + " instance" + (r.instances === 1 ? "" : "s") : "";
+
+  if (!r.timestep) {
+    // No checkpoint (aborted before its first generation): nothing to resume
+    // FROM, so this restarts the run from scratch with its original config.
+    // Drop the additive-steps choice -- there is no progress to add to -- and
+    // rename the action so the confirm reads honestly.
+    title.textContent = "Restart " + r.id;
+    facts.textContent =
+      "No checkpoint yet — restarts from scratch with the run's original config"
+      + instanceStr + ".";
+    choices.forEach(c => { c.hidden = true; });
+    extra.hidden = true;
+    confirmBtn.textContent = "Restart";
+    resumeDialog.showModal();
+    return;
+  }
+
+  // Normal resume: reveal the choice UI (a prior restart open may have hidden it).
+  choices.forEach(c => { c.hidden = false; });
+  extra.hidden = false;
+  confirmBtn.textContent = "Resume";
   const remaining = (r.target_timestep || 0) - r.timestep;
-  document.getElementById("resume-title").textContent = "Resume " + r.id;
-  document.getElementById("resume-facts").textContent =
+  title.textContent = "Resume " + r.id;
+  facts.textContent =
     fmtK(r.timestep) + " of " +
     (r.target_timestep ? fmtK(r.target_timestep) : "—") + " steps collected" +
-    (r.instances ? " · " + r.instances + " instance" + (r.instances === 1 ? "" : "s") : "");
+    instanceStr;
   const finish = document.getElementById("resume-finish");
   const finishLabel = document.getElementById("resume-finish-label");
-  document.getElementById("resume-extra").value = "500000";  // fresh per open
+  extra.value = "500000";  // fresh per open
   if (remaining > 0) {
     finish.disabled = false;
     finish.checked = true;  // the default: not additive
@@ -1116,23 +1148,30 @@ resumeDialog.addEventListener("close", async () => {
   const r = resumeRun;
   resumeRun = null;
   if (resumeDialog.returnValue !== "resume" || !r) return;
-  const finish = document.getElementById("resume-finish").checked;
-  const extra = parseInt(document.getElementById("resume-extra").value, 10);
-  const timesteps = finish ? (r.target_timestep || 0) - r.timestep : extra;
-  if (!timesteps || timesteps < 1) {
-    launchError("no steps to collect — enter how many to add");
-    return;
+  let body;
+  if (!r.timestep) {
+    // No checkpoint: a bare resume; the server restarts from the run's own
+    // recorded config, so the page sends nothing to override it.
+    body = { mode: "resume", run_id: r.id };
+  } else {
+    const finish = document.getElementById("resume-finish").checked;
+    const extra = parseInt(document.getElementById("resume-extra").value, 10);
+    const timesteps = finish ? (r.target_timestep || 0) - r.timestep : extra;
+    if (!timesteps || timesteps < 1) {
+      launchError("no steps to collect — enter how many to add");
+      return;
+    }
+    // The run's own instance count, not the new-run form's: resuming a
+    // 2-instance run as 1 instance is a choice train.py supports, but it
+    // should never happen by accident of what the form held.
+    body = { mode: "resume", run_id: r.id, timesteps: timesteps,
+             instances: r.instances || formParams().instances,
+             gen_every: formParams().gen_every };
   }
   launchError("");
   startBtn.disabled = true;
   try {
-    // The run's own instance count, not the new-run form's: resuming a
-    // 2-instance run as 1 instance is a choice train.py supports, but it
-    // should never happen by accident of what the form held.
-    await postJSON("/api/launch", { mode: "resume", run_id: r.id,
-                                    timesteps: timesteps,
-                                    instances: r.instances || formParams().instances,
-                                    gen_every: formParams().gen_every });
+    await postJSON("/api/launch", body);
     refreshLauncher();
   } catch (err) { launchError(err.message); }
   finally { startBtn.disabled = false; }

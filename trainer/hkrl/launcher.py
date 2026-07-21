@@ -23,7 +23,7 @@ from pathlib import Path
 
 from hkrl.game import DEFAULT_PORT
 from hkrl.generations import checkpoint_paths
-from hkrl.rundata import LIVE_WINDOW_S
+from hkrl.rundata import LIVE_WINDOW_S, read_jsonl
 
 TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "train.py"
 REPLAY_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "replay.py"
@@ -46,6 +46,50 @@ def _dir(root) -> Path:
     d = Path(root).expanduser() / "launcher"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+# A run the panel stopped drops a marker beside its pidfile. Its purpose is to
+# tell delete() "this run is on its way down by our own hand", so the fresh
+# mtime of the final generation train.py saves on the way out does not read as
+# a still-training run and lock the run out of deletion for LIVE_WINDOW_S. The
+# marker never ends in ".pid", so status()'s "*.pid" scan ignores it.
+def _stop_marker(root, run_id) -> Path:
+    return _dir(root) / f"{run_id}.stopped"
+
+
+def _mark_stopped(root, run_id) -> None:
+    _stop_marker(root, run_id).write_text(
+        json.dumps({"run_id": run_id, "stopped_at": time.time()}))
+
+
+def _clear_stop_marker(root, run_id) -> None:
+    _stop_marker(root, run_id).unlink(missing_ok=True)
+
+
+def _trash(root, run_dir: Path) -> str:
+    """Move a run dir under <root>/trash/<name>-<timestamp>; returns the dest
+    name. A move, never an rmtree -- see delete()'s note; shared by delete()
+    and the checkpoint-less-resume restart so both retire a dir the same way."""
+    trash = Path(root).expanduser() / "trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    dest = trash / f"{run_dir.name}-{time.strftime('%Y%m%d_%H%M%S')}"
+    shutil.move(str(run_dir), str(dest))
+    return dest.name
+
+
+def _restart_params(run_dir: Path) -> dict:
+    """Fresh-start params for an aborted (checkpoint-less) run, recovered from
+    the config its aborted attempt recorded so the rerun matches it. Returns a
+    'new'-mode param dict reusing the same run_id; _validate() (via command())
+    coerces and range-checks it like any other launch."""
+    configs = read_jsonl(run_dir / "config.jsonl")
+    cfg = configs[-1] if configs else {}
+    params = {"mode": "new", "run_id": run_dir.name}
+    for key in _INT_PARAMS:
+        value = cfg.get(key)
+        if value is not None:
+            params[key] = value
+    return params
 
 
 def _alive(pid: int) -> bool:
@@ -175,25 +219,30 @@ def launch(root, params: dict) -> str:
             raise RuntimeError("a launched run is already active; stop it "
                                "before starting another")
         p = _validate(params)
-        run_dir = Path(root).expanduser() / "runs" / p["run_id"]
+        root_dir = Path(root).expanduser()
+        run_dir = root_dir / "runs" / p["run_id"]
         if p["mode"] == "resume":
             if not run_dir.is_dir():
                 raise ValueError(f"no run named {p['run_id']!r} to resume")
-            # train.py's latest_checkpoint raises FileNotFoundError -- fast
-            # and silent from the page's point of view -- if there is no
-            # generation to resume from yet.
             if not (run_dir / "generations.jsonl").exists():
-                raise ValueError(
-                    f"run {p['run_id']!r} has no checkpoint to resume from")
-        else:
+                # Aborted before its first checkpoint: there is nothing to
+                # resume FROM (train.py's latest_checkpoint would raise), so
+                # restart the run fresh with the config its aborted attempt
+                # recorded, reusing the id. Move the empty attempt to trash
+                # (recoverable) and continue below as an ordinary 'new' run.
+                p = _restart_params(run_dir)
+                _trash(root_dir, run_dir)
+        elif run_dir.exists():
             # train.py exits instantly on an existing run dir; catching it
             # here instead of letting the spawn die is the difference
             # between a 400 on the page and a run that silently never
             # started.
-            if run_dir.exists():
-                raise ValueError(
-                    f"run {p['run_id']!r} already exists; resume it or "
-                    "pick another id")
+            raise ValueError(
+                f"run {p['run_id']!r} already exists; resume it or "
+                "pick another id")
+        # A relaunch means this run is active again, so any panel-stop marker
+        # left from a prior stop is stale -- drop it (see delete()).
+        _clear_stop_marker(root_dir, p["run_id"])
         d = _dir(root)
         # Pass the already-cleaned dict, not the raw params: command() calls
         # _validate() again (it's public and validates on its own), and a
@@ -317,6 +366,12 @@ def stop(root) -> dict:
         except ProcessLookupError:
             raise RuntimeError(
                 "run exited before it could be stopped") from None
+        # Record that WE stopped this run: on the way out train.py saves a
+        # final generation, whose fresh mtime would otherwise make delete()'s
+        # recency guard treat the run as still-training and refuse it for
+        # LIVE_WINDOW_S. The marker lets a panel-stopped run be deleted at
+        # once, while a terminal-trained run (no marker) stays guarded.
+        _mark_stopped(root, active["run_id"])
         return active
 
 
@@ -355,16 +410,20 @@ def delete(root, run_id) -> str:
         active = status(root)
         if active is not None and active.get("run_id") == run_id:
             raise RuntimeError(f"{run_id!r} is the active run; stop it first")
+        # The recency guard exists to catch a run a terminal is actively
+        # training -- invisible to the pidfiles, but its mtimes are fresh. A
+        # run the panel itself stopped carries a stop marker, so its own fresh
+        # final-save mtime does not lock it out of deletion; only unmarked
+        # runs (terminal-trained, or crashed mid-write) stay guarded.
         # lstat, not stat: a broken symlink under the run dir would make
         # stat() raise instead of reporting the link's own mtime.
-        newest = max((p.lstat().st_mtime for p in run_dir.rglob("*")),
-                     default=run_dir.lstat().st_mtime)
-        if time.time() - newest < LIVE_WINDOW_S:
-            raise RuntimeError(
-                f"{run_id!r} shows activity in the last {LIVE_WINDOW_S}s; "
-                "if a terminal is training it, stop that first")
-        trash = root / "trash"
-        trash.mkdir(parents=True, exist_ok=True)
-        dest = trash / f"{run_id}-{time.strftime('%Y%m%d_%H%M%S')}"
-        shutil.move(str(run_dir), str(dest))
-        return dest.name
+        if not _stop_marker(root, run_id).exists():
+            newest = max((p.lstat().st_mtime for p in run_dir.rglob("*")),
+                         default=run_dir.lstat().st_mtime)
+            if time.time() - newest < LIVE_WINDOW_S:
+                raise RuntimeError(
+                    f"{run_id!r} shows activity in the last {LIVE_WINDOW_S}s; "
+                    "if a terminal is training it, stop that first")
+        dest = _trash(root, run_dir)
+        _clear_stop_marker(root, run_id)  # the run is gone; drop its marker
+        return dest
