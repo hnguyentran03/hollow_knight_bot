@@ -151,11 +151,16 @@ def scan_runs(root, now: float | None = None) -> list[dict]:
             continue
         run = load_run(d, now=now)
         latest = run["generations"][-1] if run["generations"] else {}
+        config = run["config"] or {}
         summaries.append({
             "id": run["id"],
             "live": run["status"]["live"],
             "last_activity": run["status"]["last_activity"],
             "timestep": run["status"]["timestep"],
+            # The summon page's run rows state a run's shape without a
+            # second fetch; None where an older config predates the field.
+            "instances": config.get("instances"),
+            "target_timestep": run["status"]["target_timestep"],
             "mean_boss_damage": latest.get("mean_boss_damage"),
             "win_rate": latest.get("win_rate"),
         })

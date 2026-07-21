@@ -13,12 +13,15 @@ not coexist anyway.
 """
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+from hkrl.rundata import LIVE_WINDOW_S
 
 TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "train.py"
 
@@ -238,3 +241,44 @@ def tail(root, n: int = 200) -> str | None:
         return None
     lines = logs[-1].read_text(errors="replace").splitlines()
     return "\n".join(lines[-n:])
+
+
+def delete(root, run_id) -> str:
+    """Move a run directory to <root>/trash/<id>-<timestamp>; returns the
+    trashed directory's name.
+
+    A trash move, never an rmtree: a run dir holds hours of checkpoints,
+    and this project has already lived through one mis-writes-destroyed-
+    data incident (see backup_saves). Emptying trash/ stays a deliberate,
+    manual act. Refuses the active launched run and any run with fresh
+    file activity -- a terminal-started training process is invisible to
+    the pidfiles, but it cannot hide its mtimes.
+    """
+    if not run_id:
+        raise ValueError("run_id is required")
+    run_id = _validate({"run_id": run_id})["run_id"]
+    root = Path(root).expanduser()
+    run_dir = root / "runs" / run_id
+    with _lock:
+        # Everything inside the lock, like launch()/stop(): otherwise two
+        # concurrent deletes of one id both pass is_dir(), and the loser
+        # rglobs a directory the winner already moved -- an uncaught
+        # FileNotFoundError surfacing as a 500 instead of a clean 404.
+        if not run_dir.is_dir():
+            raise ValueError(f"no run named {run_id!r}")
+        active = status(root)
+        if active is not None and active.get("run_id") == run_id:
+            raise RuntimeError(f"{run_id!r} is the active run; stop it first")
+        # lstat, not stat: a broken symlink under the run dir would make
+        # stat() raise instead of reporting the link's own mtime.
+        newest = max((p.lstat().st_mtime for p in run_dir.rglob("*")),
+                     default=run_dir.lstat().st_mtime)
+        if time.time() - newest < LIVE_WINDOW_S:
+            raise RuntimeError(
+                f"{run_id!r} shows activity in the last {LIVE_WINDOW_S}s; "
+                "if a terminal is training it, stop that first")
+        trash = root / "trash"
+        trash.mkdir(parents=True, exist_ok=True)
+        dest = trash / f"{run_id}-{time.strftime('%Y%m%d_%H%M%S')}"
+        shutil.move(str(run_dir), str(dest))
+        return dest.name

@@ -251,6 +251,8 @@ def test_page_ships_the_launch_panel_and_summon_links(base_url):
     assert b'id="stop-btn"' in body
     assert b'id="summon-link"' in body
     assert b'id="prev-runs"' in body
+    assert b'id="resume-dialog"' in body
+    assert b'id="delete-dialog"' in body
     assert b'id="resume-btn"' not in body
 
 
@@ -260,3 +262,24 @@ def test_summon_serves_the_same_page_as_root(base_url):
     assert status == 200
     assert ctype.startswith("text/html")
     assert body == body_root
+
+
+def test_post_delete_delegates_and_maps_errors(base_url, monkeypatch):
+    monkeypatch.setattr(dash.launcher, "delete",
+                        lambda root, run_id: f"{run_id}-20260721_000000")
+    status, data = _post(base_url + "/api/delete", {"run_id": "r1"})
+    assert status == 200 and data == {"trashed": "r1-20260721_000000"}
+
+    def busy(root, run_id):
+        raise RuntimeError("'r1' is the active run; stop it first")
+    monkeypatch.setattr(dash.launcher, "delete", busy)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/delete", {"run_id": "r1"})
+    assert err.value.code == 409
+
+    def gone(root, run_id):
+        raise ValueError("no run named 'nope'")
+    monkeypatch.setattr(dash.launcher, "delete", gone)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/delete", {"run_id": "nope"})
+    assert err.value.code == 400

@@ -21,9 +21,11 @@ def _gen(gen, timestep, wall, **extra):
     return line
 
 
-def _write_config(run_dir, timesteps=100_000, resumed_from_gen=None):
+def _write_config(run_dir, timesteps=100_000, resumed_from_gen=None,
+                  instances=1):
     with (run_dir / "config.jsonl").open("a") as f:
         f.write(json.dumps({"timesteps": timesteps, "run_id": "r",
+                            "instances": instances,
                             "resumed_from_gen": resumed_from_gen,
                             "started_at": "2026-07-20T01:00:00"}) + "\n")
 
@@ -156,6 +158,28 @@ def test_scan_runs_sorts_by_recent_activity_and_summarizes(tmp_path):
     assert found[1]["live"] is False
     assert found[0]["timestep"] == 15_000
     assert found[0]["mean_boss_damage"] == 0.6
+
+
+def test_scan_runs_carries_instances_and_target(tmp_path):
+    """The summon page's run rows show a run's shape (instances, current /
+    target steps) without a second fetch, so the summary carries them."""
+    d = tmp_path / "runs" / "shaped"
+    d.mkdir(parents=True)
+    _write_config(d, timesteps=100_000, instances=2)
+    _write_manifest(d, [_gen(1, 15_000, 1000.0)])
+    found = scan_runs(tmp_path, now=0)
+    assert found[0]["instances"] == 2
+    assert found[0]["target_timestep"] == 100_000
+
+    # A pre-feature config without an instances field degrades to None.
+    d2 = tmp_path / "runs" / "old-style"
+    d2.mkdir(parents=True)
+    with (d2 / "config.jsonl").open("a") as f:
+        f.write(json.dumps({"timesteps": 50_000, "run_id": "r"}) + "\n")
+    found = scan_runs(tmp_path, now=0)
+    old = next(r for r in found if r["id"] == "old-style")
+    assert old["instances"] is None
+    assert old["target_timestep"] == 50_000
 
 
 def test_scan_runs_of_a_missing_root_is_empty(tmp_path):
