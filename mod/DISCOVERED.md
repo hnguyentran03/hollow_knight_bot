@@ -179,24 +179,105 @@ the game window unfocused/automated, the menu's select-on-open never fires
 appears), so "menu open but unselected" and "menu not open" collapse into
 the same `-1`.
 
-**Fix:** `StateReader.cs` adds `IsChallengeMenuOpen()`
-(`FindObjectOfType<BossChallengeUI>() != null`, exception-safe), letting
-`EpisodeManager`'s gate split the two cases the old code couldn't tell
-apart:
+**Fix (superseded below by the LoadBoss(0) entry point):** `StateReader.cs`
+adds `IsChallengeMenuOpen()` (`FindObjectOfType<BossChallengeUI>() != null`,
+exception-safe), letting `EpisodeManager`'s gate split the two cases the old
+code couldn't tell apart:
 - menu not open: proceed unchanged, no log (this fires on every normal
   pre-open window and previously spammed a "gate inactive" line for no
   reason).
 - menu open, tier `0`: allow the confirm (silent, healthy path).
-- menu open, tier `>0`: correct to Attuned, veto the confirm (unchanged).
-- menu open, tier `-1`: call `SelectAttunedChallengeTier()` and veto the
-  confirm, up to 2 attempts per statue visit (logged per attempt). If still
-  `-1` after 2 attempts, fall back to the blind confirm with one loud log
-  line -- the gate never withholds the confirm indefinitely, since starving
-  the macro turns a readability problem into a dead run (budget expiry ->
-  `InstanceDown`), and the blind confirm is the pre-gate behavior already
-  verified to land Attuned on a fresh process.
+- menu open, tier `>0` or `-1`: call `SelectAttunedChallengeTier()` and veto
+  the confirm.
 
 `SetSelectedGameObject` is focus-independent (it writes engine state
 directly rather than relying on input-driven UI navigation), which is why
 the mod can select Attuned itself even though the game never does so on its
-own in this environment.
+own in this environment. **However** -- see the next section -- a second
+real run showed even this write-side call does not reliably stick when the
+window is unfocused, which is why the gate now falls through to
+`LoadBoss(0)` rather than retrying `SelectAttunedChallengeTier()`
+indefinitely.
+
+---
+
+## 5. Unfocused EventSystem selection is refused outright; `LoadBoss(int)` entry
+
+**Verified in a second real N=1 trainer run (2026-07-21, game unfocused).**
+Section 4's fix above assumed `SetSelectedGameObject` would land the
+Attuned correction even when the game window is unfocused/automated (it
+writes engine state directly, not through input navigation, so this seemed
+focus-independent). That assumption did not hold: the gate's
+`SelectAttunedChallengeTier()` fired twice ("attempt 1/2", "attempt 2/2" in
+the old 2-attempt scheme) and the very next
+`ReadSelectedChallengeTier()` re-read stayed `-1` both times -- the write
+never stuck. So *writing* the EventSystem selection is refused unfocused,
+the same as the engine never producing one on its own (section 4). The old
+fallback for this case was a blind confirm (press Jump with no tier
+verification), which enters whatever tier the menu happens to default to --
+not a real fix, just a documented last resort.
+
+**Entry point that bypasses the EventSystem/focus dependency entirely:**
+the disassembled `BossChallengeUI` has `LoadBoss(int level)` (and an
+overload `LoadBoss(int level, bool doHideAnim)`) -- the method the tier
+buttons' own `OnClick` invokes. `level 0` = Attuned. Calling it requests the
+tier BY VALUE: no highlight, no `EventSystem.current`, no window-focus
+dependency of any kind.
+
+Implemented in `mod/StateReader.cs` as `ConfirmAttunedChallenge()`: finds
+the open `BossChallengeUI` (null -> `false`), then invokes `LoadBoss` via
+reflection --
+
+```
+ui.GetType().GetMethod("LoadBoss",
+    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+    null, new[] { typeof(int) }, null)
+    .Invoke(ui, new object[] { 0 })
+```
+
+-- rather than a direct call, because `LoadBoss`'s member visibility on the
+disassembled type is unverified and there are two overloads; reflection
+with an explicit `int`-only parameter filter finds the right one regardless
+of visibility. Returns `true` on success, `false` on any failure (null UI,
+missing method, or an exception from inside `LoadBoss` itself) --
+exception-safe like this file's other helpers.
+
+**Updated decision table** (`EpisodeManager.cs`'s `ResetMacro.Tick()`
+statue-menu branch):
+- menu not open: proceed unchanged, no log (silent, unchanged from
+  section 4).
+- menu open, tier `0` (Attuned): allow the confirm pulse (silent, healthy
+  path, unchanged).
+- menu open, tier `-1` or `>0`: **one** `SelectAttunedChallengeTier()`
+  attempt (reduced from 2 -- selection is now known-refused unfocused, so a
+  second attempt only costs time; one attempt still lets a focused/manual
+  session, where the correction actually sticks, resolve here), veto the
+  confirm, log the attempt including the selection call's `bool` return.
+- still not Attuned the next cycle: call `ConfirmAttunedChallenge()`
+  (`LoadBoss(0)`). On `true`: log "entering Attuned directly via
+  LoadBoss(0)", veto the manual confirm pulse (the scene change into
+  `GG_Hornet_1` follows on its own), and latch so the gate does not
+  re-invoke `LoadBoss` every subsequent cycle this visit. The latch resets
+  whenever the menu is not open (mirroring `tierGateAttempts`), so every
+  fresh statue visit gets its own attempt.
+- only if `ConfirmAttunedChallenge()` itself returns `false` (null UI,
+  reflection miss, or an exception inside `LoadBoss`): fall back to the
+  pre-existing loud blind-confirm log line and blind confirm -- the gate
+  never withholds the confirm indefinitely, since starving the macro turns
+  a readability problem into a dead run (budget expiry -> `InstanceDown`).
+  Backstop B (`EpisodeManager.TickReset`'s `fightLive` HP-ceiling check)
+  still guards against a wrong tier slipping through even here.
+
+**Budget raise (same run):** a cold boot from the title screen measured
+~8.8s to reach `GG_Workshop` plus ~11.6s walking to the statue (including
+an occasional multi-second stall at walk start), reaching the statue-menu
+branch at ~20.4s of the then-22.5s `ResetMacroBudgetSeconds` -- no room left
+for the menu-open + gate cycles, so the macro expired and dropped before
+ever confirming; the fight was only entered by accident on the next
+attempt, via a menu an earlier expired macro had left open. Cold boots
+measured ~24-26s end-to-end including the statue-menu work. Mid-run resets
+(~9s total) fit the old budget fine and are unaffected.
+`ResetMacroBudgetSeconds` is raised from 22.5s to 40s to give a slow cold
+boot real headroom while staying fail-loud and finite -- see the constant's
+own comment in `mod/EpisodeManager.cs` for the corresponding trade-off
+against the Python trainer's socket timeout.

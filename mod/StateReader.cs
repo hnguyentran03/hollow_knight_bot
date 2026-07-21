@@ -1,4 +1,5 @@
 // mod/StateReader.cs
+using System.Reflection;
 using Modding;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -199,6 +200,50 @@ namespace HKRLBot
             try
             {
                 EventSystem.current.SetSelectedGameObject(ui.tier1Button.button.gameObject);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // Requests the Attuned challenge tier BY VALUE, instead of by
+        // correcting/confirming a highlight: invokes BossChallengeUI's own
+        // `LoadBoss(int level)` (level 0 = Attuned) -- the same method the
+        // tier buttons themselves call on click -- via reflection.
+        //
+        // Why reflection: LoadBoss's member visibility on the disassembled
+        // BossChallengeUI is unknown/unverified (could be private, could be
+        // an overload set -- there is also a `LoadBoss(int, bool
+        // doHideAnim)`), and reflection with an explicit parameter-type
+        // filter (new[] { typeof(int) }) sidesteps both problems: it finds
+        // the single-int overload regardless of its visibility, and
+        // BindingFlags.Public | BindingFlags.NonPublic means we don't have
+        // to know or trust which one it is.
+        //
+        // Why this beats SelectAttunedChallengeTier()+confirm: that path
+        // requests Attuned by correcting/confirming an EventSystem highlight,
+        // which is exactly the signal a real trainer run (2026-07-21, game
+        // unfocused) verified the engine refuses to move --
+        // SetSelectedGameObject did not stick across 2 attempts (see
+        // DISCOVERED.md). LoadBoss(0) instead asks the menu to load the tier
+        // directly, with no EventSystem/focus dependency at all -- it is the
+        // same call the tier button's OnClick makes, just invoked ourselves.
+        //
+        // Exception-safe like this file's other helpers: null UI or any
+        // reflection/invoke failure (missing method, target exception from
+        // inside LoadBoss, etc.) returns false rather than throwing, so the
+        // caller can fall back to the blind confirm.
+        public bool ConfirmAttunedChallenge()
+        {
+            var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();
+            if (ui == null) return false;
+            try
+            {
+                var method = ui.GetType().GetMethod(
+                    "LoadBoss",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new[] { typeof(int) }, null);
+                if (method == null) return false;
+                method.Invoke(ui, new object[] { 0 });
                 return true;
             }
             catch { return false; }
