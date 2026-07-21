@@ -892,6 +892,7 @@ function openResumeDialog(r) {
     (r.instances ? " · " + r.instances + " instance" + (r.instances === 1 ? "" : "s") : "");
   const finish = document.getElementById("resume-finish");
   const finishLabel = document.getElementById("resume-finish-label");
+  document.getElementById("resume-extra").value = "500000";  // fresh per open
   if (remaining > 0) {
     finish.disabled = false;
     finish.checked = true;  // the default: not additive
@@ -899,14 +900,18 @@ function openResumeDialog(r) {
       "Finish the original target (" + fmtK(remaining) + " steps to go)";
   } else {
     finish.disabled = true;
-    finishLabel.textContent = "Finish the original target — already reached";
+    finishLabel.textContent = r.target_timestep
+      ? "Finish the original target — already reached"
+      : "No recorded target — say how many steps to add";
     document.getElementById("resume-add").checked = true;
   }
   resumeDialog.showModal();
 }
 
-// Typing a number is choosing to add: flip the radio with the focus.
-document.getElementById("resume-extra").addEventListener("focus", () => {
+// Typing a number is choosing to add. On input, not focus: a keyboard
+// user Tabbing through the dialog to read it must not silently flip a
+// training budget from "finish" to "+500k".
+document.getElementById("resume-extra").addEventListener("input", () => {
   document.getElementById("resume-add").checked = true;
 });
 

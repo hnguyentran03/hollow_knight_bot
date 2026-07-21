@@ -362,7 +362,7 @@ def main() -> None:
                             seed=args.seed, n_steps=args.n_steps,
                             batch_size=args.batch_size, n_epochs=args.n_epochs)
         if resume:
-            print(f"resumed {run_dir}: " + session_banner(
+            print(f"{run_dir}: " + session_banner(
                 args.timesteps, start_timestep=model.num_timesteps,
                 resumed_gen=resume[0]), flush=True)
         callback = GenerationCallback(run_dir, vecnorm=env,
