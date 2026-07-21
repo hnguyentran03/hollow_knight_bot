@@ -113,3 +113,101 @@ def test_dashboard_serves_a_run_trained_on_two_instances(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+import hkrl.dashboard as dash
+
+
+def _post(url, body=None, ctype="application/json", host=None):
+    req = urllib.request.Request(url, data=json.dumps(body or {}).encode(),
+                                 method="POST")
+    req.add_header("Content-Type", ctype)
+    if host is not None:
+        req.add_unredirected_header("Host", host)
+    with urllib.request.urlopen(req) as resp:
+        return resp.status, json.loads(resp.read() or b"{}")
+
+
+def test_api_launcher_reports_idle_and_form_defaults(base_url, monkeypatch):
+    monkeypatch.setattr(dash.launcher, "status", lambda root: None)
+    _, _, body = _get(base_url + "/api/launcher")
+    data = json.loads(body)
+    assert data["active"] is None
+    assert data["defaults"]["timesteps"] == 500_000
+    assert data["defaults"]["instances"] == 1
+    assert data["defaults"]["run_id"]
+
+
+def test_api_launcher_reports_the_active_run(base_url, monkeypatch):
+    rec = {"run_id": "r9", "pid": 4242, "started": 1000.0}
+    monkeypatch.setattr(dash.launcher, "status", lambda root: rec)
+    data = json.loads(_get(base_url + "/api/launcher")[2])
+    assert data["active"] == rec
+
+
+def test_post_launch_delegates_and_returns_the_run_id(base_url, monkeypatch):
+    seen = {}
+    def fake_launch(root, params):
+        seen.update(params)
+        return "r9"
+    monkeypatch.setattr(dash.launcher, "launch", fake_launch)
+    status, data = _post(base_url + "/api/launch",
+                         {"mode": "new", "run_id": "r9", "instances": 2})
+    assert status == 200 and data == {"run_id": "r9"}
+    assert seen["instances"] == 2
+
+
+def test_post_launch_maps_errors_to_400_and_409(base_url, monkeypatch):
+    def busy(root, params):
+        raise RuntimeError("a launched run is already active")
+    monkeypatch.setattr(dash.launcher, "launch", busy)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/launch", {})
+    assert err.value.code == 409
+
+    def bad(root, params):
+        raise ValueError("instances must be between 1 and 3")
+    monkeypatch.setattr(dash.launcher, "launch", bad)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/launch", {})
+    assert err.value.code == 400
+    assert "instances" in json.loads(err.value.read())["error"]
+
+
+def test_post_stop_delegates_and_maps_idle_to_409(base_url, monkeypatch):
+    monkeypatch.setattr(dash.launcher, "stop",
+                        lambda root: {"run_id": "r9", "pid": 1, "started": 0})
+    status, data = _post(base_url + "/api/stop")
+    assert status == 200 and data == {"stopped": "r9"}
+
+    def idle(root):
+        raise RuntimeError("no launched run is active")
+    monkeypatch.setattr(dash.launcher, "stop", idle)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/stop")
+    assert err.value.code == 409
+
+
+def test_posts_require_json_and_a_local_host_header(base_url):
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/stop", ctype="text/plain")
+    assert err.value.code == 415
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/stop", host="evil.example:9700")
+    assert err.value.code == 403
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/nope")
+    assert err.value.code == 404
+
+
+def test_launcher_log_endpoint_tails_or_404s(base_url, monkeypatch):
+    monkeypatch.setattr(dash.launcher, "tail",
+                        lambda root, n=200: f"tail of {n}")
+    status, ctype, body = _get(base_url + "/api/launcher/log?n=50")
+    assert status == 200 and ctype.startswith("text/plain")
+    assert body == b"tail of 50"
+
+    monkeypatch.setattr(dash.launcher, "tail", lambda root, n=200: None)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _get(base_url + "/api/launcher/log")
+    assert err.value.code == 404
