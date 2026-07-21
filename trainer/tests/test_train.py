@@ -95,6 +95,24 @@ def test_default_n_steps_keeps_the_total_batch_constant():
     assert train.default_n_steps(1000) == 128  # floored, never zero
 
 
+def test_session_banner_fresh_states_budget_and_target():
+    # Fresh run starts at timestep 0, so target == this session's budget.
+    banner = train.session_banner(500_000)
+    assert "500,000" in banner
+    assert "target timestep 500,000" in banner
+
+
+def test_session_banner_resumed_states_generation_current_additional_and_target():
+    # target = start + budget, matching the dashboard's additive --timesteps
+    # framing on resume.
+    banner = train.session_banner(500_000, start_timestep=1_200_000,
+                                  resumed_gen=8)
+    assert "generation 8" in banner
+    assert "1,200,000" in banner  # current (start) timestep
+    assert "500,000 more" in banner  # this session's additional budget
+    assert "target timestep 1,700,000" in banner
+
+
 def test_stop_flag_ends_training_at_the_current_episodes_end(tmp_path):
     """A stop request finishes the attempt in progress rather than cutting
     the fight off mid-swing: stopping at the episode boundary also leaves

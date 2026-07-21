@@ -50,6 +50,20 @@ def default_n_steps(instances: int) -> int:
     return max(128, 2048 // instances)
 
 
+def session_banner(timesteps: int, start_timestep: int = 0,
+                   resumed_gen: int | None = None) -> str:
+    """One line stating this session's budget in the dashboard's language:
+    current timestep and the target it runs to (--timesteps is additive
+    on resume, so the target is start + budget)."""
+    target = start_timestep + timesteps
+    if resumed_gen is None:
+        return (f"this session: collecting {timesteps:,} steps "
+                f"(target timestep {target:,})")
+    return (f"resumed from generation {resumed_gen} at timestep "
+            f"{start_timestep:,}; collecting {timesteps:,} more "
+            f"(target timestep {target:,})")
+
+
 def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs):
     """SupervisedVecEnv -> VecMonitor -> VecNormalize.
 
@@ -273,6 +287,8 @@ def main() -> None:
     backup = backup_saves(args.root)
     if backup is not None:
         print(f"master save backed up to {backup}", flush=True)
+    if resume is None:
+        print(session_banner(args.timesteps), flush=True)
 
     ports = [args.port + i for i in range(args.instances)]
     # At N>1 the instances must not share the game's save directory: they
@@ -346,9 +362,9 @@ def main() -> None:
                             seed=args.seed, n_steps=args.n_steps,
                             batch_size=args.batch_size, n_epochs=args.n_epochs)
         if resume:
-            print(f"resumed {run_dir} from generation {resume[0]} at timestep "
-                  f"{model.num_timesteps}; collecting {args.timesteps} more",
-                  flush=True)
+            print(f"resumed {run_dir}: " + session_banner(
+                args.timesteps, start_timestep=model.num_timesteps,
+                resumed_gen=resume[0]), flush=True)
         callback = GenerationCallback(run_dir, vecnorm=env,
                                       every_steps=args.gen_every,
                                       supervisor=supervisor)
@@ -360,7 +376,8 @@ def main() -> None:
             print(f"!!! instance recovery exhausted: {exc}",
                   file=sys.stderr, flush=True)
             print(f"!!! this session ends here; continue it with:\n"
-                  f"!!!   ./.venv/bin/python scripts/train.py --resume {run_dir}",
+                  f"!!!   ./.venv/bin/python scripts/train.py --resume {run_dir}\n"
+                  f"!!!   (or the Resume button on the dashboard's /summon page)",
                   file=sys.stderr, flush=True)
             exit_code = 1
         except KeyboardInterrupt:
