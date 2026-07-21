@@ -34,6 +34,37 @@ def stub_trainer(tmp_path, monkeypatch):
         os.killpg(os.getpgid(active["pid"]), signal.SIGKILL)
 
 
+@pytest.fixture()
+def stub_replay(tmp_path, monkeypatch):
+    # Same stand-in as stub_trainer, pointed at REPLAY_SCRIPT: replay() spawns
+    # scripts/replay.py, which we must not run for real (it launches a game).
+    script = tmp_path / "stub_replay.py"
+    script.write_text(STUB)
+    monkeypatch.setattr(launcher, "REPLAY_SCRIPT", script)
+    yield script
+    active = launcher.status(tmp_path)
+    if active:  # never leak a stub past a failed test
+        try:
+            os.killpg(os.getpgid(active["pid"]), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            # A test that monkeypatched status() to a fake pid (e.g. the
+            # "refused while active" case spawned nothing) has nothing to reap.
+            pass
+
+
+def _make_checkpoint(tmp_path, run_id="r1", gen=2):
+    """A run dir with gen NNNN's two checkpoint files present -- the pair
+    replay() requires before it will spawn. Contents are irrelevant here;
+    only their existence is checked."""
+    from hkrl.generations import checkpoint_paths
+    run_dir = tmp_path / "runs" / run_id
+    weights, vecnorm = checkpoint_paths(run_dir, gen)
+    weights.parent.mkdir(parents=True, exist_ok=True)
+    weights.write_text("weights")
+    vecnorm.write_text("vecnorm")
+    return run_dir
+
+
 def wait_for(cond, timeout=10.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -205,16 +236,55 @@ def test_launch_new_refuses_an_existing_run_dir(tmp_path, stub_trainer):
         launcher.launch(tmp_path, {"run_id": "r1"})
 
 
-def test_resume_without_a_checkpoint_is_refused(tmp_path, stub_trainer):
+def test_restart_params_merges_request_over_the_aborted_config(tmp_path):
+    # The aborted run's config is the base; model-shaping params always come
+    # from it, while a step budget the request carries overrides the config's.
     run_dir = tmp_path / "runs" / "r2"
     run_dir.mkdir(parents=True)
-    (run_dir / "config.jsonl").write_text("{}\n")
-    with pytest.raises(ValueError):
-        launcher.launch(tmp_path, {"mode": "resume", "run_id": "r2"})
-    # Once a checkpoint exists, the same resume proceeds to a spawn.
-    (run_dir / "generations.jsonl").write_text("{}\n")
+    (run_dir / "config.jsonl").write_text(json.dumps(
+        {"run_id": "ignored", "timesteps": 40000, "instances": 2,
+         "gen_every": 8000, "batch_size": 32, "n_epochs": 7, "n_steps": 512,
+         "seed": 5}) + "\n")
+    base = {"mode": "resume", "run_id": "r2"}
+
+    p = launcher._restart_params(run_dir, {**base, "timesteps": 90000})
+    assert p["mode"] == "new" and p["run_id"] == "r2"  # id from the dir, reused
+    over = launcher.command(tmp_path, p, platform="linux")  # no caffeinate wrap
+    assert "--run-id" in over and "r2" in over and "--resume" not in over
+    assert "90000" in over and "40000" not in over  # request budget wins
+    for flag, val in [("--instances", "2"), ("--gen-every", "8000"),
+                      ("--batch-size", "32"), ("--n-epochs", "7"),
+                      ("--n-steps", "512"), ("--seed", "5")]:
+        assert flag in over and val in over
+
+    # With no override in the request, the config's own timesteps is used.
+    base_cmd = launcher.command(tmp_path, launcher._restart_params(run_dir, base),
+                                platform="linux")
+    assert "40000" in base_cmd
+
+
+def test_resume_without_a_checkpoint_restarts_fresh(tmp_path, stub_trainer):
+    # A run aborted before its first generation: config + run dir, no checkpoint.
+    run_dir = tmp_path / "runs" / "r2"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.jsonl").write_text(json.dumps(
+        {"run_id": "r2", "timesteps": 40000, "instances": 1}) + "\n")
+    # Resume restarts it: the empty attempt goes to trash and a fresh run under
+    # the same id becomes active -- no "no checkpoint to resume from" error.
     run_id = launcher.launch(tmp_path, {"mode": "resume", "run_id": "r2"})
     assert run_id == "r2"
+    assert list((tmp_path / "trash").glob("r2-*"))  # empty attempt moved aside
+    assert launcher.status(tmp_path)["run_id"] == "r2"
+
+
+def test_resume_with_a_checkpoint_still_resumes(tmp_path, stub_trainer):
+    # A run with a generation resumes normally (a real --resume, not a restart).
+    done = tmp_path / "runs" / "r3"
+    done.mkdir(parents=True)
+    (done / "config.jsonl").write_text("{}\n")
+    (done / "generations.jsonl").write_text("{}\n")
+    assert launcher.launch(tmp_path, {"mode": "resume", "run_id": "r3"}) == "r3"
+    assert not (tmp_path / "trash").exists()  # a real resume trashes nothing
 
 
 def test_concurrent_launches_only_one_wins(tmp_path, stub_trainer):
@@ -270,6 +340,64 @@ def test_stop_raises_runtime_error_if_process_exits_first(tmp_path,
         launcher.stop(tmp_path)
 
 
+def test_replay_spawns_with_the_right_argv_and_pidfile(tmp_path, stub_replay):
+    _make_checkpoint(tmp_path, "r1", gen=2)
+    run_id = launcher.replay(tmp_path, "r1", gen=2, episodes=5)
+    assert run_id == "r1"
+    log = _log(tmp_path, "r1")
+    assert wait_for(lambda: "stub trainer:" in log.read_text(errors="replace"))
+    argv = log.read_text(errors="replace")
+    assert "--auto" in argv
+    assert "--gen 2" in argv
+    assert "--episodes 5" in argv
+    assert str(tmp_path / "runs" / "r1") in argv  # --run-dir points at the run
+    # The pidfile carries the extra fields the UI reads to say "replaying".
+    active = launcher.status(tmp_path)
+    assert active["run_id"] == "r1"
+    assert active["mode"] == "replay"
+    assert active["gen"] == 2
+    # Detached, exactly like launch(): its own session survives a dashboard exit.
+    assert os.getsid(active["pid"]) != os.getsid(os.getpid())
+
+
+def test_replay_is_refused_while_a_run_is_active(tmp_path, stub_replay,
+                                                  monkeypatch):
+    _make_checkpoint(tmp_path, "r1", gen=1)
+    monkeypatch.setattr(launcher, "status",
+                        lambda root: {"run_id": "busy", "pid": 1, "started": 0})
+    with pytest.raises(RuntimeError):
+        launcher.replay(tmp_path, "r1", gen=1)
+
+
+def test_replay_refuses_a_missing_checkpoint(tmp_path, stub_replay):
+    # Run dir exists but the generation's files do not -> a clean 400.
+    (tmp_path / "runs" / "r1").mkdir(parents=True)
+    with pytest.raises(ValueError):
+        launcher.replay(tmp_path, "r1", gen=9)
+
+
+def test_replay_rejects_bad_gen_and_missing_run_id(tmp_path, stub_replay):
+    _make_checkpoint(tmp_path, "r1", gen=1)
+    for gen in (0, -1, None, "two"):
+        with pytest.raises(ValueError):
+            launcher.replay(tmp_path, "r1", gen=gen)
+    for run_id in (None, "", "../evil"):
+        with pytest.raises(ValueError):
+            launcher.replay(tmp_path, run_id, gen=1)
+
+
+def test_replay_is_stoppable_like_a_run(tmp_path, stub_replay):
+    _make_checkpoint(tmp_path, "r1", gen=1)
+    launcher.replay(tmp_path, "r1", gen=1)
+    assert wait_for(lambda: "stub trainer:" in
+                    _log(tmp_path, "r1").read_text(errors="replace"))
+    stopped = launcher.stop(tmp_path)
+    assert stopped["run_id"] == "r1"
+    assert wait_for(lambda: "sigint received" in
+                    _log(tmp_path, "r1").read_text(errors="replace"))
+    assert wait_for(lambda: launcher.status(tmp_path) is None)
+
+
 def _make_run(tmp_path, run_id, mtime=None):
     d = tmp_path / "runs" / run_id
     d.mkdir(parents=True)
@@ -308,6 +436,32 @@ def test_delete_refuses_a_recently_active_run(tmp_path):
     with pytest.raises(RuntimeError):
         launcher.delete(tmp_path, "warm")
     assert (tmp_path / "runs" / "warm").exists()
+
+
+def test_delete_allows_a_panel_stopped_run_despite_fresh_mtime(tmp_path):
+    # The panel stopped this run, so its fresh final-save mtime must not lock
+    # it out of deletion the way an unmarked (terminal-trained) run's does.
+    _make_run(tmp_path, "warm")  # fresh mtime -> refused without a marker
+    launcher._mark_stopped(tmp_path, "warm")
+    trashed = launcher.delete(tmp_path, "warm")
+    assert trashed.startswith("warm-")
+    assert not (tmp_path / "runs" / "warm").exists()
+    # The marker is retired with the run it referred to.
+    assert not launcher._stop_marker(tmp_path, "warm").exists()
+
+
+def test_stop_marks_the_run_for_immediate_deletion(tmp_path, stub_trainer):
+    launcher.launch(tmp_path, {"run_id": "s1"})
+    launcher.stop(tmp_path)
+    assert launcher._stop_marker(tmp_path, "s1").exists()
+
+
+def test_launch_clears_a_stale_stop_marker(tmp_path, stub_trainer):
+    # A prior stop left a marker; relaunching the same id means it is active
+    # again, so the stale marker must not linger to weaken a later delete guard.
+    launcher._mark_stopped(tmp_path, "s2")
+    launcher.launch(tmp_path, {"run_id": "s2"})
+    assert not launcher._stop_marker(tmp_path, "s2").exists()
 
 
 def test_delete_rejects_missing_and_bad_run_ids(tmp_path):

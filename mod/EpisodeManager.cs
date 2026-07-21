@@ -596,10 +596,36 @@ namespace HKRLBot
         // from the statue takes, which is the case that has always worked.
         private static bool statueTriggerRearmed;
 
+        // Step-off stall detection. stepOffLastX is the last knightX sampled
+        // while stepping off; stepOffProgressAt is the ElapsedSeconds of the
+        // last tick that actually moved the knight. No movement for
+        // StepOffStallSeconds means the knight is stuck -- almost always a
+        // challenge menu an earlier cycle left open, eating the walk input
+        // (see the step-off branch below). NaN/-1f mean "not yet sampled this
+        // reset"; both are re-initialized in Reset().
+        private static float stepOffLastX = float.NaN;
+        private static float stepOffProgressAt = -1f;
+
         // How far to step off before walking back in. Comfortably outside the
         // deadband so the return walk is a real trigger-enter, short enough to
         // cost well under a second at walking speed.
         private const float StepOffDistance = 2.5f;
+
+        // If the step-off makes no progress for StepOffStallSeconds, the walk
+        // input is going nowhere. The observed cause is a difficulty menu a
+        // previous cycle opened but never confirmed before its budget expired:
+        // dropping the connection on a budget expiry never closes the menu, so
+        // the next reset finds the knight frozen against it (knightX pinned
+        // while step-off loops and the menu sits open on screen -- one stuck
+        // confirm cascades into every later reset deadlocking here). On a stall
+        // the branch pulses menuSubmit to confirm the stuck menu (below).
+        // StepOffProgressEps is the per-tick movement that counts as real
+        // motion -- above position-read jitter, below a walking step.
+        // StepOffStallSeconds is long enough not to trip on the healthy ~2s
+        // clear-through, short enough that the recovery still has many budget
+        // seconds to keep pulsing the confirm.
+        private const float StepOffStallSeconds = 2.0f;
+        private const float StepOffProgressEps = 0.15f;
 
         // How long after entering GG_Workshop to wait before pressing Up.
         // Costs a fixed delay on every statue reset, well inside
@@ -634,6 +660,8 @@ namespace HKRLBot
             statueMenuEnteredAt = -1f;
             workshopEnteredAt = -1f;
             statueTriggerRearmed = false;
+            stepOffLastX = float.NaN;
+            stepOffProgressAt = -1f;
         }
 
         // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
@@ -662,9 +690,16 @@ namespace HKRLBot
         // Both pulses are ConfirmPulseSeconds long; the whole sequence is timed
         // from statueMenuEnteredAt rather than an absolute cycle, so a confirm
         // can never land before the challenge press that opens the menu.
+        //
+        // The confirm is hardened over the original (0.2s pulse starting 1.5s
+        // after the challenge): a 0.3s pulse is likelier to span a frame and
+        // register, and starting 1.0s after the challenge fits one more retry
+        // inside the budget. A confirm that times out is what leaves a menu
+        // open for the step-off recovery above to clean up, so fewer first-try
+        // failures means fewer cascades.
         private const float StatueMenuPeriodSeconds = 3.0f;
-        private const float ConfirmPulseSeconds = 0.2f;
-        private const float StatueConfirmOffsetSeconds = 1.5f;
+        private const float ConfirmPulseSeconds = 0.3f;
+        private const float StatueConfirmOffsetSeconds = 1.0f;
 
         public static void Tick()
         {
@@ -685,6 +720,13 @@ namespace HKRLBot
                 statueMenuLatched = false;
                 workshopEnteredAt = -1f;
                 statueTriggerRearmed = false;
+                // Clear the step-off stall tracking alongside the re-arm flag:
+                // a Workshop -> elsewhere -> Workshop transition within one
+                // reset must re-anchor from scratch, not compare against a
+                // stale stepOffLastX/stepOffProgressAt (which could read as an
+                // instant stall). Mirrors Reset()'s initialization.
+                stepOffLastX = float.NaN;
+                stepOffProgressAt = -1f;
             }
             else if (workshopEnteredAt < 0f)
             {
@@ -768,9 +810,43 @@ namespace HKRLBot
                     }
                     else if (!statueTriggerRearmed)
                     {
-                        // Walk away from the statue until clear of its trigger.
+                        // Walk left away from the statue until clear of its
+                        // trigger, then walk-to-statue re-arms it. But track
+                        // whether the walk is actually moving the knight: if it
+                        // makes no progress for StepOffStallSeconds, a challenge
+                        // menu an earlier cycle left open is eating the walk
+                        // input (see StepOffStallSeconds above). Walking (to
+                        // re-arm) and confirming (to clear a stuck menu) are
+                        // mutually exclusive per tick: while moving, walk; once
+                        // stalled, release the walk -- holding a direction could
+                        // navigate an open difficulty menu off Attuned -- and
+                        // pulse menuSubmit (bound to Jump) instead. An open menu
+                        // then starts the fight (loading GG_Hornet_1, which ends
+                        // this branch); a genuinely free knight never stalls and
+                        // keeps walking. No Up in the recovery: the menu is
+                        // already open, and a second Up would move the selection.
                         branch = "step-off-statue";
-                        b.Left = WalkHold(elapsed);
+                        if (float.IsNaN(stepOffLastX))
+                        {
+                            stepOffLastX = k.X;
+                            stepOffProgressAt = elapsed;
+                        }
+                        else if (Mathf.Abs(k.X - stepOffLastX) > StepOffProgressEps)
+                        {
+                            // Any real motion resets the stall clock; if the
+                            // knight is moving at all it is not menu-blocked.
+                            stepOffProgressAt = elapsed;
+                            stepOffLastX = k.X;
+                        }
+                        if (elapsed - stepOffProgressAt >= StepOffStallSeconds)
+                        {
+                            branch = "step-off-menu-recover";
+                            b.Jump = (elapsed % StatueMenuPeriodSeconds) < ConfirmPulseSeconds;
+                        }
+                        else
+                        {
+                            b.Left = WalkHold(elapsed);
+                        }
                     }
                     else if (!statueMenuLatched)
                     {

@@ -21,9 +21,12 @@ import threading
 import time
 from pathlib import Path
 
-from hkrl.rundata import LIVE_WINDOW_S
+from hkrl.game import DEFAULT_PORT
+from hkrl.generations import checkpoint_paths
+from hkrl.rundata import LIVE_WINDOW_S, read_jsonl
 
 TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "train.py"
+REPLAY_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "replay.py"
 
 # Popen handles for children this process spawned, so _alive() can reap
 # them once they exit: os.kill(pid, 0) cannot tell a zombie from a live
@@ -43,6 +46,52 @@ def _dir(root) -> Path:
     d = Path(root).expanduser() / "launcher"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+# A run the panel stopped drops a marker beside its pidfile. Its purpose is to
+# tell delete() "this run is on its way down by our own hand", so the fresh
+# mtime of the final generation train.py saves on the way out does not read as
+# a still-training run and lock the run out of deletion for LIVE_WINDOW_S. The
+# marker never ends in ".pid", so status()'s "*.pid" scan ignores it.
+def _stop_marker(root, run_id) -> Path:
+    return _dir(root) / f"{run_id}.stopped"
+
+
+def _mark_stopped(root, run_id) -> None:
+    _stop_marker(root, run_id).write_text(
+        json.dumps({"run_id": run_id, "stopped_at": time.time()}))
+
+
+def _clear_stop_marker(root, run_id) -> None:
+    _stop_marker(root, run_id).unlink(missing_ok=True)
+
+
+def _trash(root, run_dir: Path) -> str:
+    """Move a run dir under <root>/trash/<name>-<timestamp>; returns the dest
+    name. A move, never an rmtree -- see delete()'s note; shared by delete()
+    and the checkpoint-less-resume restart so both retire a dir the same way."""
+    trash = Path(root).expanduser() / "trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    dest = trash / f"{run_dir.name}-{time.strftime('%Y%m%d_%H%M%S')}"
+    shutil.move(str(run_dir), str(dest))
+    return dest.name
+
+
+def _restart_params(run_dir: Path, request: dict) -> dict:
+    """Fresh-start params for an aborted (checkpoint-less) run. Model-shaping
+    params (n_steps, batch_size, n_epochs, seed) come from the config the
+    aborted attempt recorded -- a resume request drops them -- while the
+    request's own values win where present, so the page can hand the restart a
+    new step budget (timesteps) instead of the original. Returns a 'new'-mode
+    dict reusing the run_id; command()'s _validate() coerces/range-checks it."""
+    configs = read_jsonl(run_dir / "config.jsonl")
+    cfg = configs[-1] if configs else {}
+    params = {"mode": "new", "run_id": run_dir.name}
+    for key in _INT_PARAMS:
+        value = request.get(key, cfg.get(key))
+        if value is not None:
+            params[key] = value
+    return params
 
 
 def _alive(pid: int) -> bool:
@@ -131,6 +180,17 @@ def _validate(params: dict) -> dict:
     return clean
 
 
+def _caffeinate(cmd: list[str], platform: str = sys.platform) -> list[str]:
+    """Wrap a spawn in caffeinate on macOS so display/idle/disk/system sleep
+    can't suspend the game mid-run (a suspended game holds its port open while
+    wedged -- see train.py). The same wrapper the README hands a human for an
+    overnight run; shared by launch() and replay() so the platform check lives
+    in exactly one place."""
+    if platform == "darwin":
+        return ["caffeinate", "-dims"] + cmd
+    return cmd
+
+
 def command(root, params: dict, platform: str = sys.platform) -> list[str]:
     """The argv a launch() will spawn.
 
@@ -147,11 +207,7 @@ def command(root, params: dict, platform: str = sys.platform) -> list[str]:
     for key in (_ALWAYS if p["mode"] == "resume" else _INT_PARAMS):
         if key in p:
             cmd += ["--" + key.replace("_", "-"), str(p[key])]
-    if platform == "darwin":
-        # -dims: display, idle, disk, system -- the same wrapper the README
-        # tells a human to type for an overnight run.
-        cmd = ["caffeinate", "-dims"] + cmd
-    return cmd
+    return _caffeinate(cmd, platform)
 
 
 def launch(root, params: dict) -> str:
@@ -165,25 +221,31 @@ def launch(root, params: dict) -> str:
             raise RuntimeError("a launched run is already active; stop it "
                                "before starting another")
         p = _validate(params)
-        run_dir = Path(root).expanduser() / "runs" / p["run_id"]
+        root_dir = Path(root).expanduser()
+        run_dir = root_dir / "runs" / p["run_id"]
         if p["mode"] == "resume":
             if not run_dir.is_dir():
                 raise ValueError(f"no run named {p['run_id']!r} to resume")
-            # train.py's latest_checkpoint raises FileNotFoundError -- fast
-            # and silent from the page's point of view -- if there is no
-            # generation to resume from yet.
             if not (run_dir / "generations.jsonl").exists():
-                raise ValueError(
-                    f"run {p['run_id']!r} has no checkpoint to resume from")
-        else:
+                # Aborted before its first checkpoint: there is nothing to
+                # resume FROM (train.py's latest_checkpoint would raise), so
+                # restart the run fresh with the config its aborted attempt
+                # recorded (overlaid with any params the request set, e.g. a
+                # new timesteps budget), reusing the id. Move the empty attempt
+                # to trash (recoverable) and continue below as a 'new' run.
+                p = _restart_params(run_dir, p)
+                _trash(root_dir, run_dir)
+        elif run_dir.exists():
             # train.py exits instantly on an existing run dir; catching it
             # here instead of letting the spawn die is the difference
             # between a 400 on the page and a run that silently never
             # started.
-            if run_dir.exists():
-                raise ValueError(
-                    f"run {p['run_id']!r} already exists; resume it or "
-                    "pick another id")
+            raise ValueError(
+                f"run {p['run_id']!r} already exists; resume it or "
+                "pick another id")
+        # A relaunch means this run is active again, so any panel-stop marker
+        # left from a prior stop is stale -- drop it (see delete()).
+        _clear_stop_marker(root_dir, p["run_id"])
         d = _dir(root)
         # Pass the already-cleaned dict, not the raw params: command() calls
         # _validate() again (it's public and validates on its own), and a
@@ -212,6 +274,82 @@ def launch(root, params: dict) -> str:
         return p["run_id"]
 
 
+def replay(root, run_id, gen, episodes: int = 3,
+           platform: str = sys.platform) -> str:
+    """Spawn a detached replay of one generation; returns its run id.
+
+    Mirrors launch(): the replay launches its own game and occupies the same
+    single active slot a training run would (they own the bridge port and the
+    game, so neither can run while the other does). It is refused
+    (RuntimeError) while any launched run is alive, and validated up front so
+    a bad request is a clean 400 rather than a spawn that dies silently.
+
+    The pidfile carries two extra fields beyond a run's -- mode="replay" and
+    the gen -- so the active-run card can read "Replaying generation N".
+    status() returns the whole record, and stop() SIGINTs the group exactly as
+    it does a run (replay.py --auto handles the signal), so neither needs any
+    change.
+    """
+    if not run_id:
+        raise ValueError("run_id is required")
+    # Same directory-name discipline launch() applies (path/dash/length).
+    run_id = _validate({"run_id": run_id})["run_id"]
+    try:
+        gen = int(gen)
+    except (TypeError, ValueError):
+        raise ValueError("gen must be an integer") from None
+    if gen < 1:
+        raise ValueError("gen must be a positive integer")
+    try:
+        episodes = int(episodes)
+    except (TypeError, ValueError):
+        raise ValueError("episodes must be an integer") from None
+    if episodes < 1:
+        raise ValueError("episodes must be positive")
+    root = Path(root).expanduser()
+    run_dir = root / "runs" / run_id
+    weights, vecnorm = checkpoint_paths(run_dir, gen)
+    with _lock:
+        # Both the existence check and the status check live inside the lock,
+        # like launch()'s filesystem preconditions: a delete() (which also
+        # takes _lock) could otherwise trash runs/<id> between an unlocked
+        # check and the spawn, leaving us booting a whole game only for
+        # load_policy to die on the now-missing checkpoint. Checked before
+        # status() so a bad request stays a 400 even when the slot is busy.
+        #
+        # Both files or nothing: the weights are meaningless without the
+        # VecNormalize statistics they were trained under (see replay.py), and
+        # catching it here is the difference between a 400 on the page and a
+        # spawn that dies the moment it tries to load them.
+        if not (weights.exists() and vecnorm.exists()):
+            raise ValueError(
+                f"generation {gen} of {run_id!r} has no checkpoint to replay")
+        if status(root) is not None:
+            raise RuntimeError("a launched run is already active; stop it "
+                               "before replaying")
+        cmd = _caffeinate(
+            [sys.executable, str(REPLAY_SCRIPT), "--auto",
+             "--root", str(root), "--run-dir", str(run_dir),
+             "--gen", str(gen), "--episodes", str(episodes),
+             "--port", str(DEFAULT_PORT)],
+            platform)
+        d = _dir(root)
+        with (d / f"{run_id}.log").open("ab") as log:
+            child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log,
+                                     stderr=subprocess.STDOUT,
+                                     start_new_session=True)
+        _children[child.pid] = child
+        # Write-then-rename, atomic like launch()'s: the 2s status() poll must
+        # never read a half-written pidfile and unlink a live replay.
+        pidfile = d / f"{run_id}.pid"
+        tmp = d / f"{run_id}.pid.tmp"
+        tmp.write_text(json.dumps(
+            {"run_id": run_id, "pid": child.pid, "started": time.time(),
+             "mode": "replay", "gen": gen}))
+        os.replace(tmp, pidfile)
+        return run_id
+
+
 def stop(root) -> dict:
     """SIGINT the active run's process group; returns its record.
 
@@ -231,6 +369,12 @@ def stop(root) -> dict:
         except ProcessLookupError:
             raise RuntimeError(
                 "run exited before it could be stopped") from None
+        # Record that WE stopped this run: on the way out train.py saves a
+        # final generation, whose fresh mtime would otherwise make delete()'s
+        # recency guard treat the run as still-training and refuse it for
+        # LIVE_WINDOW_S. The marker lets a panel-stopped run be deleted at
+        # once, while a terminal-trained run (no marker) stays guarded.
+        _mark_stopped(root, active["run_id"])
         return active
 
 
@@ -269,16 +413,20 @@ def delete(root, run_id) -> str:
         active = status(root)
         if active is not None and active.get("run_id") == run_id:
             raise RuntimeError(f"{run_id!r} is the active run; stop it first")
+        # The recency guard exists to catch a run a terminal is actively
+        # training -- invisible to the pidfiles, but its mtimes are fresh. A
+        # run the panel itself stopped carries a stop marker, so its own fresh
+        # final-save mtime does not lock it out of deletion; only unmarked
+        # runs (terminal-trained, or crashed mid-write) stay guarded.
         # lstat, not stat: a broken symlink under the run dir would make
         # stat() raise instead of reporting the link's own mtime.
-        newest = max((p.lstat().st_mtime for p in run_dir.rglob("*")),
-                     default=run_dir.lstat().st_mtime)
-        if time.time() - newest < LIVE_WINDOW_S:
-            raise RuntimeError(
-                f"{run_id!r} shows activity in the last {LIVE_WINDOW_S}s; "
-                "if a terminal is training it, stop that first")
-        trash = root / "trash"
-        trash.mkdir(parents=True, exist_ok=True)
-        dest = trash / f"{run_id}-{time.strftime('%Y%m%d_%H%M%S')}"
-        shutil.move(str(run_dir), str(dest))
-        return dest.name
+        if not _stop_marker(root, run_id).exists():
+            newest = max((p.lstat().st_mtime for p in run_dir.rglob("*")),
+                         default=run_dir.lstat().st_mtime)
+            if time.time() - newest < LIVE_WINDOW_S:
+                raise RuntimeError(
+                    f"{run_id!r} shows activity in the last {LIVE_WINDOW_S}s; "
+                    "if a terminal is training it, stop that first")
+        dest = _trash(root, run_dir)
+        _clear_stop_marker(root, run_id)  # the run is gone; drop its marker
+        return dest

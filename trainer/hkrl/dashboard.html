@@ -249,23 +249,39 @@
   .prev-run { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
   .prev-run .prev-run-id { font-family: var(--display); font-size: 15px; }
   .prev-run .prev-run-meta { color: var(--muted); font-size: 12px; margin-left: auto; }
-  #resume-dialog, #delete-dialog {
+  /* A bare button (not .btn): the row's disclosure triangle. */
+  .prev-run .disclosure { background: none; border: none; color: var(--ink-2); cursor: pointer; font: inherit; font-size: 12px; line-height: 1; padding: 2px 4px; width: 1.4em; }
+  .prev-run .disclosure:hover { color: var(--ink); }
+  /* Indented under its run; no display: is set here, so the UA's [hidden]
+     rule still collapses it when a run is not expanded. */
+  .prev-run-gens { margin: 0 0 6px 26px; }
+  .prev-run-gen { display: flex; align-items: center; gap: 12px; padding: 5px 0; }
+  .prev-run-gen .prev-run-gen-label { color: var(--ink-2); font-size: 13px; }
+  .prev-run-gen.muted { color: var(--muted); font-size: 12px; font-style: italic; }
+  .prev-run-gen .prev-run-gen-label { margin-right: auto; }
+  #resume-dialog, #delete-dialog, #replay-dialog {
     background: var(--raised); color: var(--ink);
     border: 1px solid var(--border); border-radius: 4px;
     padding: 18px 20px; width: 360px; max-width: calc(100vw - 32px);
   }
-  #resume-dialog::backdrop, #delete-dialog::backdrop { background: rgba(2, 3, 6, 0.65); }
-  #resume-dialog form, #delete-dialog form { display: flex; flex-direction: column; align-items: stretch; }
-  #resume-dialog h2, #delete-dialog h2 { font-family: var(--display); font-size: 17px; font-weight: 400; letter-spacing: 0.04em; text-transform: none; margin: 0 0 6px; }
-  #resume-dialog .resume-facts, #delete-dialog .resume-facts { color: var(--ink-2); font-size: 13px; margin: 0 0 14px; }
+  #resume-dialog::backdrop, #delete-dialog::backdrop, #replay-dialog::backdrop { background: rgba(2, 3, 6, 0.65); }
+  #resume-dialog form, #delete-dialog form, #replay-dialog form { display: flex; flex-direction: column; align-items: stretch; }
+  #resume-dialog h2, #delete-dialog h2, #replay-dialog h2 { font-family: var(--display); font-size: 17px; font-weight: 400; letter-spacing: 0.04em; text-transform: none; margin: 0 0 6px; }
+  #resume-dialog .resume-facts, #delete-dialog .resume-facts, #replay-dialog .resume-facts { color: var(--ink-2); font-size: 13px; margin: 0 0 14px; }
+  #replay-dialog label { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+  #replay-dialog #replay-episodes {
+    width: 120px; font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+  }
   #resume-dialog .choice { display: flex; align-items: center; gap: 8px; padding: 3px 0; margin: 0; font-family: var(--body); font-size: 14px; letter-spacing: normal; text-transform: none; color: var(--ink); }
+  #resume-dialog .choice[hidden] { display: none; }  /* display:flex above outranks the UA's [hidden] rule -- same trap as .launch form */
   #resume-dialog .choice input { width: auto; margin: 0; }
   #resume-dialog #resume-extra {
     width: 160px; font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
     margin: 6px 0 4px 24px;
   }
-  #resume-dialog .dialog-actions, #delete-dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  #resume-dialog .dialog-actions, #delete-dialog .dialog-actions, #replay-dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
   #delete-dialog .delete-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
   #delete-dialog .delete-note code { color: var(--ink-2); }
   .active-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--ink-2); }
@@ -352,7 +368,7 @@
       </label>
       <label class="choice">
         <input type="radio" name="resume-mode" id="resume-add">
-        <span>Add more steps:</span>
+        <span id="resume-add-label">Add more steps:</span>
       </label>
       <input type="number" id="resume-extra" min="1" value="500000"
              aria-label="Additional steps to collect">
@@ -372,6 +388,19 @@
       <div class="dialog-actions">
         <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
         <button type="submit" class="btn danger" value="delete">Move to trash</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="replay-dialog">
+    <form method="dialog">
+      <h2 id="replay-title">Replay</h2>
+      <p class="resume-facts" id="replay-facts"></p>
+      <label for="replay-episodes">Episodes</label>
+      <input type="number" id="replay-episodes" min="1" value="3"
+             aria-label="Episodes to play">
+      <div class="dialog-actions">
+        <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
+        <button type="submit" class="btn" value="replay">Replay</button>
       </div>
     </form>
   </dialog>
@@ -847,7 +876,12 @@ async function refreshLauncher() {
     }
   }
   if (active) {
-    document.getElementById("launch-run").textContent = active.run_id;
+    // A replay record carries mode/gen (see launcher.replay); a run record
+    // does not, so fall back to the bare run id when they're absent.
+    document.getElementById("launch-run").textContent =
+      (active.mode === "replay" && active.gen != null)
+        ? "Replaying generation " + active.gen + " — " + active.run_id
+        : active.run_id;
     document.getElementById("launch-uptime").textContent =
       "up " + fmtDur(Date.now() / 1000 - active.started);
     const log = await fetch("/api/launcher/log?n=200").catch(() => null);
@@ -861,6 +895,65 @@ async function refreshLauncher() {
   }
 }
 
+// Which runs the user has expanded to see their checkpoints, plus a cache
+// of each run's generations so a 2s poll re-renders them from memory
+// (synchronous, no flicker) and only reflows the sub-list when the fetched
+// set actually changed (genSig diff), mirroring how refresh() diffs the
+// run-select before touching the DOM.
+const expandedRuns = new Set();
+const genCache = {};   // run_id -> generations, newest-first (undefined = unfetched)
+const genSig = {};     // run_id -> signature of the cached generations
+
+function renderGens(container, runId, gens, disabled) {
+  container.replaceChildren();
+  if (gens === undefined) {
+    const p = document.createElement("div");
+    p.className = "prev-run-gen muted";
+    p.textContent = "loading…";
+    container.appendChild(p);
+    return;
+  }
+  if (!gens.length) {
+    const p = document.createElement("div");
+    p.className = "prev-run-gen muted";
+    p.textContent = "no checkpoints yet";
+    container.appendChild(p);
+    return;
+  }
+  for (const g of gens) {
+    const row = document.createElement("div");
+    row.className = "prev-run-gen";
+    const label = document.createElement("span");
+    label.className = "prev-run-gen-label";
+    label.textContent = "generation " + g.gen + " · " + fmtK(g.timestep) + " steps";
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "btn";
+    play.textContent = "Replay";
+    // A replay owns the single slot; it can't start while anything else does.
+    play.disabled = disabled;
+    play.addEventListener("click", () => openReplayDialog(runId, g.gen));
+    row.append(label, play);
+    container.appendChild(row);
+  }
+}
+
+async function fetchGens(runId, disabled) {
+  let run;
+  try { run = await (await fetch("/api/run/" + encodeURIComponent(runId))).json(); }
+  catch (err) { return; }  // banner already reports a lost server
+  // Newest-first, matching the run list's own ordering.
+  const gens = (run.generations || []).slice().sort((a, b) => b.gen - a.gen);
+  const sig = gens.map(g => g.gen + ":" + g.timestep).join(",");
+  const unchanged = genSig[runId] === sig && genCache[runId] !== undefined;
+  genCache[runId] = gens;
+  genSig[runId] = sig;
+  if (unchanged || !expandedRuns.has(runId)) return;  // no reflow needed
+  const el = document.querySelector(
+    '.prev-run-item[data-run-id="' + CSS.escape(runId) + '"] .prev-run-gens');
+  if (el) renderGens(el, runId, gens, disabled);
+}
+
 async function renderPrevRuns(activeNow) {
   const wrap = document.getElementById("prev-runs");
   if (activeNow) { wrap.hidden = true; return; }
@@ -871,8 +964,41 @@ async function renderPrevRuns(activeNow) {
   const list = document.getElementById("prev-runs-list");
   list.replaceChildren();
   for (const r of runs) {
+    const item = document.createElement("div");
+    item.className = "prev-run-item";
+    item.dataset.runId = r.id;
     const row = document.createElement("div");
     row.className = "prev-run";
+    const gensBox = document.createElement("div");
+    gensBox.className = "prev-run-gens";
+    const expanded = expandedRuns.has(r.id);
+    gensBox.hidden = !expanded;
+    // Actions (Replay/Resume/Delete) are gated on whether the panel is
+    // running a fleet, NOT on mtime-liveness: a run stopped seconds ago via
+    // the panel still has a fresh final-save mtime and so reads r.live=true
+    // for the whole LIVE_WINDOW_S, which used to disable its own management
+    // buttons -- after Stop, Resume and Delete were dead for 5 minutes. When
+    // a panel run IS active the whole section is hidden (top of this
+    // function), so in practice these stay enabled for every stopped run
+    // shown; the server still refuses a resume/delete that would actually
+    // collide with a live fleet, and surfaces that as an inline error.
+    const disabled = activeNow;
+
+    const disc = document.createElement("button");
+    disc.type = "button";
+    disc.className = "disclosure";
+    disc.setAttribute("aria-label", "Show checkpoints");
+    disc.setAttribute("aria-expanded", String(expanded));
+    disc.textContent = expanded ? "▾" : "▸";
+    disc.addEventListener("click", () => {
+      const open = !expandedRuns.has(r.id);
+      if (open) expandedRuns.add(r.id); else expandedRuns.delete(r.id);
+      disc.textContent = open ? "▾" : "▸";
+      disc.setAttribute("aria-expanded", String(open));
+      gensBox.hidden = !open;
+      if (open) { renderGens(gensBox, r.id, genCache[r.id], disabled); fetchGens(r.id, disabled); }
+    });
+
     const name = document.createElement("span");
     name.className = "prev-run-id";
     name.textContent = r.id;
@@ -888,20 +1014,34 @@ async function renderPrevRuns(activeNow) {
     btn.type = "button";
     btn.className = "btn";
     btn.textContent = "Resume";
-    // Live without being panel-managed = started from a terminal; a
-    // resume would only 409 or fight for the bridge ports.
-    btn.disabled = r.live;
+    // Disabled only while the panel owns a fleet (that section is hidden
+    // anyway). A run with no checkpoint (stopped before its first generation,
+    // timestep 0) still resumes: with nothing to resume FROM, the server
+    // restarts it from scratch with its own recorded config -- the dialog says
+    // so. See `disabled` above and openResumeDialog.
+    const noCheckpoint = !r.timestep;
+    btn.disabled = disabled;
+    if (noCheckpoint) btn.title = "No checkpoint yet — Resume restarts this run from scratch with its original config";
     btn.addEventListener("click", () => openResumeDialog(r));
     const del = document.createElement("button");
     del.type = "button";
     del.className = "btn danger";
     del.textContent = "Delete";
-    // Same rule as Resume: a live run (panel-managed or terminal-started)
-    // is not deletable; the server refuses it too, this just says so first.
-    del.disabled = r.live;
+    // Same rule as Resume. The server still guards deletion of a run with
+    // fresh file activity (its LIVE_WINDOW_S recency check), so a genuinely
+    // training run is refused with an inline message rather than a dead button.
+    del.disabled = disabled;
     del.addEventListener("click", () => openDeleteDialog(r));
-    row.append(name, meta, btn, del);
-    list.appendChild(row);
+    row.append(disc, name, meta, btn, del);
+    item.append(row, gensBox);
+    list.appendChild(item);
+
+    // Keep an expanded run open across polls: render from cache now (no async
+    // gap, no flicker) and kick a refresh that only reflows if it changed.
+    if (expanded) {
+      renderGens(gensBox, r.id, genCache[r.id], disabled);
+      fetchGens(r.id, disabled);
+    }
   }
 }
 
@@ -917,15 +1057,50 @@ function openResumeDialog(r) {
   // prior confirm set -- so clear it, or an Escape-dismiss here could
   // replay the last "resume".
   resumeDialog.returnValue = "";
-  const remaining = (r.target_timestep || 0) - r.timestep;
-  document.getElementById("resume-title").textContent = "Resume " + r.id;
-  document.getElementById("resume-facts").textContent =
-    fmtK(r.timestep) + " of " +
-    (r.target_timestep ? fmtK(r.target_timestep) : "—") + " steps collected" +
-    (r.instances ? " · " + r.instances + " instance" + (r.instances === 1 ? "" : "s") : "");
+  const title = document.getElementById("resume-title");
+  const facts = document.getElementById("resume-facts");
   const finish = document.getElementById("resume-finish");
   const finishLabel = document.getElementById("resume-finish-label");
-  document.getElementById("resume-extra").value = "500000";  // fresh per open
+  const addLabel = document.getElementById("resume-add-label");
+  const extra = document.getElementById("resume-extra");
+  const confirmBtn = resumeDialog.querySelector('button[value="resume"]');
+  const noCheckpoint = !r.timestep;  // aborted before its first generation
+  const instanceStr = r.instances
+    ? " · " + r.instances + " instance" + (r.instances === 1 ? "" : "s") : "";
+
+  title.textContent = (noCheckpoint ? "Restart " : "Resume ") + r.id;
+  confirmBtn.textContent = noCheckpoint ? "Restart" : "Resume";
+  extra.value = "500000";  // fresh per open
+
+  if (noCheckpoint) {
+    // No checkpoint (nothing to resume FROM): this restarts the run from
+    // scratch with its config -- but the step budget is still the user's to
+    // set, either the original target (default) or a different amount.
+    facts.textContent =
+      "No checkpoint yet — starts over from scratch with the run's config"
+      + instanceStr + ".";
+    addLabel.textContent = "A different number of steps:";
+    finish.parentElement.hidden = !r.target_timestep;  // no "target" if none recorded
+    if (r.target_timestep) {
+      finish.disabled = false;
+      finish.checked = true;  // default: the original target
+      finishLabel.textContent =
+        "The original target (" + fmtK(r.target_timestep) + " steps)";
+    } else {
+      document.getElementById("resume-add").checked = true;
+    }
+    resumeDialog.showModal();
+    return;
+  }
+
+  // Normal resume: --timesteps is additive on a real resume.
+  finish.parentElement.hidden = false;
+  addLabel.textContent = "Add more steps:";
+  const remaining = (r.target_timestep || 0) - r.timestep;
+  facts.textContent =
+    fmtK(r.timestep) + " of " +
+    (r.target_timestep ? fmtK(r.target_timestep) : "—") + " steps collected" +
+    instanceStr;
   if (remaining > 0) {
     finish.disabled = false;
     finish.checked = true;  // the default: not additive
@@ -983,24 +1158,72 @@ resumeDialog.addEventListener("close", async () => {
   if (resumeDialog.returnValue !== "resume" || !r) return;
   const finish = document.getElementById("resume-finish").checked;
   const extra = parseInt(document.getElementById("resume-extra").value, 10);
-  const timesteps = finish ? (r.target_timestep || 0) - r.timestep : extra;
-  if (!timesteps || timesteps < 1) {
-    launchError("no steps to collect — enter how many to add");
-    return;
+  let body;
+  if (!r.timestep) {
+    // No checkpoint: the server restarts from the run's own config, but honors
+    // the step budget chosen here -- the original target, or a custom amount.
+    // Everything else (instances, gen_every, the model params) comes from the
+    // run's config, so the page sends only the timesteps it is overriding.
+    const timesteps = finish ? (r.target_timestep || 0) : extra;
+    if (!timesteps || timesteps < 1) {
+      launchError("no steps to collect — enter how many");
+      return;
+    }
+    body = { mode: "resume", run_id: r.id, timesteps: timesteps };
+  } else {
+    const timesteps = finish ? (r.target_timestep || 0) - r.timestep : extra;
+    if (!timesteps || timesteps < 1) {
+      launchError("no steps to collect — enter how many to add");
+      return;
+    }
+    // The run's own instance count, not the new-run form's: resuming a
+    // 2-instance run as 1 instance is a choice train.py supports, but it
+    // should never happen by accident of what the form held.
+    body = { mode: "resume", run_id: r.id, timesteps: timesteps,
+             instances: r.instances || formParams().instances,
+             gen_every: formParams().gen_every };
   }
   launchError("");
   startBtn.disabled = true;
   try {
-    // The run's own instance count, not the new-run form's: resuming a
-    // 2-instance run as 1 instance is a choice train.py supports, but it
-    // should never happen by accident of what the form held.
-    await postJSON("/api/launch", { mode: "resume", run_id: r.id,
-                                    timesteps: timesteps,
-                                    instances: r.instances || formParams().instances,
-                                    gen_every: formParams().gen_every });
+    await postJSON("/api/launch", body);
     refreshLauncher();
   } catch (err) { launchError(err.message); }
   finally { startBtn.disabled = false; }
+});
+
+/* The replay dialog: play one generation against a live game. It launches
+   its own game and takes the single active slot, so it can only start when
+   nothing else owns it (the Replay buttons are disabled otherwise). */
+const replayDialog = document.getElementById("replay-dialog");
+let replayTarget = null;  // {runId, gen} the open dialog is for
+
+function openReplayDialog(runId, gen) {
+  replayTarget = { runId, gen };
+  replayDialog.returnValue = "";  // see openResumeDialog: Escape leaves it stale
+  document.getElementById("replay-title").textContent =
+    "Replay generation " + gen + " of " + runId;
+  document.getElementById("replay-facts").textContent =
+    "Plays this checkpoint against a live game window. It occupies the "
+    + "training slot until it finishes or you stop it.";
+  document.getElementById("replay-episodes").value = "3";  // fresh per open
+  replayDialog.showModal();
+}
+
+replayDialog.addEventListener("close", async () => {
+  const t = replayTarget;
+  replayTarget = null;
+  if (replayDialog.returnValue !== "replay" || !t) return;
+  const episodes = parseInt(document.getElementById("replay-episodes").value, 10);
+  if (!episodes || episodes < 1) {
+    launchError("episodes must be a positive number");
+    return;
+  }
+  launchError("");
+  try {
+    await postJSON("/api/replay", { run_id: t.runId, gen: t.gen, episodes });
+    refreshLauncher();  // the active-run card takes over
+  } catch (err) { launchError(err.message); }
 });
 
 const startBtn = document.getElementById("start-btn");

@@ -253,6 +253,7 @@ def test_page_ships_the_launch_panel_and_summon_links(base_url):
     assert b'id="prev-runs"' in body
     assert b'id="resume-dialog"' in body
     assert b'id="delete-dialog"' in body
+    assert b'id="replay-dialog"' in body
     assert b'id="resume-btn"' not in body
 
 
@@ -262,6 +263,42 @@ def test_summon_serves_the_same_page_as_root(base_url):
     assert status == 200
     assert ctype.startswith("text/html")
     assert body == body_root
+
+
+def test_post_replay_delegates_and_returns_run_and_gen(base_url, monkeypatch):
+    seen = {}
+    def fake_replay(root, run_id, gen, episodes):
+        seen.update(run_id=run_id, gen=gen, episodes=episodes)
+        return run_id
+    monkeypatch.setattr(dash.launcher, "replay", fake_replay)
+    status, data = _post(base_url + "/api/replay",
+                         {"run_id": "r1", "gen": 2, "episodes": 5})
+    assert status == 200 and data == {"replaying": "r1", "gen": 2}
+    assert seen == {"run_id": "r1", "gen": 2, "episodes": 5}
+
+
+def test_post_replay_defaults_episodes_and_maps_errors(base_url, monkeypatch):
+    # episodes is optional; the handler defaults it to 3.
+    seen = {}
+    monkeypatch.setattr(dash.launcher, "replay",
+                        lambda root, run_id, gen, episodes: seen.update(
+                            episodes=episodes) or run_id)
+    _post(base_url + "/api/replay", {"run_id": "r1", "gen": 1})
+    assert seen["episodes"] == 3
+
+    def busy(root, run_id, gen, episodes):
+        raise RuntimeError("a launched run is already active")
+    monkeypatch.setattr(dash.launcher, "replay", busy)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/replay", {"run_id": "r1", "gen": 1})
+    assert err.value.code == 409
+
+    def bad(root, run_id, gen, episodes):
+        raise ValueError("gen must be a positive integer")
+    monkeypatch.setattr(dash.launcher, "replay", bad)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/replay", {"run_id": "r1", "gen": 0})
+    assert err.value.code == 400
 
 
 def test_post_delete_delegates_and_maps_errors(base_url, monkeypatch):
@@ -283,3 +320,17 @@ def test_post_delete_delegates_and_maps_errors(base_url, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as err:
         _post(base_url + "/api/delete", {"run_id": "nope"})
     assert err.value.code == 400
+
+
+def _headers(url):
+    with urllib.request.urlopen(url) as resp:
+        return resp.headers
+
+
+def test_polled_endpoints_are_not_cached(base_url):
+    # The page polls these at fixed URLs every 2s; without an explicit
+    # no-store, a real browser serves a stale cached body and the live
+    # log/status freeze (Playwright disables its cache, hiding this).
+    for path in ["/api/runs", "/api/run/r1", "/api/launcher"]:
+        h = _headers(base_url + path)
+        assert "no-store" in (h.get("Cache-Control") or ""), path
