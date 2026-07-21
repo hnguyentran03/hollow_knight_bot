@@ -177,6 +177,7 @@
   .launch .advanced .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 8px; }
   .launch .error { margin-top: 8px; color: var(--critical); font-size: 13px; }
   a.btn { text-decoration: none; display: inline-block; }
+  a.btn[hidden] { display: none; }  /* same [hidden]-vs-display specificity trap as .launch form above */
   .page-links { margin-left: auto; }
   .prev-runs h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 16px 0 4px; }
   .prev-run { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
