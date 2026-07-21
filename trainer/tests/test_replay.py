@@ -63,6 +63,47 @@ def test_replay_reports_per_episode_stats(tmp_path, capsys):
     assert summaries[0]["reward"] > 5.0
 
 
+def test_banner_names_generation_run_and_episodes():
+    text = replay.banner(3, pathlib.Path("/x/runs/r1"), 5)
+    assert "generation 3" in text
+    assert "/x/runs/r1" in text
+    assert "5 episodes" in text
+
+
+def test_auto_and_root_are_accepted_flags():
+    # --auto makes replay self-contained (launches its own game); --root is
+    # where it backs up the master save. Both parse WITHOUT touching a game.
+    args = replay.build_parser().parse_args(
+        ["--run-dir", "/x", "--auto", "--gen", "2", "--episodes", "4",
+         "--root", "/tmp/hk"])
+    assert args.auto is True
+    assert args.gen == 2 and args.episodes == 4
+    assert str(args.root) == "/tmp/hk"
+
+
+def test_auto_defaults_off_and_root_has_a_default():
+    args = replay.build_parser().parse_args(["--run-dir", "/x"])
+    assert args.auto is False        # unchanged: connect to a running game
+    assert args.root is not None     # ~/hkrl by default, for backup_saves
+
+
+def test_replay_stops_at_the_episode_boundary_when_flagged(tmp_path):
+    # A set stop flag ends the loop at the next episode boundary (mirrors
+    # train.py's StopOnFlag): the dashboard's single Stop -> SIGINT sets it,
+    # and the in-progress episode still finishes rather than being severed.
+    import threading
+    weights, vecnorm = _make_checkpoint(tmp_path)
+    stop = threading.Event()
+    stop.set()
+    with FakeGame([_scripted(win=True), _scripted(win=False)]) as fg:
+        model, env = replay.load_policy(weights, vecnorm, port=fg.port)
+        try:
+            summaries = replay.replay(model, env, episodes=5, stop=stop)
+        finally:
+            env.close()
+    assert summaries == []  # already stopped: not even the first episode ran
+
+
 def test_deterministic_replay_reproduces_itself(tmp_path):
     # The frozen-statistics + deterministic-argmax pipeline must be
     # repeatable: identical scripted games produce identical summaries.

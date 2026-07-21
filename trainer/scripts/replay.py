@@ -15,7 +15,9 @@ isolation gone, there is no isolated second instance to replay against
 while training runs.
 """
 import argparse
+import signal
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -27,8 +29,15 @@ from stable_baselines3.common.vec_env import (  # noqa: E402
     DummyVecEnv, VecNormalize,
 )
 
+from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import checkpoint_paths, latest_checkpoint  # noqa: E402
 from hkrl.vec import make_env  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from launch_instances import (  # noqa: E402
+    DEFAULT_APP, DEFAULT_PORT, SAVE_ISOLATION_SUPPORTED, backup_saves,
+    prepare_instance,
+)
 
 
 def load_policy(weights: Path, vecnorm: Path, port: int, host: str = "127.0.0.1"):
@@ -50,10 +59,16 @@ def load_policy(weights: Path, vecnorm: Path, port: int, host: str = "127.0.0.1"
     return model, env
 
 
-def replay(model, env, episodes: int, out=None, deterministic: bool = True):
+def replay(model, env, episodes: int, out=None, deterministic: bool = True,
+           stop: threading.Event | None = None):
     """Run episodes and print one summary line per episode; returns the
     summary dicts. Relies on the vec env's autoreset: the observation
-    returned by a done step is already the next episode's first."""
+    returned by a done step is already the next episode's first.
+
+    `stop`, when given, ends the loop at the next episode boundary -- the
+    same episode-boundary semantics train.py's StopOnFlag uses, so the
+    dashboard's single Stop (one SIGINT sets the flag) lets the fight in
+    progress finish instead of severing it mid-swing."""
     if out is None:
         out = sys.stdout
     summaries = []
@@ -68,6 +83,8 @@ def replay(model, env, episodes: int, out=None, deterministic: bool = True):
     lstm_states = None
     episode_starts = np.ones((env.num_envs,), dtype=bool)
     for ep in range(1, episodes + 1):
+        if stop is not None and stop.is_set():
+            break
         total, steps, done, infos = 0.0, 0, False, [{}]
         while not done:
             action, lstm_states = model.predict(
@@ -94,17 +111,111 @@ def replay(model, env, episodes: int, out=None, deterministic: bool = True):
     return summaries
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--run-dir", type=Path, required=True)
     ap.add_argument("--gen", type=int, default=None,
                     help="generation number (default: the run's latest)")
     ap.add_argument("--episodes", type=int, default=3)
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=9020)
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--root", type=Path, default=Path("~/hkrl").expanduser(),
+                    help="save-backup / instance-clone root for --auto "
+                         "(mirrors train.py's --root)")
     ap.add_argument("--stochastic", action="store_true",
                     help="sample the policy instead of argmax actions")
-    args = ap.parse_args()
+    ap.add_argument("--auto", action="store_true",
+                    help="launch a game, replay against it, then shut it "
+                         "down (dashboard-driven; no already-running game "
+                         "needed and no human ready prompt)")
+    return ap
+
+
+def banner(gen, run_dir, episodes) -> str:
+    """The dashboard tails this log; a one-line banner keeps it legible."""
+    return (f"replaying generation {gen} from {run_dir} "
+            f"({episodes} episodes)")
+
+
+def _print_summary(summaries) -> None:
+    wins = sum(1 for s in summaries if s["won"])
+    damage = (sum(s["boss_damage_frac"] for s in summaries) / len(summaries)
+              if summaries else 0.0)
+    print(f"\n{wins}/{len(summaries)} won, mean boss damage "
+          f"{damage * 100:.1f}%", flush=True)
+
+
+def run_connected(weights, vecnorm, *, host, port, episodes, deterministic):
+    """Replay against a game already running on --port (the default mode --
+    behavior unchanged)."""
+    model, env = load_policy(weights, vecnorm, port=port, host=host)
+    try:
+        return replay(model, env, episodes=episodes,
+                      deterministic=deterministic)
+    finally:
+        env.close()
+
+
+def run_auto(weights, vecnorm, *, root, app, port, episodes, deterministic):
+    """Self-contained replay: launch one game, replay against it, shut it
+    down. Mirrors train.py's game handling so the dashboard can drive a
+    replay exactly as it drives a run.
+
+    Save safety is train.py's, doubled: backup_saves(root) snapshots the
+    master save first, and -- where APFS clones are supported -- the game
+    plays an isolated slot-0 clone (prepare_instance), so its autosaves can
+    never reach the master slot at all. Slot 0 also gives the clone a
+    regular 1280x720 windowed size (seed_prefs), which is what makes a
+    replay watchable rather than one of training's shrunken hidden windows.
+    Where clones are unsupported the replay falls back to playing the master
+    save directly (the historical N=1 path), backup-protected only.
+
+    The boot macro, driven by the env's first reset(), walks the game into
+    the Hall of Gods -- there is no human ready prompt under --auto. A single
+    SIGINT ends the loop at the next episode boundary; a second forces an
+    abort, and the finally always reaps the game."""
+    backup = backup_saves(root)
+    if backup is not None:
+        print(f"master save backed up to {backup}", flush=True)
+    apps = None
+    if SAVE_ISOLATION_SUPPORTED:
+        print(f"preparing an isolated game copy under {root / 'instances'} "
+              f"(APFS clone; instant, near-zero disk)", flush=True)
+        apps = [prepare_instance(port, app, root / "instances", slot=0)]
+    else:
+        print("WARNING: save isolation is not implemented on this platform; "
+              "the replay plays the master save directly (backup taken "
+              "above) at the game's default window size.", file=sys.stderr,
+              flush=True)
+    game = GameFleet([port], app=app, apps=apps)
+    env = None
+    stop = threading.Event()
+
+    def request_stop(signum, frame):
+        if stop.is_set():
+            raise KeyboardInterrupt  # second Ctrl-C: abandon the clean path
+        stop.set()
+        print("stop requested: finishing the current episode, then shutting "
+              "the game down (Ctrl-C again to force)", file=sys.stderr,
+              flush=True)
+
+    try:
+        game.start()
+        print(f"game up on port {game.ports[0]}", flush=True)
+        # After start() so a Ctrl-C during the cold boot still unwinds
+        # through the finally's game.stop() rather than this handler.
+        signal.signal(signal.SIGINT, request_stop)
+        model, env = load_policy(weights, vecnorm, port=port)
+        return replay(model, env, episodes=episodes,
+                      deterministic=deterministic, stop=stop)
+    finally:
+        if env is not None:
+            env.close()
+        game.stop()
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     run_dir = args.run_dir.expanduser()
     if args.gen is None:
@@ -112,18 +223,18 @@ def main() -> None:
     else:
         gen = args.gen
         weights, vecnorm = checkpoint_paths(run_dir, gen)
-    print(f"replaying generation {gen} from {run_dir}", flush=True)
+    print(banner(gen, run_dir, args.episodes), flush=True)
 
-    model, env = load_policy(weights, vecnorm, port=args.port, host=args.host)
-    try:
-        summaries = replay(model, env, episodes=args.episodes,
-                           deterministic=not args.stochastic)
-    finally:
-        env.close()
-    wins = sum(1 for s in summaries if s["won"])
-    damage = sum(s["boss_damage_frac"] for s in summaries) / len(summaries)
-    print(f"\n{wins}/{len(summaries)} won, mean boss damage "
-          f"{damage * 100:.1f}%", flush=True)
+    if args.auto:
+        summaries = run_auto(
+            weights, vecnorm, root=args.root.expanduser(), app=DEFAULT_APP,
+            port=args.port, episodes=args.episodes,
+            deterministic=not args.stochastic)
+    else:
+        summaries = run_connected(
+            weights, vecnorm, host=args.host, port=args.port,
+            episodes=args.episodes, deterministic=not args.stochastic)
+    _print_summary(summaries)
 
 
 if __name__ == "__main__":
