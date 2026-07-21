@@ -39,13 +39,6 @@ namespace HKRLBot
         // note above ComputeWon for why this exists.
         private bool wonLatched;
 
-        // Task 3 discovery (temporary): log candidate selected-tier signals
-        // while a human cycles the statue menu. Lives ABOVE the Connected
-        // early-return so it runs during a manual session with no trainer
-        // attached (the statue-menu macro branch never runs then).
-        private const bool DiscoverStatueTier = true;
-        private float nextDiscoverLogAt;
-
         // True once TickReset has observed at least one NOT-live frame (fight
         // over / wrong scene / boss not yet respawned) since the current
         // reset was requested. Cleared to false every time a "reset" message
@@ -132,42 +125,6 @@ namespace HKRLBot
         // Also folds in the boss-latch handling documented above ComputeWon.
         private void LateUpdate()
         {
-            if (DiscoverStatueTier && Time.unscaledTime >= nextDiscoverLogAt)
-            {
-                nextDiscoverLogAt = Time.unscaledTime + 2f;
-                int target = -999;
-                try { target = PlayerData.instance.bossStatueTargetLevel; }
-                catch { }
-                var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();
-                int lastSel = -999;
-                try
-                {
-                    lastSel = (int)typeof(BossChallengeUI)
-                        .GetField("lastSelectedButton",
-                            System.Reflection.BindingFlags.NonPublic
-                            | System.Reflection.BindingFlags.Static)
-                        .GetValue(null);
-                }
-                catch { }
-                int evSel = -1;
-                try
-                {
-                    var es = UnityEngine.EventSystems.EventSystem.current;
-                    var cur = es == null ? null : es.currentSelectedGameObject;
-                    if (ui != null && cur != null)
-                    {
-                        if (cur == ui.tier1Button.button.gameObject) evSel = 0;
-                        else if (cur == ui.tier2Button.button.gameObject) evSel = 1;
-                        else if (cur == ui.tier3Button.button.gameObject) evSel = 2;
-                    }
-                }
-                catch { }
-                HKRLBotMod.Instance.Log(
-                    $"DISCOVER statue-tier: menuOpen={(ui != null)} "
-                    + $"bossStatueTargetLevel={target} lastSelectedButton={lastSel} "
-                    + $"eventSystemSel={evSel}");
-            }
-
             var server = HKRLBotMod.Instance.Server;
             if (!server.Connected)
             {
@@ -528,16 +485,16 @@ namespace HKRLBot
                 // above), this is a fresh (re)spawn's HP, not a stale
                 // mid-fight reading, so b.Hp here IS the fight's max HP,
                 // before any damage has been dealt. Hornet 1 Attuned has a
-                // known/expected HP pool; an
-                // Ascended or Radiant tier being accepted by mistake (the
-                // statue macro cannot see which tier is highlighted) would
-                // show up here as an unexpectedly large number, which is
-                // otherwise invisible (the trainer's _max_bhp normalizes it
-                // away). This is deliberately just the raw HP reading: no
-                // PlayerData field for the selected challenge tier exists to
-                // verify against, and guessing at one risks logging a
-                // confidently wrong value that looks like real diagnostic
-                // signal.
+                // known/expected HP pool; an Ascended or Radiant tier being
+                // accepted by mistake would show up here as an unexpectedly
+                // large number, which is otherwise invisible (the trainer's
+                // _max_bhp normalizes it away). The statue macro's
+                // statue-menu branch now reads and corrects the highlighted
+                // tier before confirming (StateReader.ReadSelectedChallengeTier,
+                // via the EventSystem selection vs. the tier buttons -- see
+                // DISCOVERED.md), so this log is a secondary sanity check on
+                // top of that gate, not the only defense against a wrong
+                // tier.
                 HKRLBotMod.Instance.Log(
                     $"Episode {attempt} starting: scene={Scene} bossMaxHp={b.Hp} knightHp={k.Hp}");
                 server.SendState(k, b, false, false, Scene, attempt);
@@ -684,6 +641,16 @@ namespace HKRLBot
         // reset"; both are re-initialized in Reset().
         private static float stepOffLastX = float.NaN;
         private static float stepOffProgressAt = -1f;
+
+        // Throttle for the "tier gate inactive" log in the statue-menu
+        // branch below (ReadSelectedChallengeTier returned -1 while the
+        // menu was expected to be open or opening). Measured against
+        // Time.unscaledTime (not ElapsedSeconds, which is per-reset) and
+        // deliberately NOT reset in Reset() -- a broken signal spanning
+        // several resets should log at a steady 2s cadence throughout, not
+        // restart its throttle window on every fresh reset and risk
+        // under-reporting.
+        private static float nextTierGateInactiveLogAt;
 
         // How far to step off before walking back in. Comfortably outside the
         // deadband so the return walk is a real trigger-enter, short enough to
@@ -937,17 +904,74 @@ namespace HKRLBot
                     else
                     {
                         // At (or committed to) the statue: challenge once with
-                        // Up, then confirm the already-highlighted Attuned
-                        // difficulty with Jump, retrying the confirm every
+                        // Up, then confirm the highlighted difficulty with
+                        // Jump, retrying the confirm every
                         // StatueMenuPeriodSeconds if the fight hasn't started.
                         // Both are measured from the branch's own start so the
                         // confirm always trails the challenge.
+                        //
+                        // The menu opens on the LAST-PLAYED tier, not always
+                        // Attuned, so the confirm computed below is only a
+                        // candidate: it is gated on
+                        // StateReader.ReadSelectedChallengeTier() actually
+                        // reading 0 (Attuned), and vetoed/corrected otherwise.
+                        // The signal is EventSystem.current
+                        // .currentSelectedGameObject compared against the
+                        // three tier buttons -- identified in-game and
+                        // recorded in DISCOVERED.md; the reader and corrector
+                        // live in StateReader.cs.
                         branch = "statue-menu";
                         float sinceMenu = elapsed - statueMenuEnteredAt;
                         b.Up = sinceMenu < ConfirmPulseSeconds;
                         float confirmPos = sinceMenu - StatueConfirmOffsetSeconds;
-                        b.Jump = confirmPos >= 0f
+                        bool wantConfirmPulse = confirmPos >= 0f
                                  && (confirmPos % StatueMenuPeriodSeconds) < ConfirmPulseSeconds;
+
+                        int tier = mod.Reader.ReadSelectedChallengeTier();
+                        if (tier > 0)
+                        {
+                            // Wrong tier highlighted (Ascended/Radiant).
+                            // Correct the selection to Attuned and withhold
+                            // this cycle's confirm -- the next Tick() re-reads
+                            // rather than trusting this correction landed
+                            // immediately, which is what makes the correction
+                            // reliable even though the menu wraps (see
+                            // DISCOVERED.md).
+                            mod.Reader.SelectAttunedChallengeTier();
+                            b.Jump = false;
+                        }
+                        else if (tier == 0)
+                        {
+                            // Attuned selected: let the confirm pulse fire as
+                            // already computed above.
+                            b.Jump = wantConfirmPulse;
+                        }
+                        else
+                        {
+                            // tier == -1: the menu isn't open yet (normal for
+                            // the first cycles here -- the Up press above is
+                            // what opens it) or the signal broke (e.g. a game
+                            // update moved the underlying object/field). Let
+                            // the existing open/confirm timing proceed
+                            // unchanged -- the gate only vetoes/permits a
+                            // confirm once the menu-open signal is true -- and
+                            // log ONE throttled line naming that the gate is
+                            // inactive, so a broken signal is visible in
+                            // ModLog rather than silently reverting to the
+                            // blind confirm. Backstop B
+                            // (EpisodeManager.TickReset's fightLive branch,
+                            // already implemented) still catches a wrong tier
+                            // that slips through.
+                            b.Jump = wantConfirmPulse;
+                            if (Time.unscaledTime >= nextTierGateInactiveLogAt)
+                            {
+                                nextTierGateInactiveLogAt = Time.unscaledTime + 2f;
+                                mod.Log(
+                                    "ResetMacro: statue-menu tier gate inactive "
+                                    + "(ReadSelectedChallengeTier()=-1) -- confirming "
+                                    + "without a verified tier.");
+                            }
+                        }
                     }
                 }
                 else

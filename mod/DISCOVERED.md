@@ -107,3 +107,61 @@ Knight X at Hornet statue in GG_Workshop: 62.21
 **Complete.** The arena top Y was measured in a later session and feeds
 `ARENA_HEIGHT = 9.59` in `trainer/hkrl/env.py`; all other values are from the
 2026-07-18 session.
+
+---
+
+## 4. Statue challenge menu: live selected-tier signal
+
+**Recorded in a live play session on 2026-07-21**, using a temporary
+diagnostic in `mod/EpisodeManager.cs` (a `DiscoverStatueTier`-gated block at
+the top of `LateUpdate`, since removed once this was confirmed) that logged
+candidate signals every 2s while a human opened the Hornet statue's challenge
+menu and cycled the difficulty across Attuned/Ascended/Radiant.
+
+**Live signal (used):** the Unity EventSystem's current selection. With the
+challenge menu open,
+
+```
+EventSystem.current.currentSelectedGameObject
+```
+
+equals one of `ui.tier1Button.button.gameObject` / `ui.tier2Button.button
+.gameObject` / `ui.tier3Button.button.gameObject` (`ui =
+FindObjectOfType<BossChallengeUI>()`), and tracks the highlighted tier LIVE
+as the human cycles it -- verified 0->1->2->0 while cycling, and only ever
+0/1/2 while the menu was open. `FindObjectOfType<BossChallengeUI>() != null`
+is what carries the "-1 means unreadable" contract: with the menu closed
+there is no `BossChallengeUI` instance to read from at all.
+
+**Rejected candidate 1:** `BossChallengeUI`'s static `lastSelectedButton`
+field. Read via reflection alongside the EventSystem signal in the same
+diagnostic session; it only updates on a selection *event*, not live while
+cycling -- it lagged behind the EventSystem reading and does not track the
+highlight in real time. Not usable as the per-cycle read.
+
+**Rejected candidate 2 (as predicted by the original spec):**
+`PlayerData.instance.bossStatueTargetLevel`. Logged every 2s through the
+entire cycling session; it stayed at a global `-1` the whole time and never
+moved pre-confirm, confirming the spec's prediction (R3.4) and the save dig's
+earlier `-1` reading. The game only writes this field on CONFIRM (the level
+load), not on highlight change.
+
+**Correction (used):** writing the selection directly,
+
+```
+EventSystem.current.SetSelectedGameObject(ui.tier1Button.button.gameObject)
+```
+
+selects Attuned. Because the read side above proved the EventSystem
+selection IS the highlight (not merely correlated with it), writing it is a
+direct, exact correction -- no synthetic tier-navigation input (e.g. an Up/
+Down press toward Attuned) is needed.
+
+Implemented in `mod/StateReader.cs` as `ReadSelectedChallengeTier()` and
+`SelectAttunedChallengeTier()`, and wired into the statue-menu branch of
+`ResetMacro.Tick()` in `mod/EpisodeManager.cs`: the confirm pulse only fires
+when the tier reads `0` (Attuned); a nonzero tier triggers the correction
+instead of a confirm that cycle; a `-1` reading (menu not open yet, or a
+broken signal) lets the previous unconditional confirm timing proceed,
+logged once every 2s so a broken signal is visible in ModLog instead of
+silently reverting to a blind confirm.

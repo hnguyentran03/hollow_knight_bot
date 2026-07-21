@@ -1,6 +1,7 @@
 // mod/StateReader.cs
 using Modding;
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace HKRLBot
 {
@@ -113,6 +114,57 @@ namespace HKRLBot
                 s.NeedleY = needleGo.transform.position.y;
             }
             return s;
+        }
+
+        // The challenge menu's currently-selected difficulty tier
+        // (0=Attuned, 1=Ascended, 2=Radiant), or -1 when the menu is not
+        // open or the signal cannot be read. The menu-open check
+        // (FindObjectOfType<BossChallengeUI>() != null) is what makes -1
+        // trustworthy: a PlayerData field (bossStatueTargetLevel) is
+        // readable at all times and would return a stale tier with no menu
+        // on screen -- confirmed dead pre-confirm in-game (it read a global
+        // -1 through a full tier-cycling session). Called only from the
+        // statue-menu macro cycles (a few seconds per reset), so the
+        // FindObjectOfType scan cost is bounded. See DISCOVERED.md for how
+        // this signal -- EventSystem.current.currentSelectedGameObject
+        // compared against the three tier buttons -- was identified
+        // in-game (verified 0->1->2->0 while a human cycled tiers).
+        public int ReadSelectedChallengeTier()
+        {
+            var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();
+            if (ui == null) return -1;   // menu not open
+            try
+            {
+                var cur = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
+                if (cur == null) return -1;
+                if (cur == ui.tier1Button.button.gameObject) return 0;
+                if (cur == ui.tier2Button.button.gameObject) return 1;
+                if (cur == ui.tier3Button.button.gameObject) return 2;
+                return -1;
+            }
+            catch { return -1; }
+        }
+
+        // Corrects the challenge menu's selection to Attuned (tier1) by
+        // writing the EventSystem's selected GameObject directly. The read
+        // side above proved the EventSystem selection IS the highlight (it
+        // tracks the highlight live, not just on a selection event, unlike
+        // BossChallengeUI's rejected static lastSelectedButton), so setting
+        // it selects Attuned with no synthetic navigation input needed.
+        // Returns true on success, false on "menu not open" or any
+        // exception, so a caller can treat both the same way. Kept here
+        // rather than in EpisodeManager to keep all scene/EventSystem
+        // access for this signal in one file. See DISCOVERED.md.
+        public bool SelectAttunedChallengeTier()
+        {
+            var ui = UnityEngine.Object.FindObjectOfType<BossChallengeUI>();
+            if (ui == null) return false;
+            try
+            {
+                EventSystem.current.SetSelectedGameObject(ui.tier1Button.button.gameObject);
+                return true;
+            }
+            catch { return false; }
         }
     }
 }
