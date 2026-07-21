@@ -72,6 +72,14 @@ namespace HKRLBot
         // the stuck-macro diagnostic never gets logged.
         private const float ResetMacroBudgetSeconds = 22.5f; // must stay below the 30s trainer socket timeout (trainer/hkrl/protocol.py)
 
+        // Attuned Hornet 1's max HP is 900 (704/704 Attuned bossMaxHp readings
+        // in the archived ModLogs); wrong-tier readings seen were 1250
+        // (Ascended) and 1186. A fight that goes live above this ceiling is a
+        // wrong-tier fight the Task-3 statue check should have prevented; 1000
+        // sits safely above the stable 900 and below both higher tiers. Last
+        // resort only -- see the note at its use site.
+        private const int MaxAttunedHornetHp = 1000;
+
         private string Scene => GameManager.instance != null
             ? GameManager.instance.sceneName : "";
 
@@ -449,6 +457,34 @@ namespace HKRLBot
             bool fightLive = live && sawNotLiveSinceReset && sawSceneReentrySinceReset;
             if (fightLive)
             {
+                // Backstop B (last resort, not a recovery path). Task 3's
+                // statue check should mean only Attuned is ever entered, but if
+                // that ever fails, a fight that goes live above the Attuned HP
+                // ceiling is the wrong tier. We cannot fix the tier from here --
+                // a Godhome retry restarts the SAME tier -- so the only safe
+                // move is to drop, exactly like the budget-expiry path below.
+                // A supervisor relaunch re-execs the SAME already-prepped
+                // clone (GameProcess.relaunch in trainer/hkrl/game.py: no
+                // prepare_instance, no re-seed), so if the Task-3 check is
+                // broken the reboot reaches the same wrong tier and this
+                // fires again until recovery attempts exhaust and the run
+                // ends in InstanceDown. Fail-loud by design -- a dead run,
+                // never hours against the wrong boss. With the Task-3 check
+                // in place this should essentially never fire.
+                if (b.Hp > MaxAttunedHornetHp)
+                {
+                    HKRLBotMod.Instance.Log(
+                        $"EpisodeManager: fight went live at bossMaxHp={b.Hp}, above the "
+                        + $"Attuned Hornet ceiling ({MaxAttunedHornetHp}) -- wrong difficulty "
+                        + "tier. Clearing input and dropping the connection.");
+                    HKRLBotMod.Instance.Input.Clear();
+                    server.Drop();
+                    awaitingReset = false;
+                    episodeActive = false;
+                    nextMacroTickTime = 0f;
+                    return;
+                }
+
                 awaitingReset = false;
                 episodeActive = true;
                 phase = Phase.AwaitingAction;
