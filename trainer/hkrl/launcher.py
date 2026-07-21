@@ -128,3 +128,53 @@ def command(root, params: dict, platform: str = sys.platform) -> list[str]:
         # tells a human to type for an overnight run.
         cmd = ["caffeinate", "-dims"] + cmd
     return cmd
+
+
+def launch(root, params: dict) -> str:
+    """Spawn a detached training run; returns its run id.
+
+    Refuses (RuntimeError) while a launched run is alive: the games own
+    the bridge ports, so a second fleet could never come up anyway.
+    """
+    if status(root) is not None:
+        raise RuntimeError("a launched run is already active; stop it "
+                           "before starting another")
+    p = _validate(params)
+    if p["mode"] == "resume" \
+            and not (Path(root).expanduser() / "runs" / p["run_id"]).is_dir():
+        raise ValueError(f"no run named {p['run_id']!r} to resume")
+    d = _dir(root)
+    cmd = command(root, params)
+    with (d / f"{p['run_id']}.log").open("ab") as log:
+        # start_new_session: the run must not die with the dashboard, and
+        # it makes the child a process-group leader so stop() can SIGINT
+        # the whole group (caffeinate wrapper included) at once.
+        child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log,
+                                 stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+    _children[child.pid] = child
+    (d / f"{p['run_id']}.pid").write_text(json.dumps(
+        {"run_id": p["run_id"], "pid": child.pid, "started": time.time()}))
+    return p["run_id"]
+
+
+def stop(root) -> dict:
+    """SIGINT the active run's process group; returns its record.
+
+    One SIGINT is the graceful path: train.py's handler finishes the
+    episode in progress, saves a final generation, and reaps the games.
+    """
+    active = status(root)
+    if active is None:
+        raise RuntimeError("no launched run is active")
+    os.killpg(os.getpgid(active["pid"]), signal.SIGINT)
+    return active
+
+
+def tail(root, n: int = 200) -> str | None:
+    """Last n lines of the newest launch log, or None if none exists yet."""
+    logs = sorted(_dir(root).glob("*.log"), key=lambda p: p.stat().st_mtime)
+    if not logs:
+        return None
+    lines = logs[-1].read_text(errors="replace").splitlines()
+    return "\n".join(lines[-n:])

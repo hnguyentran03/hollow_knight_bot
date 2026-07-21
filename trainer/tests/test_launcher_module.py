@@ -119,3 +119,64 @@ def test_command_defaults_run_id_to_a_timestamp(tmp_path, stub_trainer):
     cmd = launcher.command(tmp_path, {}, platform="linux")
     run_id = cmd[cmd.index("--run-id") + 1]
     assert len(run_id) == 15 and run_id[8] == "_"  # YYYYmmdd_HHMMSS
+
+
+def _log(tmp_path, run_id):
+    return (tmp_path / "launcher" / f"{run_id}.log")
+
+
+def test_launch_spawns_a_detached_run_and_reports_it(tmp_path, stub_trainer):
+    run_id = launcher.launch(tmp_path, {"run_id": "r1", "instances": 1,
+                                        "timesteps": 100})
+    assert run_id == "r1"
+    active = launcher.status(tmp_path)
+    assert active is not None and active["run_id"] == "r1"
+    # Detached: its own session, so a dashboard exit cannot take it down.
+    assert os.getsid(active["pid"]) != os.getsid(os.getpid())
+    # Its stdout lands in the log, argv includes the unattended flag.
+    assert wait_for(lambda: "stub trainer:" in
+                    _log(tmp_path, "r1").read_text(errors="replace"))
+    assert "--auto" in _log(tmp_path, "r1").read_text(errors="replace")
+
+
+def test_second_launch_is_refused_while_one_is_alive(tmp_path, stub_trainer):
+    launcher.launch(tmp_path, {"run_id": "r1"})
+    with pytest.raises(RuntimeError):
+        launcher.launch(tmp_path, {"run_id": "r2"})
+
+
+def test_resume_of_a_missing_run_dir_is_refused(tmp_path, stub_trainer):
+    with pytest.raises(ValueError):
+        launcher.launch(tmp_path, {"mode": "resume", "run_id": "nope"})
+
+
+def test_stop_delivers_sigint_and_clears_status(tmp_path, stub_trainer):
+    launcher.launch(tmp_path, {"run_id": "r1"})
+    assert wait_for(lambda: "stub trainer:" in
+                    _log(tmp_path, "r1").read_text(errors="replace"))
+    stopped = launcher.stop(tmp_path)
+    assert stopped["run_id"] == "r1"
+    # The stub acknowledges the SIGINT -- proof the signal reached the
+    # trainer process inside the (possibly caffeinate-wrapped) group.
+    assert wait_for(lambda: "sigint received" in
+                    _log(tmp_path, "r1").read_text(errors="replace"))
+    assert wait_for(lambda: launcher.status(tmp_path) is None)
+
+
+def test_stop_with_nothing_running_raises(tmp_path):
+    with pytest.raises(RuntimeError):
+        launcher.stop(tmp_path)
+
+
+def test_tail_returns_the_last_lines_of_the_newest_log(tmp_path):
+    d = tmp_path / "launcher"
+    d.mkdir()
+    (d / "old.log").write_text("ancient\n")
+    os.utime(d / "old.log", (1, 1))
+    (d / "new.log").write_text("\n".join(f"line{i}" for i in range(300)))
+    out = launcher.tail(tmp_path, n=5)
+    assert out.splitlines() == [f"line{i}" for i in range(295, 300)]
+
+
+def test_tail_is_none_with_no_logs(tmp_path):
+    assert launcher.tail(tmp_path) is None
