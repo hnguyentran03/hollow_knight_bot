@@ -221,8 +221,24 @@ def test_build_apps_none_when_isolation_unsupported(monkeypatch):
 
 def test_async_resets_trains_end_to_end_and_still_serves_both_games(tmp_path):
     """--async-resets end to end at N=2 (minus the real processes): the
-    wrapper rides inside the SubprocVecEnv workers, placeholders and
-    splices flow through VecMonitor/VecNormalize, and training completes."""
+    kwargs reach make_env inside the SubprocVecEnv workers, and the wrapper
+    is demonstrably ACTIVE there -- after every death, the first step's info
+    carries the reset_pending key (True while pending, False on the splice),
+    which only AsyncResetWrapper produces. Placeholders and splices flow
+    through VecMonitor/VecNormalize, and training completes."""
+    from stable_baselines3.common.callbacks import BaseCallback
+
+    class SpotsPending(BaseCallback):
+        def __init__(self):
+            super().__init__()
+            self.pending_infos = 0
+
+        def _on_step(self) -> bool:
+            self.pending_infos += sum(
+                1 for i in self.locals.get("infos", ()) if "reset_pending" in i)
+            return True
+
+    spots = SpotsPending()
     with FakeGame(_episodes(40)) as a, FakeGame(_episodes(40)) as b:
         env, supervisor = train.build_env([a.port, b.port],
                                           relaunch=lambda s: None,
@@ -231,8 +247,11 @@ def test_async_resets_trains_end_to_end_and_still_serves_both_games(tmp_path):
                                           pending_mode="prefix")
         try:
             model = train.build_model(env, tmp_path, n_steps=8, batch_size=8)
-            model.learn(total_timesteps=32)
+            model.learn(total_timesteps=32, callback=spots)
         finally:
             env.close()
         assert len(a.episodes) < 40
         assert len(b.episodes) < 40
+    # The wrapper really ran inside the workers: without it no step info
+    # ever carries the reset_pending key.
+    assert spots.pending_infos >= 1
