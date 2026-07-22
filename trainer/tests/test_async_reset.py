@@ -4,6 +4,7 @@ import pytest
 
 from hkrl.async_reset import AsyncResetWrapper
 from hkrl.fake_slow_env import SlowResetEnv
+from hkrl.protocol import ConnectionClosed
 
 
 def _step_until_live(env, action=0, tries=200):
@@ -121,4 +122,56 @@ def test_isolated_mode_ends_the_pending_window_as_a_throwaway_episode():
     assert (obs == 2).all() and info == {"reset": 2}
     env.step(1)                          # real stepping resumed
     assert inner.actions == [0, 1]
+    env.close()
+
+
+def test_a_background_reset_that_raises_kills_the_next_step():
+    """An exception in a thread kills nothing by itself. It must re-raise on
+    the worker's next step so the worker process dies and the supervisor's
+    EOFError recovery path engages -- otherwise a genuinely dead game means
+    placeholders forever (design doc section 6)."""
+    inner = SlowResetEnv()
+    env = AsyncResetWrapper(inner, placeholder_tick_s=0.0)
+    env.reset()
+    inner.next_done = True
+    env.step(0)
+    inner.reset_error = ConnectionClosed("game died mid-reset")
+    env.reset()                          # background reset raises immediately
+    with pytest.raises(ConnectionClosed, match="mid-reset"):
+        for _ in range(200):
+            env.step(0)
+            time.sleep(0.01)
+    env.close()
+
+
+def test_close_during_a_pending_reset_aborts_instead_of_waiting():
+    inner = SlowResetEnv()
+    env = AsyncResetWrapper(inner, placeholder_tick_s=0.0)
+    env.reset()
+    inner.next_done = True
+    env.step(0)
+    inner.gate.clear()                   # reset thread parks on the gate
+    env.reset()
+    started = time.monotonic()
+    env.close()                          # must abort_reset(), not wait
+    assert time.monotonic() - started < 2.0
+    assert inner.aborted.is_set()
+
+
+def test_explicit_reset_while_pending_yields_a_genuinely_fresh_reset():
+    """SB3 calls vec.reset() at learn() start. If a background reset is in
+    flight the wrapper must complete the recv handoff and then reset again
+    for real -- never hand a possibly-stale joined result to a fresh
+    rollout, and never a placeholder."""
+    inner = SlowResetEnv()
+    env = AsyncResetWrapper(inner, placeholder_tick_s=0.0)
+    env.reset()                          # reset #1
+    inner.next_done = True
+    env.step(0)
+    inner.gate.clear()
+    env.reset()                          # async reset #2 pending
+    inner.gate.set()
+    obs, info = env.reset()              # explicit: join #2, then sync #3
+    assert (obs == 3).all()
+    assert "reset_pending" not in info
     env.close()
