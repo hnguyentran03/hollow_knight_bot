@@ -34,23 +34,34 @@ def append_reset_span(path, span_s: float, t: float) -> None:
         f.write(json.dumps({"span_s": float(span_s), "t": float(t)}) + "\n")
 
 
-def read_reset_spans(run_dir) -> list:
-    """Every reset span recorded under `run_dir`, merged across worker files.
+def read_reset_intervals(run_dir) -> list:
+    """Every reset as a (start, end) pair on the workers' shared monotonic
+    clock, merged across sidecars. The sidecar's `t` is the span's END
+    (append_reset_span runs after the reset completes), so start = t - span.
 
-    A torn (mid-write) final line is skipped, not raised: the trainer may be
-    appending while this reads, exactly like rundata.read_jsonl.
+    time.monotonic()'s epoch is formally per-process, but on macOS and Linux
+    it is a shared system clock and all workers run on one machine, so
+    cross-worker overlap detection is sound. A torn (mid-write) final line
+    is skipped, not raised, same contract as rundata.read_jsonl.
     """
-    spans = []
+    intervals = []
     for sidecar in Path(run_dir).glob(f"{_PREFIX}*{_SUFFIX}"):
         for line in sidecar.read_text().splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                spans.append(float(json.loads(line)["span_s"]))
+                record = json.loads(line)
+                span, end = float(record["span_s"]), float(record["t"])
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
-    return spans
+            intervals.append((end - span, end))
+    return intervals
+
+
+def read_reset_spans(run_dir) -> list:
+    """Every reset span (seconds) recorded under `run_dir`."""
+    return [end - start for start, end in read_reset_intervals(run_dir)]
 
 
 def _last_record(path):
@@ -137,7 +148,7 @@ def report_run(run_dir, n_instances=None, wallclock_s=None) -> dict:
         n = n_instances
     if wallclock_s is not None:
         wall = wallclock_s
-    return summarize_freeze(read_reset_spans(run_dir), n, wall)
+    return summarize_freeze(read_reset_intervals(run_dir), n, wall)
 
 
 def freeze_fraction(spans, n_instances: int, wallclock_s: float) -> float:
@@ -157,14 +168,47 @@ def freeze_fraction(spans, n_instances: int, wallclock_s: float) -> float:
     return (n_instances - 1) / n_instances * sum(spans) / wallclock_s
 
 
-def summarize_freeze(spans, n_instances: int, wallclock_s: float) -> dict:
-    """The Phase 0 gating numbers: reset-span stats plus the freeze fraction.
+def exclusive_freeze_fraction(intervals, n_instances: int,
+                              wallclock_s: float) -> float:
+    """Overlap-aware sibling freeze: at any instant when k >= 1 instances
+    are resetting, the other N-k are frozen in the lockstep wait, so the
+    fleet loses (N-k)/N of that instant. Integrated over the run and divided
+    by `wallclock_s`, this is the fraction async resets could actually
+    recover.
 
-    `freeze_fraction` is the go/no-go signal -- the fraction of fleet
-    wall-clock the async work could recover. The span stats around it say how
-    much of that comes from many short resets vs a few long ones.
+    Equals freeze_fraction when no resets overlap; strictly less when they
+    do. The parallel cold boot (every instance resetting at once, k = N)
+    contributes nothing -- correctly, since nobody who wasn't already
+    resetting was frozen, and startup is unrecoverable anyway.
     """
-    spans = list(spans)
+    if n_instances <= 1 or wallclock_s <= 0:
+        return 0.0
+    events = []
+    for start, end in intervals:
+        if end > start:
+            events.append((start, 1))
+            events.append((end, -1))
+    events.sort()
+    lost, k, prev_t = 0.0, 0, None
+    for t, delta in events:
+        if k >= 1:
+            lost += (t - prev_t) * max(0, n_instances - k) / n_instances
+        k += delta
+        prev_t = t
+    return lost / wallclock_s
+
+
+def summarize_freeze(intervals, n_instances: int, wallclock_s: float) -> dict:
+    """The Phase 0 gating numbers: reset-span stats plus both freeze numbers.
+
+    `exclusive_freeze_fraction` is the go/no-go signal -- the fraction of
+    fleet wall-clock async resets could actually recover. `freeze_fraction`
+    stays alongside as the naive upper bound (it charges overlapping resets
+    in full). The span stats say how much comes from many short resets vs a
+    few long ones.
+    """
+    intervals = list(intervals)
+    spans = [end - start for start, end in intervals]
     n = len(spans)
     total = sum(spans)
     return {
@@ -175,4 +219,6 @@ def summarize_freeze(spans, n_instances: int, wallclock_s: float) -> dict:
         "n_instances": n_instances,
         "wallclock_s": wallclock_s,
         "freeze_fraction": freeze_fraction(spans, n_instances, wallclock_s),
+        "exclusive_freeze_fraction": exclusive_freeze_fraction(
+            intervals, n_instances, wallclock_s),
     }

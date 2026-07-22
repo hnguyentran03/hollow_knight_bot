@@ -25,7 +25,8 @@ from hkrl.reset_metrics import report_run  # noqa: E402
 
 
 def format_report(s: dict) -> str:
-    pct = s["freeze_fraction"] * 100.0
+    pct = s["exclusive_freeze_fraction"] * 100.0
+    naive = s["freeze_fraction"] * 100.0
     # A directional read of the go/no-go signal, not a verdict: the design's
     # gate is a training-quality comparison, not a wall-clock threshold.
     read = ("substantial -- worth building async resets"
@@ -37,7 +38,8 @@ def format_report(s: dict) -> str:
         f"resets measured:     {s['n_resets']}",
         f"reset span total:    {s['total_reset_s']:.1f}s",
         f"reset span mean/max: {s['mean_reset_s']:.1f}s / {s['max_reset_s']:.1f}s",
-        f"sibling-freeze:      {pct:.1f}% of fleet wall-clock reclaimable",
+        f"sibling-freeze:      {pct:.1f}% of fleet wall-clock reclaimable "
+        f"(overlap-aware; naive upper bound {naive:.1f}%)",
         f"  ^ {read}.",
     ])
 

@@ -3,8 +3,9 @@ import json
 import pytest
 
 from hkrl.reset_metrics import (
-    append_reset_span, freeze_fraction, read_reset_spans, report_run,
-    reset_log_path, resolve_run_params, summarize_freeze,
+    append_reset_span, exclusive_freeze_fraction, freeze_fraction,
+    read_reset_intervals, read_reset_spans, report_run, reset_log_path,
+    resolve_run_params, summarize_freeze,
 )
 
 
@@ -44,6 +45,48 @@ def test_freeze_fraction_guards_nonpositive_wallclock():
     assert freeze_fraction([10.0], n_instances=2, wallclock_s=0.0) == 0.0
 
 
+def test_exclusive_freeze_ignores_fully_overlapping_resets():
+    # The parallel cold boot: both instances resetting at once freeze nobody
+    # who wasn't already resetting -- and startup is unrecoverable anyway.
+    assert exclusive_freeze_fraction([(0.0, 10.0), (0.0, 10.0)],
+                                     n_instances=2, wallclock_s=100.0) == 0.0
+
+
+def test_exclusive_freeze_matches_naive_formula_when_disjoint():
+    naive = freeze_fraction([10.0, 10.0], n_instances=2, wallclock_s=100.0)
+    assert exclusive_freeze_fraction([(0.0, 10.0), (50.0, 60.0)],
+                                     n_instances=2, wallclock_s=100.0
+                                     ) == pytest.approx(naive)
+
+
+def test_exclusive_freeze_charges_only_the_non_overlapping_parts():
+    # N=2, [0,10] and [5,15]: during the [5,10] overlap both are resetting,
+    # so only [0,5] and [10,15] freeze the lone sibling: 10s * 1/2 / 100.
+    assert exclusive_freeze_fraction([(0.0, 10.0), (5.0, 15.0)],
+                                     n_instances=2, wallclock_s=100.0
+                                     ) == pytest.approx(0.05)
+
+
+def test_exclusive_freeze_integrates_k_of_n_at_three_instances():
+    # N=3, [0,10] and [5,15]: [0,5) one resetting -> 2/3, [5,10) two -> 1/3,
+    # [10,15) one -> 2/3: (2/3*5 + 1/3*5 + 2/3*5) / 100 = 25/3 / 100.
+    assert exclusive_freeze_fraction([(0.0, 10.0), (5.0, 15.0)],
+                                     n_instances=3, wallclock_s=100.0
+                                     ) == pytest.approx(25.0 / 3.0 / 100.0)
+
+
+def test_exclusive_freeze_guards_single_instance_and_zero_wallclock():
+    assert exclusive_freeze_fraction([(0.0, 10.0)], 1, 100.0) == 0.0
+    assert exclusive_freeze_fraction([(0.0, 10.0)], 2, 0.0) == 0.0
+
+
+def test_read_reset_intervals_reconstructs_start_from_end_and_span(tmp_path):
+    append_reset_span(reset_log_path(tmp_path, 9020), span_s=2.5, t=100.0)
+    append_reset_span(reset_log_path(tmp_path, 9021), span_s=1.0, t=105.0)
+    assert sorted(read_reset_intervals(tmp_path)) == [(97.5, 100.0),
+                                                      (104.0, 105.0)]
+
+
 def test_reset_log_path_is_per_port_under_the_run_dir(tmp_path):
     # One sidecar per worker keyed by its port, mirroring the run dir's
     # per-session monitor_*.csv convention, so concurrent workers never
@@ -76,15 +119,17 @@ def test_read_reset_spans_is_empty_when_no_sidecars(tmp_path):
 
 
 def test_summarize_freeze_reports_the_gating_numbers():
-    s = summarize_freeze([10.0, 20.0, 30.0], n_instances=2, wallclock_s=600.0)
+    s = summarize_freeze([(0.0, 10.0), (20.0, 40.0), (50.0, 80.0)],
+                         n_instances=2, wallclock_s=600.0)
     assert s["n_resets"] == 3
     assert s["total_reset_s"] == 60.0
     assert s["mean_reset_s"] == pytest.approx(20.0)
     assert s["max_reset_s"] == 30.0
     assert s["n_instances"] == 2
     assert s["wallclock_s"] == 600.0
-    # (2-1)/2 * 60 / 600 = 0.05
+    # (2-1)/2 * 60 / 600 = 0.05; disjoint spans, so both numbers agree.
     assert s["freeze_fraction"] == pytest.approx(0.05)
+    assert s["exclusive_freeze_fraction"] == pytest.approx(0.05)
 
 
 def test_summarize_freeze_handles_no_resets():
@@ -94,6 +139,7 @@ def test_summarize_freeze_handles_no_resets():
     assert s["mean_reset_s"] == 0.0
     assert s["max_reset_s"] == 0.0
     assert s["freeze_fraction"] == 0.0
+    assert s["exclusive_freeze_fraction"] == 0.0
 
 
 def test_resolve_run_params_reads_instances_and_final_wallclock(tmp_path):
@@ -144,14 +190,15 @@ def test_resolve_run_params_falls_back_to_sidecar_count_for_instances(tmp_path):
 
 def test_report_run_ties_spans_params_and_summary_together(tmp_path):
     _write_run(tmp_path, instances=2, wall=600.0)
-    append_reset_span(reset_log_path(tmp_path, 9020), span_s=30.0, t=1.0)
-    append_reset_span(reset_log_path(tmp_path, 9021), span_s=30.0, t=1.0)
+    append_reset_span(reset_log_path(tmp_path, 9020), span_s=30.0, t=100.0)
+    append_reset_span(reset_log_path(tmp_path, 9021), span_s=30.0, t=200.0)
     s = report_run(tmp_path)
     assert s["n_resets"] == 2
     assert s["n_instances"] == 2
     assert s["wallclock_s"] == 600.0
-    # (2-1)/2 * 60 / 600 = 0.05
+    # (2-1)/2 * 60 / 600 = 0.05, disjoint so exclusive agrees
     assert s["freeze_fraction"] == pytest.approx(0.05)
+    assert s["exclusive_freeze_fraction"] == pytest.approx(0.05)
 
 
 def test_report_run_accepts_overrides(tmp_path):
