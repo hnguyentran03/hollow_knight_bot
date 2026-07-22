@@ -1,8 +1,12 @@
+import threading
+import time
+
 import numpy as np
 import pytest
 
 from hkrl.env import ACTIONS, DEFAULT_REWARD, HKEnv
 from hkrl.fake_game import FakeGame, obs, state
+from hkrl.protocol import ConnectionClosed
 from hkrl.reset_metrics import read_reset_spans, reset_log_path
 
 
@@ -164,8 +168,6 @@ def test_reset_retries_are_bounded_so_a_drop_loop_still_surfaces():
     """A game that drops every reset forever (a genuinely broken boot) must
     still escalate to the supervisor rather than retrying silently all
     night."""
-    from hkrl.protocol import ConnectionClosed
-
     with FakeGame([[state(obs())]], fail_resets=99) as fg:
         env = HKEnv(port=fg.port, reset_retries=2)
         with pytest.raises(ConnectionClosed):
@@ -193,4 +195,31 @@ def test_keepalive_pings_keep_an_idle_connection_alive_and_invisible():
         assert not terminated
         _, _, terminated, *_ = env.step(0)
         assert terminated  # lockstep survived the pong interleaving intact
+        env.close()
+
+
+def test_abort_reset_unblocks_a_hung_reset_from_another_thread():
+    """The async-reset shutdown path: a reset parked in its blocking recv
+    (hang_resets: the fake accepts the reset request but never answers) must
+    be releasable by another thread far inside the 30s socket timeout, and
+    must re-raise instead of reconnecting."""
+    errors = []
+    with FakeGame([[state(obs())]], hang_resets=1) as fg:
+        env = HKEnv(port=fg.port)
+
+        def run():
+            try:
+                env.reset()
+            except Exception as exc:  # noqa: BLE001 -- the raise IS the assertion
+                errors.append(exc)
+
+        t = threading.Thread(target=run)
+        t.start()
+        time.sleep(0.2)          # let the reset park in its blocking recv
+        started = time.monotonic()
+        env.abort_reset()
+        t.join(timeout=2.0)      # far under the 30s socket timeout
+        assert not t.is_alive()
+        assert time.monotonic() - started < 2.0
+        assert errors and isinstance(errors[0], ConnectionClosed)
         env.close()

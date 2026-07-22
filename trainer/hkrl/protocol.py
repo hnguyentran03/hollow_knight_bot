@@ -72,7 +72,11 @@ class Connection:
         # only real protocol traffic regardless of how many keepalive
         # replies queued up while the owner was between messages.
         while True:
-            line = self._file.readline()
+            try:
+                line = self._file.readline()
+            except ValueError:
+                # readline() on a closed file (e.g., after abort()) raises ValueError
+                raise ConnectionClosed("mod closed the connection")
             if not line:
                 raise ConnectionClosed("mod closed the connection")
             msg = json.loads(line)
@@ -94,6 +98,22 @@ class Connection:
                 # news to break: the owner discovers it on its next
                 # send/recv, exactly as it would have without a pinger.
                 return
+
+    def abort(self):
+        """Unblock any thread blocked in recv() and close.
+
+        shutdown() acts on the OS socket regardless of the file object's
+        buffering or reference count, so a reader parked in readline()
+        fails immediately instead of at the socket timeout -- the same
+        reasoning as FakeGame.__exit__'s shutdown-before-close.
+        """
+        s = self._sock
+        if s is not None:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        self.close()
 
     def close(self):
         if self._stop is not None:

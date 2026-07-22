@@ -19,7 +19,7 @@ def state(o, done=False, won=False):
 
 
 class FakeGame:
-    def __init__(self, episodes, port=0, fail_resets=0):
+    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0):
         self.episodes = [list(ep) for ep in episodes]
         # port=0 (default) binds an ephemeral port, same as before; a caller
         # that needs to stand a fresh fake back up on a specific port (e.g.
@@ -31,6 +31,11 @@ class FakeGame:
         # The listener stays up, so a reconnecting client's next reset
         # proceeds, exactly like the real mod.
         self.fail_resets = fail_resets
+        # The first `hang_resets` reset requests get NO reply while the
+        # connection stays open -- a wedged game whose bridge still reads.
+        # The client's reset parks in its blocking recv; abort tests
+        # release it from another thread.
+        self.hang_resets = hang_resets
         # Keepalive pings answered so far, for tests asserting the pinger
         # actually ran (hkrl/protocol.py's Connection keepalive thread).
         self.pings = 0
@@ -99,6 +104,9 @@ class FakeGame:
                     return
                 msg = json.loads(line)
                 if msg["type"] == "reset":
+                    if self.hang_resets > 0:
+                        self.hang_resets -= 1
+                        continue
                     if self.fail_resets > 0:
                         self.fail_resets -= 1
                         conn.shutdown(socket.SHUT_RDWR)

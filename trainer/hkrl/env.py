@@ -1,5 +1,6 @@
 """Gymnasium environment over the HKRLBot mod protocol (v1)."""
 import sys
+import threading
 import time
 
 import gymnasium as gym
@@ -130,6 +131,7 @@ class HKEnv(gym.Env):
         self.conn = Connection(host=host, port=port, timeout=timeout,
                                keepalive=keepalive)
         self.conn.connect()
+        self._reset_abort = threading.Event()
         self._steps = 0
         self._prev = None
         self._max_bhp = None
@@ -204,6 +206,8 @@ class HKEnv(gym.Env):
                 msg = self.conn.recv()
                 break
             except (ConnectionClosed, BrokenPipeError, ConnectionResetError):
+                if self._reset_abort.is_set():
+                    raise
                 if retry == self.reset_retries:
                     raise
                 # stderr like the supervisor's lines: SB3's tables own stdout.
@@ -221,6 +225,15 @@ class HKEnv(gym.Env):
         self._steps = 0
         self._max_bhp = None
         return self._flatten(msg["obs"]), dict(msg["info"])
+
+    def abort_reset(self):
+        """Abandon an in-flight reset() from another thread (the async-reset
+        shutdown path): shut the socket down so a blocked recv returns now
+        rather than at the 30s timeout, and make the retry loop re-raise
+        instead of treating the drop as the protocol's normal rhythm and
+        reconnecting."""
+        self._reset_abort.set()
+        self.conn.abort()
 
     def step(self, action):
         self.conn.send({"type": "action", "buttons": ACTIONS[int(action)]})

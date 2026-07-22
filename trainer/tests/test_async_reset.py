@@ -5,6 +5,8 @@ import pytest
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from hkrl.async_reset import AsyncResetWrapper
+from hkrl.env import HKEnv
+from hkrl.fake_game import FakeGame, obs, state
 from hkrl.fake_slow_env import SlowResetEnv, make_async_timed
 from hkrl.protocol import ConnectionClosed
 
@@ -202,3 +204,20 @@ def test_one_envs_reset_does_not_stall_the_lockstep_batch():
         started = time.monotonic()
         vec.close()
         assert time.monotonic() - started < 5.0  # close never waits out a reset
+
+
+def test_wrapper_close_aborts_a_pending_hkenv_reset_quickly():
+    """The real close chain: AsyncResetWrapper.close -> HKEnv.abort_reset ->
+    Connection.abort unblocks the background reset thread parked in recv,
+    far inside the 30s socket timeout."""
+    episode = [state(obs()), state(obs(), done=True)]
+    with FakeGame([episode, [state(obs())]]) as fg:
+        env = AsyncResetWrapper(HKEnv(port=fg.port), placeholder_tick_s=0.0)
+        env.reset()                       # initial, synchronous, succeeds
+        fg.hang_resets = 1                # next reset request gets no answer
+        _, _, terminated, _, _ = env.step(0)   # scripted death
+        assert terminated
+        env.reset()                       # async: background reset parks in recv
+        started = time.monotonic()
+        env.close()
+        assert time.monotonic() - started < 3.0
