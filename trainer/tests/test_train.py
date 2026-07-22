@@ -217,3 +217,22 @@ def test_build_apps_none_when_isolation_unsupported(monkeypatch):
     apps = train.build_apps(ports=[9020], app="master.app",
                             instances_root="/tmp/instances")
     assert apps is None
+
+
+def test_async_resets_trains_end_to_end_and_still_serves_both_games(tmp_path):
+    """--async-resets end to end at N=2 (minus the real processes): the
+    wrapper rides inside the SubprocVecEnv workers, placeholders and
+    splices flow through VecMonitor/VecNormalize, and training completes."""
+    with FakeGame(_episodes(40)) as a, FakeGame(_episodes(40)) as b:
+        env, supervisor = train.build_env([a.port, b.port],
+                                          relaunch=lambda s: None,
+                                          run_dir=tmp_path,
+                                          async_resets=True,
+                                          pending_mode="prefix")
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8)
+            model.learn(total_timesteps=32)
+        finally:
+            env.close()
+        assert len(a.episodes) < 40
+        assert len(b.episodes) < 40

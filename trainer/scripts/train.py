@@ -272,9 +272,24 @@ def main() -> None:
                          "wall-clock span to resets_<port>.jsonl under the run "
                          "dir. Analyze with scripts/measure_reset_freeze.py. "
                          "Off by default; a normal run pays nothing.")
+    ap.add_argument("--async-resets", action="store_true",
+                    help="reset finished episodes on a background thread and "
+                         "emit placeholder steps meanwhile, so one instance's "
+                         "multi-second reset no longer freezes its siblings. "
+                         "Experimental until the Phase 2 gate passes (see the "
+                         "async-resets design doc); no-op at --instances 1.")
+    ap.add_argument("--async-reset-mode", choices=("prefix", "isolated"),
+                    default="prefix",
+                    help="what the pending window is to PPO: a prefix of the "
+                         "next episode (LSTM state carries across the splice) "
+                         "or an isolated throwaway episode (LSTM state resets "
+                         "at the fight's first real frame)")
     args = ap.parse_args()
     if args.instances < 1:
         sys.exit("--instances must be at least 1")
+    if args.async_resets and args.instances < 2:
+        print("hkrl: --async-resets is a no-op at --instances 1 (no sibling "
+              "to freeze); running synchronously", file=sys.stderr, flush=True)
     # Resolved before the config dump below so config.jsonl records the
     # value actually used, not None.
     if args.n_steps is None:
@@ -370,6 +385,10 @@ def main() -> None:
             # Phase 0 async-resets measurement, only when asked. Flows through
             # the supervisor's env_kwargs to every worker's HKEnv.
             **({"reset_log_dir": run_dir} if args.measure_resets else {}),
+            # Async resets: multi-instance only. Flows through env_kwargs to
+            # make_env inside every worker, exactly like reset_log_dir.
+            **({"async_resets": True, "pending_mode": args.async_reset_mode}
+               if args.async_resets and args.instances > 1 else {}),
         )
         model = build_model(env, run_dir,
                             resume_model=resume[1] if resume else None,

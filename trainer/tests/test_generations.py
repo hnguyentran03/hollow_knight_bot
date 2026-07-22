@@ -88,3 +88,17 @@ def test_callback_numbering_continues_from_the_manifest(tmp_path):
     _record(tmp_path, gen=2)
     cb = GenerationCallback(tmp_path, vecnorm=None)
     assert cb._gen == 2
+
+
+def test_placeholder_episodes_stay_out_of_the_manifest_pool(tmp_path):
+    """Isolated-mode async resets end each pending window as a throwaway
+    zero-reward episode; counting those would dilute win_rate and
+    mean_boss_damage with fake losses."""
+    cb = GenerationCallback(tmp_path, vecnorm=None)
+    cb.locals = {"infos": [
+        {"episode": {"r": 5.0, "l": 10}, "won": True, "boss_damage_frac": 1.0},
+        {"episode": {"r": 0.0, "l": 3}, "reset_pending": True},
+    ]}
+    cb._on_step()
+    assert len(cb._episodes) == 1
+    assert cb._episodes[0]["won"] is True
