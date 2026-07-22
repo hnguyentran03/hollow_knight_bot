@@ -1,9 +1,11 @@
+import functools
 import time
 
 import pytest
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from hkrl.async_reset import AsyncResetWrapper
-from hkrl.fake_slow_env import SlowResetEnv
+from hkrl.fake_slow_env import SlowResetEnv, make_async_timed
 from hkrl.protocol import ConnectionClosed
 
 
@@ -175,3 +177,28 @@ def test_explicit_reset_while_pending_yields_a_genuinely_fresh_reset():
     assert (obs == 3).all()
     assert "reset_pending" not in info
     env.close()
+
+
+def test_one_envs_reset_does_not_stall_the_lockstep_batch():
+    """The whole point of the feature: while env 0 runs a 1s reset, env 1
+    keeps taking real steps -- 20 lockstep steps complete in well under the
+    reset span, where today's synchronous auto-reset would block the batch
+    for the full second on every one of env 0's episode ends."""
+    vec = SubprocVecEnv([
+        functools.partial(make_async_timed, reset_s=1.0, episode_len=2),
+        functools.partial(make_async_timed, reset_s=0.0, episode_len=10 ** 9),
+    ])
+    try:
+        vec.reset()
+        started = time.monotonic()
+        placeholders = 0
+        for _ in range(20):
+            _, _, _, infos = vec.step([0, 0])
+            placeholders += bool(infos[0].get("reset_pending"))
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.8, f"batch stalled: 20 steps took {elapsed:.2f}s"
+        assert placeholders >= 1  # env 0 really was resetting during those steps
+    finally:
+        started = time.monotonic()
+        vec.close()
+        assert time.monotonic() - started < 5.0  # close never waits out a reset

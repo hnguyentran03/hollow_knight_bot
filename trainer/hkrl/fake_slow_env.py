@@ -58,3 +58,38 @@ class SlowResetEnv(gym.Env):
 
     def _obs(self):
         return np.full(3, float(self.resets), dtype=np.float32)
+
+
+class TimedResetEnv(gym.Env):
+    """Picklable toy for SubprocVecEnv tests: reset() sleeps `reset_s`,
+    episodes end after `episode_len` steps. Event-gated SlowResetEnv can't
+    cross a process boundary; wall-clock sleeps can."""
+
+    def __init__(self, reset_s=0.0, episode_len=3):
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(3,),
+                                            dtype=np.float32)
+        self.action_space = spaces.Discrete(2)
+        self.reset_s = reset_s
+        self.episode_len = episode_len
+        self.resets = 0
+        self._t = 0
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        time.sleep(self.reset_s)
+        self.resets += 1
+        self._t = 0
+        return np.full(3, float(self.resets), dtype=np.float32), {}
+
+    def step(self, action):
+        self._t += 1
+        terminated = self._t >= self.episode_len
+        return (np.full(3, float(self.resets), dtype=np.float32),
+                1.0, terminated, False, {})
+
+
+def make_async_timed(reset_s, episode_len, pending_mode="prefix"):
+    """Module-level factory: picklable for SubprocVecEnv spawn workers."""
+    return AsyncResetWrapper(TimedResetEnv(reset_s, episode_len),
+                             pending_mode=pending_mode,
+                             placeholder_tick_s=0.0)
