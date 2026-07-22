@@ -3,6 +3,7 @@ import pytest
 
 from hkrl.env import ACTIONS, DEFAULT_REWARD, HKEnv
 from hkrl.fake_game import FakeGame, obs, state
+from hkrl.reset_metrics import read_reset_spans, reset_log_path
 
 
 def test_action_space_and_obs_shape():
@@ -14,6 +15,31 @@ def test_action_space_and_obs_shape():
         assert o.shape == env.observation_space.shape
         assert o.dtype == np.float32
         env.close()
+
+
+def test_reset_logs_a_span_per_reset_when_a_log_dir_is_configured(tmp_path):
+    # Phase 0 instrumentation: each reset() records its wall-clock span to a
+    # per-port sidecar, so a multi-instance run's sibling-freeze cost can be
+    # measured after the fact.
+    episodes = [[state(obs())], [state(obs())]]
+    with FakeGame(episodes) as fg:
+        env = HKEnv(port=fg.port, reset_log_dir=tmp_path)
+        env.reset()
+        env.reset()
+        env.close()
+    assert reset_log_path(tmp_path, fg.port).exists()
+    spans = read_reset_spans(tmp_path)
+    assert len(spans) == 2
+    assert all(s >= 0.0 for s in spans)
+
+
+def test_reset_does_not_log_without_a_log_dir(tmp_path):
+    # Default (N=1, tests, non-measurement runs): no sidecar, no overhead.
+    with FakeGame([[state(obs())]]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        env.close()
+    assert read_reset_spans(tmp_path) == []
 
 
 def test_reward_for_boss_damage_and_knight_damage():

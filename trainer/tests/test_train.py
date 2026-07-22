@@ -10,6 +10,7 @@ import pytest  # noqa: E402
 
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.generations import GenerationCallback, latest_checkpoint
+from hkrl.reset_metrics import read_reset_spans
 
 
 def _won_episode(steps=6):
@@ -83,6 +84,24 @@ def test_two_instance_training_collects_from_both_games(tmp_path):
         assert g["episodes"] >= 2
         assert g["win_rate"] == 1.0
         assert g["mean_boss_damage"] == 1.0
+
+
+def test_reset_log_dir_records_spans_through_the_subprocess_workers(tmp_path):
+    """Phase 0 measurement end to end: reset_log_dir set on build_env reaches
+    HKEnv inside the SubprocVecEnv workers, and their reset spans survive the
+    round-trip back to the run dir's sidecars."""
+    with FakeGame(_episodes(40)) as fg:
+        env, supervisor = train.build_env([fg.port], relaunch=lambda s: None,
+                                          run_dir=tmp_path,
+                                          reset_log_dir=tmp_path)
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8)
+            model.learn(total_timesteps=16)
+        finally:
+            env.close()
+    spans = read_reset_spans(tmp_path)
+    assert spans  # 6-step episodes auto-reset inside a 16-step run
+    assert all(s >= 0.0 for s in spans)
 
 
 def test_default_n_steps_keeps_the_total_batch_constant():

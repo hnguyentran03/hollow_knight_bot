@@ -1,11 +1,13 @@
 """Gymnasium environment over the HKRLBot mod protocol (v1)."""
 import sys
+import time
 
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
 from hkrl.protocol import Connection, ConnectionClosed
+from hkrl.reset_metrics import append_reset_span, reset_log_path
 
 # Hornet 1 FSM states, recorded from live play in Hall of Gods (Hornet 1,
 # Attuned), Godhome. See mod/DISCOVERED.md section 1 ("Hornet FSM state
@@ -113,12 +115,18 @@ class HKEnv(gym.Env):
     # scripts/train.py and for the same reason: a cold boot-to-fight spans
     # several of the mod's 22.5s reset budgets, and each expiry costs one
     # retry here.
+    # `reset_log_dir`, when set, turns on Phase 0 sibling-freeze measurement:
+    # every reset() appends its wall-clock span to a per-port sidecar under
+    # that directory (see hkrl/reset_metrics.py). Off by default -- N=1 runs,
+    # tests, and non-measurement training pay nothing.
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
                  max_steps=2700, timeout=30.0, reset_retries=8,
-                 keepalive=3.0):
+                 keepalive=3.0, reset_log_dir=None):
         self.reward = dict(DEFAULT_REWARD, **(reward_config or {}))
         self.max_steps = max_steps
         self.reset_retries = reset_retries
+        self._reset_log = (reset_log_path(reset_log_dir, port)
+                           if reset_log_dir is not None else None)
         self.conn = Connection(host=host, port=port, timeout=timeout,
                                keepalive=keepalive)
         self.conn.connect()
@@ -186,6 +194,10 @@ class HKEnv(gym.Env):
     # them here would only delay it.
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        # Span the whole attempt, retries and reconnects included: that full
+        # duration is exactly how long step_wait() blocks the fleet on this
+        # instance -- the sibling-freeze cost Phase 0 measures.
+        started = time.perf_counter()
         for retry in range(self.reset_retries + 1):
             try:
                 self.conn.send({"type": "reset"})
@@ -201,6 +213,10 @@ class HKEnv(gym.Env):
                       f"reconnecting", file=sys.stderr, flush=True)
                 self.conn.close()
                 self.conn.connect()
+        if self._reset_log is not None:
+            append_reset_span(self._reset_log,
+                              span_s=time.perf_counter() - started,
+                              t=time.monotonic())
         self._prev = msg["obs"]
         self._steps = 0
         self._max_bhp = None

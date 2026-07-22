@@ -267,6 +267,11 @@ def main() -> None:
                     help="skip the interactive ready prompt (unattended/"
                          "dashboard launches); the boot macro drives the "
                          "game into the Hall of Gods")
+    ap.add_argument("--measure-resets", action="store_true",
+                    help="Phase 0 async-resets measurement: log every reset's "
+                         "wall-clock span to resets_<port>.jsonl under the run "
+                         "dir. Analyze with scripts/measure_reset_freeze.py. "
+                         "Off by default; a normal run pays nothing.")
     args = ap.parse_args()
     if args.instances < 1:
         sys.exit("--instances must be at least 1")
@@ -362,6 +367,9 @@ def main() -> None:
             # boot-retry note in hkrl/supervisor.py); the default 3 would
             # abandon a boot that was converging.
             recover_attempts=8,
+            # Phase 0 async-resets measurement, only when asked. Flows through
+            # the supervisor's env_kwargs to every worker's HKEnv.
+            **({"reset_log_dir": run_dir} if args.measure_resets else {}),
         )
         model = build_model(env, run_dir,
                             resume_model=resume[1] if resume else None,
