@@ -93,3 +93,32 @@ def test_placeholder_steps_are_paced_to_the_decision_tick():
 def test_rejects_an_unknown_pending_mode():
     with pytest.raises(ValueError):
         AsyncResetWrapper(SlowResetEnv(), pending_mode="bogus")
+
+
+def test_isolated_mode_ends_the_pending_window_as_a_throwaway_episode():
+    inner = SlowResetEnv()
+    env = AsyncResetWrapper(inner, pending_mode="isolated",
+                            placeholder_tick_s=0.0)
+    env.reset()
+    inner.next_done = True
+    env.step(0)
+    inner.gate.clear()
+    obs, info = env.reset()              # placeholder episode begins
+    assert info["reset_pending"] and (obs == 0).all()
+    env.step(0)                          # a placeholder tick inside it
+    inner.gate.set()
+    terminated = False
+    for _ in range(200):
+        obs, reward, terminated, truncated, info = env.step(0)
+        if terminated:
+            break
+        time.sleep(0.01)
+    # The throwaway episode ends ON a placeholder, so the real episode
+    # about to start contains none -- LSTM state resets at the boundary.
+    assert terminated and not truncated
+    assert (obs == 0).all() and reward == 0.0 and info["reset_pending"]
+    obs, info = env.reset()              # auto-reset delivers the fresh frame
+    assert (obs == 2).all() and info == {"reset": 2}
+    env.step(1)                          # real stepping resumed
+    assert inner.actions == [0, 1]
+    env.close()
