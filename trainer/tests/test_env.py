@@ -223,3 +223,25 @@ def test_abort_reset_unblocks_a_hung_reset_from_another_thread():
         assert time.monotonic() - started < 2.0
         assert errors and isinstance(errors[0], ConnectionClosed)
         env.close()
+
+
+def test_abort_during_the_reconnect_window_still_aborts_promptly(monkeypatch):
+    """abort_reset() racing the retry loop's close()/connect() reconnect: the
+    flag can be set after the drop was caught but before/while the fresh
+    connection comes up. The post-reconnect check must honor it instead of
+    retrying against the new socket (where the abort's shutdown hit only the
+    old, dead one)."""
+    with FakeGame([[state(obs())], [state(obs())]], fail_resets=1) as fg:
+        env = HKEnv(port=fg.port)
+        original_connect = env.conn.connect
+
+        def connect_then_abort():
+            original_connect()
+            env._reset_abort.set()  # abort lands exactly at the window's edge
+
+        monkeypatch.setattr(env.conn, "connect", connect_then_abort)
+        started = time.monotonic()
+        with pytest.raises(ConnectionClosed):
+            env.reset()
+        assert time.monotonic() - started < 2.0
+        env.close()

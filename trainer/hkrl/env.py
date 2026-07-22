@@ -217,6 +217,12 @@ class HKEnv(gym.Env):
                       f"reconnecting", file=sys.stderr, flush=True)
                 self.conn.close()
                 self.conn.connect()
+                if self._reset_abort.is_set():
+                    # abort_reset() fired while we were reconnecting: its
+                    # shutdown hit the old socket, so honor the request here
+                    # instead of blindly retrying against the fresh one.
+                    self.conn.abort()
+                    raise
         if self._reset_log is not None:
             append_reset_span(self._reset_log,
                               span_s=time.perf_counter() - started,

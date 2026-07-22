@@ -45,9 +45,12 @@ class Connection:
         self._stop = None
 
     def connect(self):
-        self._sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
-        self._sock.settimeout(self.timeout)
-        self._file = self._sock.makefile("rwb")
+        sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+        sock.settimeout(self.timeout)
+        file = sock.makefile("rwb")
+        with self._lock:
+            self._sock = sock
+            self._file = file
         self._last_send = time.monotonic()
         self.hello = self.recv()
         if self.keepalive:
@@ -106,8 +109,14 @@ class Connection:
         buffering or reference count, so a reader parked in readline()
         fails immediately instead of at the socket timeout -- the same
         reasoning as FakeGame.__exit__'s shutdown-before-close.
+
+        The read is taken under the lock, pairing with connect()'s locked
+        assignment, so abort() can never observe a half-installed
+        connection (a `_sock` from a connect() that hasn't finished setting
+        `_file` too).
         """
-        s = self._sock
+        with self._lock:
+            s = self._sock
         if s is not None:
             try:
                 s.shutdown(socket.SHUT_RDWR)
