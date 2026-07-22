@@ -255,3 +255,94 @@ def test_async_resets_trains_end_to_end_and_still_serves_both_games(tmp_path):
     # The wrapper really ran inside the workers: without it no step info
     # ever carries the reset_pending key.
     assert spots.pending_infos >= 1
+
+
+def test_supervisor_recovery_composes_with_async_resets(tmp_path):
+    """The design's risk section, exercised end to end: at N=2 with async
+    resets ACTIVE, one instance's connection drops mid-run.
+    SupervisedVecEnv._recover force-closes the whole vec (SubprocVecEnv can't
+    isolate which slot failed) and rebuilds it from scratch -- fresh worker
+    subprocesses, so fresh AsyncResetWrapper instances too. The worry is that
+    the rebuilt vec might come up with inherited pending state instead of a
+    clean slate. Proof that it doesn't: training survives the death, reaches
+    its full timestep budget, and a generation whose ENTIRE window falls
+    after the recovery still records real wins -- a vec stuck emitting
+    placeholders (e.g. a wrapper that carried a stale background thread
+    across the rebuild) would never produce another episode record."""
+    from stable_baselines3.common.callbacks import BaseCallback
+
+    class KillFirstInstanceOnce(BaseCallback):
+        """Tears down FakeGame `game`'s live connection once, after
+        `after_steps` combined vec steps -- the mid-run death this test
+        simulates without any sleep-based timing."""
+
+        def __init__(self, game, after_steps):
+            super().__init__()
+            self._game = game
+            self._after_steps = after_steps
+            self._steps = 0
+            self.killed = False
+
+        def _on_step(self) -> bool:
+            self._steps += 1
+            if not self.killed and self._steps >= self._after_steps:
+                self.killed = True
+                self._game.__exit__(None, None, None)
+            return True
+
+    class SpotsPending(BaseCallback):
+        def __init__(self):
+            super().__init__()
+            self.pending_infos = 0
+
+        def _on_step(self) -> bool:
+            self.pending_infos += sum(
+                1 for i in self.locals.get("infos", ()) if "reset_pending" in i)
+            return True
+
+    with FakeGame(_episodes(40)) as a, FakeGame(_episodes(40)) as b:
+        spawned = []
+
+        def relaunch(slot):
+            assert slot == 0  # instance 0 is the one this test kills
+            spawned.append(FakeGame(_episodes(40), port=a.port).__enter__())
+
+        env, supervisor = train.build_env(
+            [a.port, b.port], relaunch=relaunch, run_dir=tmp_path,
+            async_resets=True, pending_mode="prefix",
+            # Bounded recovery timing, same shape as test_supervisor.py's
+            # FAST: a real recovery must stay well inside this test's runtime.
+            recover_attempts=2, recover_delay=0.0, probe_timeout=0.3,
+            launch_timeout=1.0, ready_timeout=1.0, timeout=0.5)
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8)
+            gen_cb = GenerationCallback(tmp_path, vecnorm=env, every_steps=16,
+                                        supervisor=supervisor)
+            # after_steps=2 kills instance 0 a couple of combined steps into
+            # the first of three 16-timestep rollouts, so recovery lands well
+            # inside generation 1's window and generations 2-3 fall entirely
+            # after it.
+            killer = KillFirstInstanceOnce(a, after_steps=2)
+            spots = SpotsPending()
+            model.learn(total_timesteps=48, callback=[killer, gen_cb, spots])
+        finally:
+            env.close()
+            for fg in spawned:
+                fg.__exit__(None, None, None)
+
+    assert model.num_timesteps == 48  # the budget was reached despite the death
+    assert supervisor.recoveries >= 1
+    assert len(spawned) == 1  # exactly one relaunch, on instance 0's own port
+    # The wrapper really ran in the workers, both before and after the rebuild.
+    assert spots.pending_infos >= 1
+
+    gens = [json.loads(line)
+            for line in (tmp_path / "generations.jsonl").read_text().splitlines()]
+    assert [g["gen"] for g in gens] == [1, 2, 3]
+    assert gens[-1]["timestep"] == 48
+    # Generation 3's whole window (timesteps 33-48) comes after the recovery,
+    # which lands inside generation 1's -- real wins there prove the rebuilt
+    # vec kept serving genuine episodes rather than getting stuck on
+    # placeholders forever.
+    assert gens[-1]["episodes"] >= 1
+    assert gens[-1]["win_rate"] > 0.0
