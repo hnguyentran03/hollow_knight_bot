@@ -219,6 +219,13 @@ def test_build_apps_none_when_isolation_unsupported(monkeypatch):
     assert apps is None
 
 
+def test_async_resets_defaults_on_for_multi_instance_and_off_for_single():
+    assert train.resolve_async_resets(None, instances=2) is True
+    assert train.resolve_async_resets(None, instances=1) is False
+    assert train.resolve_async_resets(False, instances=2) is False  # opt-out
+    assert train.resolve_async_resets(True, instances=1) is False   # no sibling
+
+
 def test_async_resets_trains_end_to_end_and_still_serves_both_games(tmp_path):
     """--async-resets end to end at N=2 (minus the real processes): the
     kwargs reach make_env inside the SubprocVecEnv workers, and the wrapper
