@@ -3,12 +3,53 @@
 Training runs a single instance today, so `ports` is normally one long; PPO
 needs a VecEnv either way.
 """
+import time
 from typing import Callable, Sequence
 
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 
 from hkrl.async_reset import AsyncResetWrapper
 from hkrl.env import HKEnv
+
+
+class RealEpisodeVecMonitor(VecMonitor):
+    """VecMonitor that drops async-reset throwaway episodes.
+
+    AsyncResetWrapper's "isolated" mode ends each pending window as its own
+    zero-reward episode whose done step carries reset_pending=True in info.
+    Stock VecMonitor records those like real fights, polluting the monitor
+    CSV (and through it the dashboard) plus rollout/ep_rew_mean, so this
+    subclass zeroes the accumulators without writing a row or attaching
+    info["episode"]. Reimplements step_wait rather than delegating: the
+    parent writes its CSV row inside the loop, too late to take back.
+    """
+
+    def step_wait(self):
+        obs, rewards, dones, infos = self.venv.step_wait()
+        self.episode_returns += rewards
+        self.episode_lengths += 1
+        new_infos = list(infos[:])
+        for i in range(len(dones)):
+            if not dones[i]:
+                continue
+            if infos[i].get("reset_pending"):
+                self.episode_returns[i] = 0
+                self.episode_lengths[i] = 0
+                continue
+            info = infos[i].copy()
+            episode_info = {"r": self.episode_returns[i],
+                            "l": self.episode_lengths[i],
+                            "t": round(time.time() - self.t_start, 6)}
+            for key in self.info_keywords:
+                episode_info[key] = info[key]
+            info["episode"] = episode_info
+            self.episode_count += 1
+            self.episode_returns[i] = 0
+            self.episode_lengths[i] = 0
+            if self.results_writer:
+                self.results_writer.write_row(episode_info)
+            new_infos[i] = info
+        return obs, rewards, dones, new_infos
 
 
 def make_env(port: int, async_resets: bool = False,

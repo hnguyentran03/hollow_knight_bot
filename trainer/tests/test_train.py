@@ -11,6 +11,7 @@ import pytest  # noqa: E402
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.generations import GenerationCallback, latest_checkpoint
 from hkrl.reset_metrics import read_reset_spans
+from hkrl.vec import RealEpisodeVecMonitor
 
 
 def _won_episode(steps=6):
@@ -50,6 +51,18 @@ def test_a_short_training_run_writes_generations_and_a_manifest(tmp_path):
     gen, weights, vecnorm = latest_checkpoint(tmp_path)
     assert gen == 2 and weights.exists() and vecnorm.exists()
     assert list(tmp_path.glob("monitor_*")) != []  # VecMonitor session file
+
+
+def test_build_env_monitor_filters_reset_pending_episodes(tmp_path):
+    """The monitor layer must be the reset-aware subclass, or isolated-mode
+    throwaway episodes land in the CSV, the dashboard, and ep_rew_mean."""
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path)
+        try:
+            assert isinstance(env.venv, RealEpisodeVecMonitor)
+        finally:
+            env.close()
 
 
 def test_two_instance_training_collects_from_both_games(tmp_path):

@@ -22,13 +22,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sb3_contrib import RecurrentPPO  # noqa: E402
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
-from stable_baselines3.common.vec_env import (  # noqa: E402
-    VecMonitor, VecNormalize,
-)
+from stable_baselines3.common.vec_env import VecNormalize  # noqa: E402
 
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
 from hkrl.supervisor import InstanceDown, SupervisedVecEnv  # noqa: E402
+from hkrl.vec import RealEpisodeVecMonitor  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from launch_instances import (  # noqa: E402
@@ -91,14 +90,16 @@ def session_banner(timesteps: int, start_timestep: int = 0,
 
 
 def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs):
-    """SupervisedVecEnv -> VecMonitor -> VecNormalize.
+    """SupervisedVecEnv -> RealEpisodeVecMonitor -> VecNormalize.
 
     Returns (env, supervisor): the outermost wrapper for PPO, plus the
     supervisor itself so the checkpoint callback can read its recovery
     count.
 
-    VecMonitor sits below the normalizer so its episode records carry raw
-    rewards and true lengths. It gets no info_keywords: VecMonitor indexes
+    The monitor is RealEpisodeVecMonitor so isolated-mode async-reset
+    throwaway episodes never reach the monitor CSV, the dashboard, or
+    ep_rew_mean. It sits below the normalizer so its episode records carry
+    raw rewards and true lengths. It gets no info_keywords: VecMonitor indexes
     every keyword into each done step's info, and the supervisor's recovery
     frames carry only terminal_observation, so a keyword would KeyError there
     and kill the run on its first recovery. GenerationCallback reads
@@ -118,7 +119,8 @@ def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs
     session = time.strftime("%Y%m%d_%H%M%S")
     # Session-stamped so a resumed run appends a new episode log instead of
     # truncating the previous session's.
-    mon = VecMonitor(supervisor, filename=str(Path(run_dir) / f"monitor_{session}"))
+    mon = RealEpisodeVecMonitor(
+        supervisor, filename=str(Path(run_dir) / f"monitor_{session}"))
     if resume_vecnorm is not None:
         # The saved statistics are the distribution the resumed weights were
         # trained under; loading them together is what makes a resume a
