@@ -11,6 +11,7 @@ import pytest  # noqa: E402
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.generations import GenerationCallback, latest_checkpoint
 from hkrl.reset_metrics import read_reset_spans
+from hkrl.masking import MaskedRecurrentPPO, MaskedRecurrentRolloutBuffer
 from hkrl.vec import RealEpisodeVecMonitor
 
 
@@ -61,6 +62,25 @@ def test_build_env_monitor_filters_reset_pending_episodes(tmp_path):
                                  run_dir=tmp_path)
         try:
             assert isinstance(env.venv, RealEpisodeVecMonitor)
+        finally:
+            env.close()
+
+
+def test_build_model_masks_placeholder_transitions(tmp_path):
+    """Fresh and resumed models must both be the masked RecurrentPPO, or
+    isolated-mode placeholder steps get trained on like real fights."""
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path)
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8)
+            assert isinstance(model, MaskedRecurrentPPO)
+            saved = tmp_path / "model.zip"
+            model.save(saved)
+            resumed = train.build_model(env, tmp_path, resume_model=saved)
+            assert isinstance(resumed, MaskedRecurrentPPO)
+            assert isinstance(resumed.rollout_buffer,
+                              MaskedRecurrentRolloutBuffer)
         finally:
             env.close()
 

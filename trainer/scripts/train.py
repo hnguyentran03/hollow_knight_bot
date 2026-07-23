@@ -20,12 +20,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sb3_contrib import RecurrentPPO  # noqa: E402
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
 from stable_baselines3.common.vec_env import VecNormalize  # noqa: E402
 
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
+from hkrl.masking import MaskedRecurrentPPO  # noqa: E402
 from hkrl.supervisor import InstanceDown, SupervisedVecEnv  # noqa: E402
 from hkrl.vec import RealEpisodeVecMonitor  # noqa: E402
 
@@ -137,12 +137,17 @@ def build_model(env, run_dir, resume_model=None, seed=None,
     """A RecurrentPPO for this env, fresh or loaded from a generation
     checkpoint.
 
+    The masked subclass so async-reset placeholder transitions never reach
+    the gradient (hkrl/masking.py); loading an old plain-RecurrentPPO
+    checkpoint through it is fine, the weights are identical.
+
     On resume every hyperparameter comes from the checkpoint zip; the
     keyword arguments here shape fresh models only.
     """
     if resume_model is not None:
-        return RecurrentPPO.load(str(resume_model), env=env, device="cpu")
-    return RecurrentPPO(
+        return MaskedRecurrentPPO.load(str(resume_model), env=env,
+                                       device="cpu")
+    return MaskedRecurrentPPO(
         "MlpLstmPolicy",
         env,
         # ~13s credit horizon at 15 Hz, so a dodge can still be credited
