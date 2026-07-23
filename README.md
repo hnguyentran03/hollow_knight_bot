@@ -65,40 +65,26 @@ from PowerShell with the venv paths swapped: `.venv\Scripts\python` instead
 of `./.venv/bin/python` (and likewise for `pip` and `tensorboard`). The
 trainer's `--app`/`--root` flags accept Windows paths directly.
 
-## Setup
+## Quick start
 
-**1. Build and install the mod:**
-
-```bash
-bash mod/build.sh                                      # macOS
-powershell -ExecutionPolicy Bypass -File mod\build.ps1 # Windows
-```
-
-Both assume the default Steam location; for a different Steam library pass
-`-HKManaged <path>` to build.ps1 or edit `HK_MANAGED` in build.sh.
-
-**2. Re-sign the game — macOS only** (required after *every* mod build — copying the DLL into the app bundle invalidates its code signature, and unsigned launches die instantly with exit code 138). Windows has no code-signing step:
+One command sets everything up and opens the dashboard, first run and every
+run after — it checks dependencies (and says exactly what's missing), creates
+the Python env, builds/installs/re-signs the mod when its source changed, and
+starts the dashboard, from whose "Summon a run" panel you can start training:
 
 ```bash
-codesign --force --deep --sign - \
-  "$HOME/Library/Application Support/Steam/steamapps/common/Hollow Knight/hollow_knight.app"
+bash run.sh                                          # macOS
+powershell -ExecutionPolicy Bypass -File run.ps1     # Windows
 ```
 
-**3. Set up the Python environment:**
+Extra arguments are passed to the dashboard (e.g. `bash run.sh --port 9701`).
+For a non-default Steam library, pass `-HKManaged <path>` to run.ps1 or edit
+`HK_APP` at the top of run.sh.
 
-```bash
-cd trainer
-python3 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
-```
-
-**4. Run the test suite** (no game needed — tests run against a scripted fake game):
-
-```bash
-cd trainer && ./.venv/bin/python -m pytest -q
-```
-
-**5. One-time game prep:** the training save file should be parked in Godhome with Hornet 1 unlocked in the Hall of Gods, ideally resting at the Hall of Gods bench. The mod's boot macro handles everything from the title screen onward.
+**One-time game prep** (the only step no script can do for you): the training
+save file should be parked in Godhome with Hornet 1 unlocked in the Hall of
+Gods, ideally resting at the Hall of Gods bench. The mod's boot macro handles
+everything from the title screen onward.
 
 ## Smoke test: the random agent
 
@@ -251,7 +237,7 @@ Comparing an early generation against the latest is the quickest way to *see* wh
 
 ## Things that bite
 
-- **Forgot to re-sign after a mod build (macOS)** → game exits immediately with code 138. Run the `codesign` command above.
+- **Forgot to re-sign after a mod build (macOS)** → game exits immediately with code 138. `run.sh` re-signs automatically after every build; if you ran `mod/build.sh` by hand, follow it with `codesign --force --deep --sign - "$HOME/Library/Application Support/Steam/steamapps/common/Hollow Knight/hollow_knight.app"`.
 - **Occluded game window (macOS) / minimized window (Windows)** → the OS suspends or deprioritizes the game; the trainer sees a wedge and burns a recovery. Keep it visible, even if small.
 - **Old checkpoints after changing the action/observation space** → not resumable or replayable; the policy network's shape changed. Start a fresh run.
 - **The mod drops connections that go silent for 10 s** → the trainer's keepalive pinger (`hkrl/protocol.py`) keeps every connection chatty through lockstep gaps (another instance's reset, a PPO update), so this no longer severs connections. The game still runs in real time while the trainer thinks, though — a slow update leaves the Knight standing in a live fight — so still lower `--n-epochs` if updates get slow; don't raise the mod's `ReadTimeout`.
