@@ -10,6 +10,7 @@ import pytest  # noqa: E402
 
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.generations import GenerationCallback, latest_checkpoint
+from hkrl.reset_metrics import read_reset_spans
 
 
 def _won_episode(steps=6):
@@ -83,6 +84,24 @@ def test_two_instance_training_collects_from_both_games(tmp_path):
         assert g["episodes"] >= 2
         assert g["win_rate"] == 1.0
         assert g["mean_boss_damage"] == 1.0
+
+
+def test_reset_log_dir_records_spans_through_the_subprocess_workers(tmp_path):
+    """Phase 0 measurement end to end: reset_log_dir set on build_env reaches
+    HKEnv inside the SubprocVecEnv workers, and their reset spans survive the
+    round-trip back to the run dir's sidecars."""
+    with FakeGame(_episodes(40)) as fg:
+        env, supervisor = train.build_env([fg.port], relaunch=lambda s: None,
+                                          run_dir=tmp_path,
+                                          reset_log_dir=tmp_path)
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8)
+            model.learn(total_timesteps=16)
+        finally:
+            env.close()
+    spans = read_reset_spans(tmp_path)
+    assert spans  # 6-step episodes auto-reset inside a 16-step run
+    assert all(s >= 0.0 for s in spans)
 
 
 def test_default_n_steps_keeps_the_total_batch_constant():
@@ -198,3 +217,172 @@ def test_build_apps_none_when_isolation_unsupported(monkeypatch):
     apps = train.build_apps(ports=[9020], app="master.app",
                             instances_root="/tmp/instances")
     assert apps is None
+
+
+def test_async_resets_defaults_on_for_multi_instance_and_off_for_single():
+    assert train.resolve_async_resets(None, instances=2) is True
+    assert train.resolve_async_resets(None, instances=1) is False
+    assert train.resolve_async_resets(False, instances=2) is False  # opt-out
+    assert train.resolve_async_resets(True, instances=1) is False   # no sibling
+
+
+def test_build_config_dict_records_resolved_async_resets():
+    """The config dict records the resolved async_resets boolean, not the
+    raw tri-state flag, so config.jsonl reflects what actually ran."""
+    import argparse
+
+    # Build a minimal args object
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--async-resets", action=argparse.BooleanOptionalAction,
+                        default=None)
+    parser.add_argument("--instances", type=int, default=1)
+    parser.add_argument("--timesteps", type=int, default=100)
+
+    # Case 1: default (None) at N=2 resolves to True
+    args = parser.parse_args(["--instances", "2"])
+    config = train.build_config_dict(args, async_resets=True, started_at="2026-07-22T12:00:00")
+    assert config["async_resets"] is True
+
+    # Case 2: default (None) at N=1 resolves to False
+    args = parser.parse_args(["--instances", "1"])
+    config = train.build_config_dict(args, async_resets=False, started_at="2026-07-22T12:00:00")
+    assert config["async_resets"] is False
+
+    # Case 3: explicit --no-async-resets at N=2 records False
+    args = parser.parse_args(["--instances", "2", "--no-async-resets"])
+    config = train.build_config_dict(args, async_resets=False, started_at="2026-07-22T12:00:00")
+    assert config["async_resets"] is False
+
+    # Case 4: explicit --async-resets at N=2 records True
+    args = parser.parse_args(["--instances", "2", "--async-resets"])
+    config = train.build_config_dict(args, async_resets=True, started_at="2026-07-22T12:00:00")
+    assert config["async_resets"] is True
+
+
+def test_async_resets_trains_end_to_end_and_still_serves_both_games(tmp_path):
+    """--async-resets end to end at N=2 (minus the real processes): the
+    kwargs reach make_env inside the SubprocVecEnv workers, and the wrapper
+    is demonstrably ACTIVE there -- after every death, the first step's info
+    carries the reset_pending key (True while pending, False on the splice),
+    which only AsyncResetWrapper produces. Placeholders and splices flow
+    through VecMonitor/VecNormalize, and training completes."""
+    from stable_baselines3.common.callbacks import BaseCallback
+
+    class SpotsPending(BaseCallback):
+        def __init__(self):
+            super().__init__()
+            self.pending_infos = 0
+
+        def _on_step(self) -> bool:
+            self.pending_infos += sum(
+                1 for i in self.locals.get("infos", ()) if "reset_pending" in i)
+            return True
+
+    spots = SpotsPending()
+    with FakeGame(_episodes(40)) as a, FakeGame(_episodes(40)) as b:
+        env, supervisor = train.build_env([a.port, b.port],
+                                          relaunch=lambda s: None,
+                                          run_dir=tmp_path,
+                                          async_resets=True,
+                                          pending_mode="prefix")
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8)
+            model.learn(total_timesteps=32, callback=spots)
+        finally:
+            env.close()
+        assert len(a.episodes) < 40
+        assert len(b.episodes) < 40
+    # The wrapper really ran inside the workers: without it no step info
+    # ever carries the reset_pending key.
+    assert spots.pending_infos >= 1
+
+
+def test_supervisor_recovery_composes_with_async_resets(tmp_path):
+    """The design's risk section, exercised end to end: at N=2 with async
+    resets ACTIVE, one instance's connection drops mid-run.
+    SupervisedVecEnv._recover force-closes the whole vec (SubprocVecEnv can't
+    isolate which slot failed) and rebuilds it from scratch -- fresh worker
+    subprocesses, so fresh AsyncResetWrapper instances too. The worry is that
+    the rebuilt vec might come up with inherited pending state instead of a
+    clean slate. Proof that it doesn't: training survives the death, reaches
+    its full timestep budget, and a generation whose ENTIRE window falls
+    after the recovery still records real wins -- a vec stuck emitting
+    placeholders (e.g. a wrapper that carried a stale background thread
+    across the rebuild) would never produce another episode record."""
+    from stable_baselines3.common.callbacks import BaseCallback
+
+    class KillFirstInstanceOnce(BaseCallback):
+        """Tears down FakeGame `game`'s live connection once, after
+        `after_steps` combined vec steps -- the mid-run death this test
+        simulates without any sleep-based timing."""
+
+        def __init__(self, game, after_steps):
+            super().__init__()
+            self._game = game
+            self._after_steps = after_steps
+            self._steps = 0
+            self.killed = False
+
+        def _on_step(self) -> bool:
+            self._steps += 1
+            if not self.killed and self._steps >= self._after_steps:
+                self.killed = True
+                self._game.__exit__(None, None, None)
+            return True
+
+    class SpotsPending(BaseCallback):
+        def __init__(self):
+            super().__init__()
+            self.pending_infos = 0
+
+        def _on_step(self) -> bool:
+            self.pending_infos += sum(
+                1 for i in self.locals.get("infos", ()) if "reset_pending" in i)
+            return True
+
+    with FakeGame(_episodes(40)) as a, FakeGame(_episodes(40)) as b:
+        spawned = []
+
+        def relaunch(slot):
+            assert slot == 0  # instance 0 is the one this test kills
+            spawned.append(FakeGame(_episodes(40), port=a.port).__enter__())
+
+        env, supervisor = train.build_env(
+            [a.port, b.port], relaunch=relaunch, run_dir=tmp_path,
+            async_resets=True, pending_mode="prefix",
+            # Bounded recovery timing, same shape as test_supervisor.py's
+            # FAST: a real recovery must stay well inside this test's runtime.
+            recover_attempts=2, recover_delay=0.0, probe_timeout=0.3,
+            launch_timeout=1.0, ready_timeout=1.0, timeout=0.5)
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8)
+            gen_cb = GenerationCallback(tmp_path, vecnorm=env, every_steps=16,
+                                        supervisor=supervisor)
+            # after_steps=2 kills instance 0 a couple of combined steps into
+            # the first of three 16-timestep rollouts, so recovery lands well
+            # inside generation 1's window and generations 2-3 fall entirely
+            # after it.
+            killer = KillFirstInstanceOnce(a, after_steps=2)
+            spots = SpotsPending()
+            model.learn(total_timesteps=48, callback=[killer, gen_cb, spots])
+        finally:
+            env.close()
+            for fg in spawned:
+                fg.__exit__(None, None, None)
+
+    assert model.num_timesteps == 48  # the budget was reached despite the death
+    assert supervisor.recoveries >= 1
+    assert len(spawned) == 1  # exactly one relaunch, on instance 0's own port
+    # The wrapper really ran in the workers, both before and after the rebuild.
+    assert spots.pending_infos >= 1
+
+    gens = [json.loads(line)
+            for line in (tmp_path / "generations.jsonl").read_text().splitlines()]
+    assert [g["gen"] for g in gens] == [1, 2, 3]
+    assert gens[-1]["timestep"] == 48
+    # Generation 3's whole window (timesteps 33-48) comes after the recovery,
+    # which lands inside generation 1's -- real wins there prove the rebuilt
+    # vec kept serving genuine episodes rather than getting stuck on
+    # placeholders forever.
+    assert gens[-1]["episodes"] >= 1
+    assert gens[-1]["win_rate"] > 0.0

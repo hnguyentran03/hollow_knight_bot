@@ -45,9 +45,12 @@ class Connection:
         self._stop = None
 
     def connect(self):
-        self._sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
-        self._sock.settimeout(self.timeout)
-        self._file = self._sock.makefile("rwb")
+        sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+        sock.settimeout(self.timeout)
+        file = sock.makefile("rwb")
+        with self._lock:
+            self._sock = sock
+            self._file = file
         self._last_send = time.monotonic()
         self.hello = self.recv()
         if self.keepalive:
@@ -72,7 +75,11 @@ class Connection:
         # only real protocol traffic regardless of how many keepalive
         # replies queued up while the owner was between messages.
         while True:
-            line = self._file.readline()
+            try:
+                line = self._file.readline()
+            except ValueError:
+                # readline() on a closed file (e.g., after abort()) raises ValueError
+                raise ConnectionClosed("mod closed the connection")
             if not line:
                 raise ConnectionClosed("mod closed the connection")
             msg = json.loads(line)
@@ -94,6 +101,28 @@ class Connection:
                 # news to break: the owner discovers it on its next
                 # send/recv, exactly as it would have without a pinger.
                 return
+
+    def abort(self):
+        """Unblock any thread blocked in recv() and close.
+
+        shutdown() acts on the OS socket regardless of the file object's
+        buffering or reference count, so a reader parked in readline()
+        fails immediately instead of at the socket timeout -- the same
+        reasoning as FakeGame.__exit__'s shutdown-before-close.
+
+        The read is taken under the lock, pairing with connect()'s locked
+        assignment, so abort() can never observe a half-installed
+        connection (a `_sock` from a connect() that hasn't finished setting
+        `_file` too).
+        """
+        with self._lock:
+            s = self._sock
+        if s is not None:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        self.close()
 
     def close(self):
         if self._stop is not None:

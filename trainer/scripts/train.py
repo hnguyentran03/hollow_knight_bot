@@ -50,6 +50,32 @@ def default_n_steps(instances: int) -> int:
     return max(128, 2048 // instances)
 
 
+def resolve_async_resets(flag, instances: int) -> bool:
+    """Async resets are a multi-instance throughput feature: on by default
+    at N>=2 since the Phase 2 gate passed, always off at N=1 (no sibling to
+    freeze), and --no-async-resets is the escape hatch."""
+    if instances < 2:
+        return False
+    return True if flag is None else bool(flag)
+
+
+def build_config_dict(args, async_resets, resume=None, started_at=None):
+    """Build the config dict to be written to config.jsonl, recording the
+    resolved async_resets value (not the raw tri-state flag)."""
+    if started_at is None:
+        started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+    return {
+        **{k: str(v) if isinstance(v, Path) else v
+           for k, v in vars(args).items()},
+        # No "n_stack": the recurrent policy replaced frame stacking, so
+        # there is no stack depth to record.
+        "async_resets": async_resets,  # Override with resolved boolean
+        "gamma": GAMMA, "ent_coef": 0.01,
+        "resumed_from_gen": resume[0] if resume else None,
+        "started_at": started_at,
+    }
+
+
 def session_banner(timesteps: int, start_timestep: int = 0,
                    resumed_gen: int | None = None) -> str:
     """One line stating this session's budget in the dashboard's language:
@@ -267,13 +293,37 @@ def main() -> None:
                     help="skip the interactive ready prompt (unattended/"
                          "dashboard launches); the boot macro drives the "
                          "game into the Hall of Gods")
+    ap.add_argument("--measure-resets", action="store_true",
+                    help="Phase 0 async-resets measurement: log every reset's "
+                         "wall-clock span to resets_<port>.jsonl under the run "
+                         "dir. Analyze with scripts/measure_reset_freeze.py. "
+                         "Off by default; a normal run pays nothing.")
+    ap.add_argument("--async-resets", action=argparse.BooleanOptionalAction,
+                    default=None,
+                    help="background-thread resets with placeholder steps so "
+                         "one instance's reset never freezes its siblings. "
+                         "Default: on at --instances >= 2 (Phase 2 gate "
+                         "passed 2026-07-22 -- see the async-resets design doc), off at "
+                         "1. --no-async-resets forces the old synchronous "
+                         "behavior.")
+    ap.add_argument("--async-reset-mode", choices=("prefix", "isolated"),
+                    default="isolated",
+                    help="what the pending window is to PPO: a prefix of the "
+                         "next episode (LSTM state carries across the splice) "
+                         "or an isolated throwaway episode (LSTM state resets "
+                         "at the fight's first real frame)")
     args = ap.parse_args()
     if args.instances < 1:
         sys.exit("--instances must be at least 1")
+    # Note: only warn about explicit --async-resets at N=1; default (None) is handled by resolve_async_resets
+    if args.async_resets is True and args.instances < 2:
+        print("hkrl: --async-resets is a no-op at --instances 1 (no sibling "
+              "to freeze); running synchronously", file=sys.stderr, flush=True)
     # Resolved before the config dump below so config.jsonl records the
     # value actually used, not None.
     if args.n_steps is None:
         args.n_steps = default_n_steps(args.instances)
+    async_resets = resolve_async_resets(args.async_resets, args.instances)
 
     if args.resume is not None:
         run_dir = args.resume.expanduser()
@@ -291,15 +341,8 @@ def main() -> None:
     # One JSON object per session, appended, so a resumed run's full history
     # stays inspectable next to its checkpoints.
     with (run_dir / "config.jsonl").open("a") as f:
-        f.write(json.dumps({
-            **{k: str(v) if isinstance(v, Path) else v
-               for k, v in vars(args).items()},
-            # No "n_stack": the recurrent policy replaced frame stacking, so
-            # there is no stack depth to record.
-            "gamma": GAMMA, "ent_coef": 0.01,
-            "resumed_from_gen": resume[0] if resume else None,
-            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }) + "\n")
+        config = build_config_dict(args, async_resets, resume=resume)
+        f.write(json.dumps(config) + "\n")
 
     # Unconditional: every clone is seeded FROM the master save (N=1 on
     # save-isolation platforms, the master itself on others), so a quietly
@@ -362,6 +405,13 @@ def main() -> None:
             # boot-retry note in hkrl/supervisor.py); the default 3 would
             # abandon a boot that was converging.
             recover_attempts=8,
+            # Phase 0 async-resets measurement, only when asked. Flows through
+            # the supervisor's env_kwargs to every worker's HKEnv.
+            **({"reset_log_dir": run_dir} if args.measure_resets else {}),
+            # Async resets: multi-instance only. Flows through env_kwargs to
+            # make_env inside every worker, exactly like reset_log_dir.
+            **({"async_resets": True, "pending_mode": args.async_reset_mode}
+               if async_resets else {}),
         )
         model = build_model(env, run_dir,
                             resume_model=resume[1] if resume else None,

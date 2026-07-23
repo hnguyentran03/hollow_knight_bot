@@ -122,6 +122,11 @@ class GenerationCallback(BaseCallback):
             ep = info.get("episode")
             if ep is None:
                 continue
+            if info.get("reset_pending"):
+                # An isolated-mode placeholder episode (hkrl/async_reset.py):
+                # no fight happened; counting it would dilute win_rate and
+                # mean_boss_damage with zeros.
+                continue
             record = dict(ep)
             # Read from the raw step info, not VecMonitor info_keywords: the
             # supervisor's recovery frames carry neither key, and VecMonitor

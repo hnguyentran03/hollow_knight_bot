@@ -1,11 +1,14 @@
 """Gymnasium environment over the HKRLBot mod protocol (v1)."""
 import sys
+import threading
+import time
 
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
 from hkrl.protocol import Connection, ConnectionClosed
+from hkrl.reset_metrics import append_reset_span, reset_log_path
 
 # Hornet 1 FSM states, recorded from live play in Hall of Gods (Hornet 1,
 # Attuned), Godhome. See mod/DISCOVERED.md section 1 ("Hornet FSM state
@@ -113,15 +116,22 @@ class HKEnv(gym.Env):
     # scripts/train.py and for the same reason: a cold boot-to-fight spans
     # several of the mod's 22.5s reset budgets, and each expiry costs one
     # retry here.
+    # `reset_log_dir`, when set, turns on Phase 0 sibling-freeze measurement:
+    # every reset() appends its wall-clock span to a per-port sidecar under
+    # that directory (see hkrl/reset_metrics.py). Off by default -- N=1 runs,
+    # tests, and non-measurement training pay nothing.
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
                  max_steps=2700, timeout=30.0, reset_retries=8,
-                 keepalive=3.0):
+                 keepalive=3.0, reset_log_dir=None):
         self.reward = dict(DEFAULT_REWARD, **(reward_config or {}))
         self.max_steps = max_steps
         self.reset_retries = reset_retries
+        self._reset_log = (reset_log_path(reset_log_dir, port)
+                           if reset_log_dir is not None else None)
         self.conn = Connection(host=host, port=port, timeout=timeout,
                                keepalive=keepalive)
         self.conn.connect()
+        self._reset_abort = threading.Event()
         self._steps = 0
         self._prev = None
         self._max_bhp = None
@@ -186,12 +196,18 @@ class HKEnv(gym.Env):
     # them here would only delay it.
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        # Span the whole attempt, retries and reconnects included: that full
+        # duration is exactly how long step_wait() blocks the fleet on this
+        # instance -- the sibling-freeze cost Phase 0 measures.
+        started = time.perf_counter()
         for retry in range(self.reset_retries + 1):
             try:
                 self.conn.send({"type": "reset"})
                 msg = self.conn.recv()
                 break
             except (ConnectionClosed, BrokenPipeError, ConnectionResetError):
+                if self._reset_abort.is_set():
+                    raise
                 if retry == self.reset_retries:
                     raise
                 # stderr like the supervisor's lines: SB3's tables own stdout.
@@ -201,10 +217,29 @@ class HKEnv(gym.Env):
                       f"reconnecting", file=sys.stderr, flush=True)
                 self.conn.close()
                 self.conn.connect()
+                if self._reset_abort.is_set():
+                    # abort_reset() fired while we were reconnecting: its
+                    # shutdown hit the old socket, so honor the request here
+                    # instead of blindly retrying against the fresh one.
+                    self.conn.abort()
+                    raise
+        if self._reset_log is not None:
+            append_reset_span(self._reset_log,
+                              span_s=time.perf_counter() - started,
+                              t=time.monotonic())
         self._prev = msg["obs"]
         self._steps = 0
         self._max_bhp = None
         return self._flatten(msg["obs"]), dict(msg["info"])
+
+    def abort_reset(self):
+        """Abandon an in-flight reset() from another thread (the async-reset
+        shutdown path): shut the socket down so a blocked recv returns now
+        rather than at the 30s timeout, and make the retry loop re-raise
+        instead of treating the drop as the protocol's normal rhythm and
+        reconnecting."""
+        self._reset_abort.set()
+        self.conn.abort()
 
     def step(self, action):
         self.conn.send({"type": "action", "buttons": ACTIONS[int(action)]})

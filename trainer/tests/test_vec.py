@@ -1,5 +1,7 @@
+from hkrl.async_reset import AsyncResetWrapper
+from hkrl.env import HKEnv
 from hkrl.fake_game import FakeGame, obs, state
-from hkrl.vec import make_vec
+from hkrl.vec import make_env, make_vec
 
 
 def _episode(steps=3):
@@ -19,3 +21,14 @@ def test_make_vec_drives_every_instance():
             assert len(rewards) == 2
         finally:
             vec.close()
+
+
+def test_make_env_wraps_with_async_resets_only_when_asked():
+    with FakeGame([_episode()]) as fg:
+        env = make_env(fg.port, async_resets=True)()
+        assert isinstance(env, AsyncResetWrapper)
+        env.close()
+    with FakeGame([_episode()]) as fg:
+        env = make_env(fg.port)()
+        assert isinstance(env, HKEnv)  # default: no wrapper, N=1 unchanged
+        env.close()

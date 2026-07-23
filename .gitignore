@@ -6,6 +6,7 @@ docs/
 CLAUDE.md
 CLAUDE.local.md
 .claude-*
+.superpowers/
 
 # Python
 __pycache__/

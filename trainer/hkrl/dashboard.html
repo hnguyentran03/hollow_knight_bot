@@ -304,13 +304,13 @@
 <div class="wrap">
   <header>
     <div>
-      <div class="eyebrow">hkrl · Hall of Gods telemetry</div>
+      <div class="eyebrow">hkrl · Hall of Gods dashboard</div>
       <h1 id="run-title">…</h1>
     </div>
     <select id="run-select" aria-label="Training run"></select>
     <span class="page-links">
       <a class="btn" id="summon-link" href="/summon" hidden>Summon a run →</a>
-      <a class="btn" id="telemetry-link" href="/" hidden>← Telemetry</a>
+      <a class="btn" id="dashboard-link" href="/" hidden>← Dashboard</a>
     </span>
     <div class="status-line">
       <span id="badge" class="badge"><span class="dot"></span><span id="badge-text"></span></span>
@@ -1252,9 +1252,9 @@ document.getElementById("stop-btn").addEventListener("click", async () => {
   finally { stopBtn.disabled = false; }
 });
 document.getElementById("summon-link").hidden = SUMMON;
-document.getElementById("telemetry-link").hidden = !SUMMON;
+document.getElementById("dashboard-link").hidden = !SUMMON;
 if (SUMMON) {
-  // Launch-only page: the telemetry poll never runs, #content/#empty stay
+  // Launch-only page: the dashboard poll never runs, #content/#empty stay
   // hidden, and the header reads as the page title.
   document.title = "hkrl — Summon a run";
   document.getElementById("run-title").textContent = "Summon a run";
@@ -1264,7 +1264,7 @@ if (SUMMON) {
   refreshLauncher();
   setInterval(refreshLauncher, LAUNCH_POLL_MS);
 } else {
-  // Telemetry-only page: the launch panel stays hidden (its poll never
+  // Dashboard-only page: the launch panel stays hidden (its poll never
   // runs); the Summon button is the only launch surface here.
   refresh();
   setInterval(refresh, POLL_MS);

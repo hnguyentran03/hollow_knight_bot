@@ -1,8 +1,13 @@
+import threading
+import time
+
 import numpy as np
 import pytest
 
 from hkrl.env import ACTIONS, DEFAULT_REWARD, HKEnv
 from hkrl.fake_game import FakeGame, obs, state
+from hkrl.protocol import ConnectionClosed
+from hkrl.reset_metrics import read_reset_spans, reset_log_path
 
 
 def test_action_space_and_obs_shape():
@@ -14,6 +19,31 @@ def test_action_space_and_obs_shape():
         assert o.shape == env.observation_space.shape
         assert o.dtype == np.float32
         env.close()
+
+
+def test_reset_logs_a_span_per_reset_when_a_log_dir_is_configured(tmp_path):
+    # Phase 0 instrumentation: each reset() records its wall-clock span to a
+    # per-port sidecar, so a multi-instance run's sibling-freeze cost can be
+    # measured after the fact.
+    episodes = [[state(obs())], [state(obs())]]
+    with FakeGame(episodes) as fg:
+        env = HKEnv(port=fg.port, reset_log_dir=tmp_path)
+        env.reset()
+        env.reset()
+        env.close()
+    assert reset_log_path(tmp_path, fg.port).exists()
+    spans = read_reset_spans(tmp_path)
+    assert len(spans) == 2
+    assert all(s >= 0.0 for s in spans)
+
+
+def test_reset_does_not_log_without_a_log_dir(tmp_path):
+    # Default (N=1, tests, non-measurement runs): no sidecar, no overhead.
+    with FakeGame([[state(obs())]]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        env.close()
+    assert read_reset_spans(tmp_path) == []
 
 
 def test_reward_for_boss_damage_and_knight_damage():
@@ -138,8 +168,6 @@ def test_reset_retries_are_bounded_so_a_drop_loop_still_surfaces():
     """A game that drops every reset forever (a genuinely broken boot) must
     still escalate to the supervisor rather than retrying silently all
     night."""
-    from hkrl.protocol import ConnectionClosed
-
     with FakeGame([[state(obs())]], fail_resets=99) as fg:
         env = HKEnv(port=fg.port, reset_retries=2)
         with pytest.raises(ConnectionClosed):
@@ -167,4 +195,53 @@ def test_keepalive_pings_keep_an_idle_connection_alive_and_invisible():
         assert not terminated
         _, _, terminated, *_ = env.step(0)
         assert terminated  # lockstep survived the pong interleaving intact
+        env.close()
+
+
+def test_abort_reset_unblocks_a_hung_reset_from_another_thread():
+    """The async-reset shutdown path: a reset parked in its blocking recv
+    (hang_resets: the fake accepts the reset request but never answers) must
+    be releasable by another thread far inside the 30s socket timeout, and
+    must re-raise instead of reconnecting."""
+    errors = []
+    with FakeGame([[state(obs())]], hang_resets=1) as fg:
+        env = HKEnv(port=fg.port)
+
+        def run():
+            try:
+                env.reset()
+            except Exception as exc:  # noqa: BLE001 -- the raise IS the assertion
+                errors.append(exc)
+
+        t = threading.Thread(target=run)
+        t.start()
+        time.sleep(0.2)          # let the reset park in its blocking recv
+        started = time.monotonic()
+        env.abort_reset()
+        t.join(timeout=2.0)      # far under the 30s socket timeout
+        assert not t.is_alive()
+        assert time.monotonic() - started < 2.0
+        assert errors and isinstance(errors[0], ConnectionClosed)
+        env.close()
+
+
+def test_abort_during_the_reconnect_window_still_aborts_promptly(monkeypatch):
+    """abort_reset() racing the retry loop's close()/connect() reconnect: the
+    flag can be set after the drop was caught but before/while the fresh
+    connection comes up. The post-reconnect check must honor it instead of
+    retrying against the new socket (where the abort's shutdown hit only the
+    old, dead one)."""
+    with FakeGame([[state(obs())], [state(obs())]], fail_resets=1) as fg:
+        env = HKEnv(port=fg.port)
+        original_connect = env.conn.connect
+
+        def connect_then_abort():
+            original_connect()
+            env._reset_abort.set()  # abort lands exactly at the window's edge
+
+        monkeypatch.setattr(env.conn, "connect", connect_then_abort)
+        started = time.monotonic()
+        with pytest.raises(ConnectionClosed):
+            env.reset()
+        assert time.monotonic() - started < 2.0
         env.close()
