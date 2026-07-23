@@ -226,6 +226,39 @@ def test_async_resets_defaults_on_for_multi_instance_and_off_for_single():
     assert train.resolve_async_resets(True, instances=1) is False   # no sibling
 
 
+def test_build_config_dict_records_resolved_async_resets():
+    """The config dict records the resolved async_resets boolean, not the
+    raw tri-state flag, so config.jsonl reflects what actually ran."""
+    import argparse
+
+    # Build a minimal args object
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--async-resets", action=argparse.BooleanOptionalAction,
+                        default=None)
+    parser.add_argument("--instances", type=int, default=1)
+    parser.add_argument("--timesteps", type=int, default=100)
+
+    # Case 1: default (None) at N=2 resolves to True
+    args = parser.parse_args(["--instances", "2"])
+    config = train.build_config_dict(args, async_resets=True, started_at="2026-07-22T12:00:00")
+    assert config["async_resets"] is True
+
+    # Case 2: default (None) at N=1 resolves to False
+    args = parser.parse_args(["--instances", "1"])
+    config = train.build_config_dict(args, async_resets=False, started_at="2026-07-22T12:00:00")
+    assert config["async_resets"] is False
+
+    # Case 3: explicit --no-async-resets at N=2 records False
+    args = parser.parse_args(["--instances", "2", "--no-async-resets"])
+    config = train.build_config_dict(args, async_resets=False, started_at="2026-07-22T12:00:00")
+    assert config["async_resets"] is False
+
+    # Case 4: explicit --async-resets at N=2 records True
+    args = parser.parse_args(["--instances", "2", "--async-resets"])
+    config = train.build_config_dict(args, async_resets=True, started_at="2026-07-22T12:00:00")
+    assert config["async_resets"] is True
+
+
 def test_async_resets_trains_end_to_end_and_still_serves_both_games(tmp_path):
     """--async-resets end to end at N=2 (minus the real processes): the
     kwargs reach make_env inside the SubprocVecEnv workers, and the wrapper

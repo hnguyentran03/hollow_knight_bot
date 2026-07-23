@@ -59,6 +59,23 @@ def resolve_async_resets(flag, instances: int) -> bool:
     return True if flag is None else bool(flag)
 
 
+def build_config_dict(args, async_resets, resume=None, started_at=None):
+    """Build the config dict to be written to config.jsonl, recording the
+    resolved async_resets value (not the raw tri-state flag)."""
+    if started_at is None:
+        started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+    return {
+        **{k: str(v) if isinstance(v, Path) else v
+           for k, v in vars(args).items()},
+        # No "n_stack": the recurrent policy replaced frame stacking, so
+        # there is no stack depth to record.
+        "async_resets": async_resets,  # Override with resolved boolean
+        "gamma": GAMMA, "ent_coef": 0.01,
+        "resumed_from_gen": resume[0] if resume else None,
+        "started_at": started_at,
+    }
+
+
 def session_banner(timesteps: int, start_timestep: int = 0,
                    resumed_gen: int | None = None) -> str:
     """One line stating this session's budget in the dashboard's language:
@@ -306,6 +323,7 @@ def main() -> None:
     # value actually used, not None.
     if args.n_steps is None:
         args.n_steps = default_n_steps(args.instances)
+    async_resets = resolve_async_resets(args.async_resets, args.instances)
 
     if args.resume is not None:
         run_dir = args.resume.expanduser()
@@ -323,15 +341,8 @@ def main() -> None:
     # One JSON object per session, appended, so a resumed run's full history
     # stays inspectable next to its checkpoints.
     with (run_dir / "config.jsonl").open("a") as f:
-        f.write(json.dumps({
-            **{k: str(v) if isinstance(v, Path) else v
-               for k, v in vars(args).items()},
-            # No "n_stack": the recurrent policy replaced frame stacking, so
-            # there is no stack depth to record.
-            "gamma": GAMMA, "ent_coef": 0.01,
-            "resumed_from_gen": resume[0] if resume else None,
-            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }) + "\n")
+        config = build_config_dict(args, async_resets, resume=resume)
+        f.write(json.dumps(config) + "\n")
 
     # Unconditional: every clone is seeded FROM the master save (N=1 on
     # save-isolation platforms, the master itself on others), so a quietly
@@ -386,7 +397,6 @@ def main() -> None:
 
         signal.signal(signal.SIGINT, request_stop)
 
-        async_resets = resolve_async_resets(args.async_resets, args.instances)
         env, supervisor = build_env(
             game.ports, game.relaunch, run_dir,
             resume_vecnorm=resume[2] if resume else None,
