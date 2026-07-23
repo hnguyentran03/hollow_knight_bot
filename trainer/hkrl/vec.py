@@ -6,7 +6,10 @@ needs a VecEnv either way.
 import time
 from typing import Callable, Sequence
 
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
+import numpy as np
+
+from stable_baselines3.common.vec_env import (SubprocVecEnv, VecMonitor,
+                                              VecNormalize)
 
 from hkrl.async_reset import AsyncResetWrapper
 from hkrl.env import HKEnv
@@ -50,6 +53,63 @@ class RealEpisodeVecMonitor(VecMonitor):
                 self.results_writer.write_row(episode_info)
             new_infos[i] = info
         return obs, rewards, dones, new_infos
+
+
+class RealEpisodeVecNormalize(VecNormalize):
+    """VecNormalize whose running statistics learn only from real frames.
+
+    Async-reset placeholder steps (info reset_pending=True, all-zero
+    observations, zero reward -- hkrl/async_reset.py) are ~19% of what a
+    two-instance isolated run collects. Stock VecNormalize folds them into
+    obs_rms and ret_rms, dragging the observation mean toward the zero
+    placeholder and the return variance toward streams of zero reward, so
+    every REAL frame gets systematically mis-normalized. This subclass
+    updates the statistics from real rows only; normalization itself is
+    still applied to every row, since the policy still receives placeholder
+    observations. Reimplements step_wait rather than delegating: the parent
+    updates its statistics inline, too early to take back.
+
+    (The autoreset frame a real episode ends on is a placeholder without
+    the flag, and the one a throwaway window ends on is real WITH the flag;
+    the two miscounts are rare -- one each per reset -- and cancel.)
+    """
+
+    def step_wait(self):
+        obs, rewards, dones, infos = self.venv.step_wait()
+        assert isinstance(obs, np.ndarray)  # HK observations are a flat Box
+        self.old_obs = obs
+        self.old_reward = rewards
+        real = np.array([not info.get("reset_pending") for info in infos],
+                        dtype=bool)
+
+        if self.training:
+            if self.norm_obs and real.any():
+                self.obs_rms.update(obs[real])
+            self.returns = self.returns * self.gamma + rewards
+            if real.any():
+                self.ret_rms.update(self.returns[real])
+
+        obs = self.normalize_obs(obs)
+        rewards = self.normalize_reward(rewards)
+
+        for idx, done in enumerate(dones):
+            if not done:
+                continue
+            if "terminal_observation" in infos[idx]:
+                infos[idx]["terminal_observation"] = self.normalize_obs(
+                    infos[idx]["terminal_observation"])
+
+        self.returns[dones] = 0
+        return obs, rewards, dones, infos
+
+    @classmethod
+    def load(cls, load_path, venv):
+        vec = VecNormalize.load(load_path, venv)
+        # Pre-guard checkpoints unpickle as plain VecNormalize; the guard
+        # is pure behavior (no extra state), so upgrading the class is
+        # enough to keep it across resumes.
+        vec.__class__ = cls
+        return vec
 
 
 def make_env(port: int, async_resets: bool = False,

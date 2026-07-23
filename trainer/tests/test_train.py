@@ -12,7 +12,7 @@ from hkrl.fake_game import FakeGame, obs, state
 from hkrl.generations import GenerationCallback, latest_checkpoint
 from hkrl.reset_metrics import read_reset_spans
 from hkrl.masking import MaskedRecurrentPPO, MaskedRecurrentRolloutBuffer
-from hkrl.vec import RealEpisodeVecMonitor
+from hkrl.vec import RealEpisodeVecMonitor, RealEpisodeVecNormalize
 
 
 def _won_episode(steps=6):
@@ -62,6 +62,27 @@ def test_build_env_monitor_filters_reset_pending_episodes(tmp_path):
                                  run_dir=tmp_path)
         try:
             assert isinstance(env.venv, RealEpisodeVecMonitor)
+        finally:
+            env.close()
+
+
+def test_build_env_normalizer_is_reset_aware_fresh_and_resumed(tmp_path):
+    """Fresh and resumed stacks must both normalize through the
+    reset-aware subclass, or placeholder frames pollute obs/return stats."""
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path)
+        try:
+            assert isinstance(env, RealEpisodeVecNormalize)
+            env.save(str(tmp_path / "vecnormalize.pkl"))
+        finally:
+            env.close()
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path,
+                                 resume_vecnorm=tmp_path / "vecnormalize.pkl")
+        try:
+            assert isinstance(env, RealEpisodeVecNormalize)
         finally:
             env.close()
 

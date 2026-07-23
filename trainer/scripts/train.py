@@ -21,13 +21,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
-from stable_baselines3.common.vec_env import VecNormalize  # noqa: E402
 
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
 from hkrl.masking import MaskedRecurrentPPO  # noqa: E402
 from hkrl.supervisor import InstanceDown, SupervisedVecEnv  # noqa: E402
-from hkrl.vec import RealEpisodeVecMonitor  # noqa: E402
+from hkrl.vec import RealEpisodeVecMonitor, RealEpisodeVecNormalize  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from launch_instances import (  # noqa: E402
@@ -90,7 +89,7 @@ def session_banner(timesteps: int, start_timestep: int = 0,
 
 
 def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs):
-    """SupervisedVecEnv -> RealEpisodeVecMonitor -> VecNormalize.
+    """SupervisedVecEnv -> RealEpisodeVecMonitor -> RealEpisodeVecNormalize.
 
     Returns (env, supervisor): the outermost wrapper for PPO, plus the
     supervisor itself so the checkpoint callback can read its recovery
@@ -112,8 +111,10 @@ def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs
     fake. Stacking on top would only feed the LSTM redundant, delayed copies
     of frames it already remembers.
 
-    VecNormalize shares PPO's gamma so its return normalization tracks the
-    same discounted quantity the value head learns.
+    The normalizer is RealEpisodeVecNormalize so placeholder frames never
+    update the obs/return running statistics. It shares PPO's gamma so its
+    return normalization tracks the same discounted quantity the value head
+    learns.
     """
     supervisor = SupervisedVecEnv(list(ports), relaunch=relaunch, **supervisor_kwargs)
     session = time.strftime("%Y%m%d_%H%M%S")
@@ -125,10 +126,10 @@ def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs
         # The saved statistics are the distribution the resumed weights were
         # trained under; loading them together is what makes a resume a
         # continuation. training stays on so they keep adapting.
-        env = VecNormalize.load(str(resume_vecnorm), mon)
+        env = RealEpisodeVecNormalize.load(str(resume_vecnorm), mon)
         env.training = True
     else:
-        env = VecNormalize(mon, gamma=GAMMA, clip_obs=10.0)
+        env = RealEpisodeVecNormalize(mon, gamma=GAMMA, clip_obs=10.0)
     return env, supervisor
 
 
