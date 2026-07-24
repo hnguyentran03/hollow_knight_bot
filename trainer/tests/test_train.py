@@ -168,6 +168,19 @@ def test_default_n_steps_keeps_the_total_batch_constant():
     assert train.default_n_steps(1000) == 128  # floored, never zero
 
 
+def test_default_n_steps_compensates_for_masked_placeholder_rows():
+    # With async resets on, ~19% of collected rows are reset placeholders
+    # that the gradient mask (hkrl/masking.py) drops from the loss, so a
+    # 2048-row batch trains on only ~1660 real samples. Inflate the rollout
+    # so REAL samples per update stay ~2048: 2048 / (1 - 0.19) / instances.
+    assert train.default_n_steps(2, async_resets=True) == 1264
+    assert train.default_n_steps(4, async_resets=True) == 632
+    # Async resets off (or forced off): the plain division, unchanged.
+    assert train.default_n_steps(2, async_resets=False) == 1024
+    # The floor holds regardless.
+    assert train.default_n_steps(1000, async_resets=True) == 128
+
+
 def test_session_banner_fresh_states_budget_and_target():
     # Fresh run starts at timestep 0, so target == this session's budget.
     banner = train.session_banner(500_000)

@@ -36,16 +36,32 @@ from launch_instances import (  # noqa: E402
 
 GAMMA = 0.995
 
+# Fraction of collected rows that are async-reset placeholders in a
+# two-instance isolated run (measured on overnight-0723; see the
+# RealEpisodeVecNormalize docstring in hkrl/vec.py). The gradient mask
+# drops them from the loss, shrinking the effective batch by this much.
+ASYNC_RESET_PLACEHOLDER_FRACTION = 0.19
 
-def default_n_steps(instances: int) -> int:
+
+def default_n_steps(instances: int, async_resets: bool = False) -> int:
     """Per-instance rollout length for --n-steps when not given explicitly.
 
     Divides so the total batch per update -- and with it the update's
     wall-clock time, which must stay inside the mod's 10s idle-disconnect
     ceiling -- holds at ~2048 whatever the fleet size. Floored at 128 so an
     absurd fleet still collects a usable sequence per instance.
+
+    With async resets on, ~19% of the rows are placeholders the loss mask
+    discards, so the rollout is inflated to keep REAL samples per update at
+    ~2048 -- otherwise every N>=2 update learns from a smaller, noisier
+    batch than N=1 at the same learning rate. The inflated batch makes the
+    update ~23% longer (~8.3s at n_epochs=5); the keepalive pinger holds
+    connections through it, but lower --n-epochs if updates crowd 10s.
     """
-    return max(128, 2048 // instances)
+    total = 2048
+    if async_resets:
+        total = round(total / (1 - ASYNC_RESET_PLACEHOLDER_FRACTION))
+    return max(128, total // instances)
 
 
 def resolve_async_resets(flag, instances: int) -> bool:
@@ -283,11 +299,14 @@ def main() -> None:
     ap.add_argument("--gen-every", type=int, default=15_000)
     ap.add_argument("--n-steps", type=int, default=None,
                     help="PPO rollout length PER INSTANCE (default: "
-                         "2048 // instances). The default divides so the "
-                         "total batch -- and with it the update's wall-clock "
-                         "time -- stays constant as --instances grows: the "
-                         "games run on in real time while the update "
-                         "computes, every Knight standing in a live fight")
+                         "2048 // instances, inflated ~23%% when async "
+                         "resets are on so the update still sees ~2048 REAL "
+                         "samples after the placeholder mask). The default "
+                         "divides so the total batch -- and with it the "
+                         "update's wall-clock time -- stays roughly constant "
+                         "as --instances grows: the games run on in real "
+                         "time while the update computes, every Knight "
+                         "standing in a live fight")
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--n-epochs", type=int, default=5,
                     help="PPO epochs per update. Kept at 5 so the recurrent "
@@ -328,10 +347,11 @@ def main() -> None:
         print("hkrl: --async-resets is a no-op at --instances 1 (no sibling "
               "to freeze); running synchronously", file=sys.stderr, flush=True)
     # Resolved before the config dump below so config.jsonl records the
-    # value actually used, not None.
-    if args.n_steps is None:
-        args.n_steps = default_n_steps(args.instances)
+    # values actually used, not None. async_resets first: the n_steps
+    # default inflates to cover the placeholder rows it masks out.
     async_resets = resolve_async_resets(args.async_resets, args.instances)
+    if args.n_steps is None:
+        args.n_steps = default_n_steps(args.instances, async_resets)
 
     if args.resume is not None:
         run_dir = args.resume.expanduser()
