@@ -1,10 +1,13 @@
 import gymnasium as gym
 import numpy as np
+import torch as th
 from gymnasium import spaces
+from sb3_contrib.common.recurrent.type_aliases import RNNStates
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from hkrl.fake_slow_env import make_async_timed
-from hkrl.masking import MaskedRecurrentPPO, MaskedRecurrentRolloutBuffer
+from hkrl.masking import (MaskedRecurrentPPO, MaskedRecurrentRolloutBuffer,
+                          stream_breaks)
 
 RP = {"reset_pending": True}
 
@@ -101,6 +104,84 @@ def test_all_placeholder_minibatch_does_not_poison_the_optimizer():
 
     for param in model.policy.parameters():
         assert np.isfinite(param.detach().numpy()).all()
+
+
+def test_minibatches_are_full_size_in_real_rows():
+    """Minibatches must be built from real rows only. A minibatch that
+    straddles a placeholder window keeps only its few real rows in the
+    masked loss mean, giving them a full batch's gradient weight -- boundary
+    rows (pre-death, episode start) got up to 32x the weight of mid-episode
+    rows, which is what knocked async runs off their reward peaks."""
+    script = [
+        (0.5, False, {}),
+        (1.0, True, {}),    # real episode ends
+        (0.0, False, RP),
+        (0.0, False, RP),
+        (0.0, True, RP),    # throwaway reset-window episode ends
+        (0.3, False, {}),
+        (0.2, False, {}),
+        (0.8, True, {}),    # real episode ends
+        (0.0, False, RP),
+        (0.0, True, RP),    # second throwaway episode ends
+        (0.1, False, {}),
+        (0.4, False, {}),
+        (0.2, False, {}),
+        (0.6, False, {}),
+        (0.3, False, {}),
+        (0.5, False, {}),
+    ]
+    model = _make_model(script, n_steps=16, batch_size=8)
+    model.learn(total_timesteps=16)
+    # 11 real rows -> one full batch of 8 and a tail of 3, regardless of
+    # where the buffer's random rotation lands.
+    np.random.seed(0)
+    counts = [int((batch.mask > 1e-8).sum())
+              for batch in model.rollout_buffer.get(8)]
+    assert counts == [8, 3]
+
+
+def test_junk_rows_never_enter_minibatches():
+    """Placeholder rows must not appear in any yielded minibatch at all --
+    not even mask-zeroed: their mere presence shrinks the real-row count the
+    masked loss averages over."""
+    obs_space = spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32)
+    act_space = spaces.Discrete(2)
+    buf = MaskedRecurrentRolloutBuffer(
+        16, obs_space, act_space, hidden_state_shape=(16, 1, 1, 4),
+        device="cpu")
+    states = RNNStates((th.zeros(1, 1, 4), th.zeros(1, 1, 4)),
+                       (th.zeros(1, 1, 4), th.zeros(1, 1, 4)))
+    junk = {2, 3, 4, 8, 9}
+    # Episode starts mirror the done-bracketing the wrapper guarantees:
+    # windows 2-4 and 8-9 are their own episodes, real play resumes at 5/10.
+    starts = {0, 2, 5, 8, 10}
+    for i in range(16):
+        # Row i's observation is i+1 so sequence padding (zeros) can't be
+        # mistaken for row 0.
+        buf.add(np.array([[float(i + 1)]]), np.array([0]), np.array([0.0]),
+                np.array([i in starts]), th.zeros(1), th.zeros(1),
+                lstm_states=states)
+        if i in junk:
+            buf.valid[i, 0] = 0.0
+    buf.compute_returns_and_advantage(th.zeros(1), np.array([False]))
+    seen = set()
+    for batch in buf.get(4):
+        seen |= {float(v) for v in batch.observations.reshape(-1)}
+    junk_values = {float(i + 1) for i in junk}
+    real_values = {float(i + 1) for i in range(16) if i not in junk}
+    assert not seen & junk_values
+    assert real_values <= seen
+
+
+def test_stream_breaks_flags_gaps_env_starts_and_junction():
+    """A sequence must restart wherever the valid-row stream is not
+    buffer-contiguous: after a skipped placeholder window, at an env
+    column's first row, and at the rotation junction."""
+    idx = np.array([5, 6, 7, 12, 13, 16, 17, 30, 0, 1])
+    breaks = stream_breaks(idx, buffer_size=16)
+    # 0: stream start; 3: row 12 after the 7->12 gap; 5: row 16 opens the
+    # second env column; 7: row 30 after a gap; 8: row 0 after the junction.
+    assert list(np.flatnonzero(breaks)) == [0, 3, 5, 7, 8]
 
 
 def test_masking_sees_reset_pending_through_the_real_stack():
