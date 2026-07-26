@@ -11,6 +11,8 @@ import pytest  # noqa: E402
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.generations import GenerationCallback, latest_checkpoint
 from hkrl.reset_metrics import read_reset_spans
+from hkrl.masking import MaskedRecurrentPPO, MaskedRecurrentRolloutBuffer
+from hkrl.vec import RealEpisodeVecMonitor, RealEpisodeVecNormalize
 
 
 def _won_episode(steps=6):
@@ -50,6 +52,58 @@ def test_a_short_training_run_writes_generations_and_a_manifest(tmp_path):
     gen, weights, vecnorm = latest_checkpoint(tmp_path)
     assert gen == 2 and weights.exists() and vecnorm.exists()
     assert list(tmp_path.glob("monitor_*")) != []  # VecMonitor session file
+
+
+def test_build_env_monitor_filters_reset_pending_episodes(tmp_path):
+    """The monitor layer must be the reset-aware subclass, or isolated-mode
+    throwaway episodes land in the CSV, the dashboard, and ep_rew_mean."""
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path)
+        try:
+            assert isinstance(env.venv, RealEpisodeVecMonitor)
+        finally:
+            env.close()
+
+
+def test_build_env_normalizer_is_reset_aware_fresh_and_resumed(tmp_path):
+    """Fresh and resumed stacks must both normalize through the
+    reset-aware subclass, or placeholder frames pollute obs/return stats."""
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path)
+        try:
+            assert isinstance(env, RealEpisodeVecNormalize)
+            env.save(str(tmp_path / "vecnormalize.pkl"))
+        finally:
+            env.close()
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path,
+                                 resume_vecnorm=tmp_path / "vecnormalize.pkl")
+        try:
+            assert isinstance(env, RealEpisodeVecNormalize)
+        finally:
+            env.close()
+
+
+def test_build_model_masks_placeholder_transitions(tmp_path):
+    """Fresh and resumed models must both be the masked RecurrentPPO, or
+    isolated-mode placeholder steps get trained on like real fights."""
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path)
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8)
+            assert isinstance(model, MaskedRecurrentPPO)
+            saved = tmp_path / "model.zip"
+            model.save(saved)
+            resumed = train.build_model(env, tmp_path, resume_model=saved)
+            assert isinstance(resumed, MaskedRecurrentPPO)
+            assert isinstance(resumed.rollout_buffer,
+                              MaskedRecurrentRolloutBuffer)
+        finally:
+            env.close()
 
 
 def test_two_instance_training_collects_from_both_games(tmp_path):
@@ -112,6 +166,19 @@ def test_default_n_steps_keeps_the_total_batch_constant():
     assert train.default_n_steps(2) == 1024
     assert train.default_n_steps(4) == 512
     assert train.default_n_steps(1000) == 128  # floored, never zero
+
+
+def test_default_n_steps_compensates_for_masked_placeholder_rows():
+    # With async resets on, ~19% of collected rows are reset placeholders
+    # that the gradient mask (hkrl/masking.py) drops from the loss, so a
+    # 2048-row batch trains on only ~1660 real samples. Inflate the rollout
+    # so REAL samples per update stay ~2048: 2048 / (1 - 0.19) / instances.
+    assert train.default_n_steps(2, async_resets=True) == 1264
+    assert train.default_n_steps(4, async_resets=True) == 632
+    # Async resets off (or forced off): the plain division, unchanged.
+    assert train.default_n_steps(2, async_resets=False) == 1024
+    # The floor holds regardless.
+    assert train.default_n_steps(1000, async_resets=True) == 128
 
 
 def test_session_banner_fresh_states_budget_and_target():

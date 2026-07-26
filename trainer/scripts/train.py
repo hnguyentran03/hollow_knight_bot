@@ -20,15 +20,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sb3_contrib import RecurrentPPO  # noqa: E402
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
-from stable_baselines3.common.vec_env import (  # noqa: E402
-    VecMonitor, VecNormalize,
-)
 
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
+from hkrl.masking import MaskedRecurrentPPO  # noqa: E402
 from hkrl.supervisor import InstanceDown, SupervisedVecEnv  # noqa: E402
+from hkrl.vec import RealEpisodeVecMonitor, RealEpisodeVecNormalize  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from launch_instances import (  # noqa: E402
@@ -38,16 +36,32 @@ from launch_instances import (  # noqa: E402
 
 GAMMA = 0.995
 
+# Fraction of collected rows that are async-reset placeholders in a
+# two-instance isolated run (measured on overnight-0723; see the
+# RealEpisodeVecNormalize docstring in hkrl/vec.py). The gradient mask
+# drops them from the loss, shrinking the effective batch by this much.
+ASYNC_RESET_PLACEHOLDER_FRACTION = 0.19
 
-def default_n_steps(instances: int) -> int:
+
+def default_n_steps(instances: int, async_resets: bool = False) -> int:
     """Per-instance rollout length for --n-steps when not given explicitly.
 
     Divides so the total batch per update -- and with it the update's
     wall-clock time, which must stay inside the mod's 10s idle-disconnect
     ceiling -- holds at ~2048 whatever the fleet size. Floored at 128 so an
     absurd fleet still collects a usable sequence per instance.
+
+    With async resets on, ~19% of the rows are placeholders the loss mask
+    discards, so the rollout is inflated to keep REAL samples per update at
+    ~2048 -- otherwise every N>=2 update learns from a smaller, noisier
+    batch than N=1 at the same learning rate. The inflated batch makes the
+    update ~23% longer (~8.3s at n_epochs=5); the keepalive pinger holds
+    connections through it, but lower --n-epochs if updates crowd 10s.
     """
-    return max(128, 2048 // instances)
+    total = 2048
+    if async_resets:
+        total = round(total / (1 - ASYNC_RESET_PLACEHOLDER_FRACTION))
+    return max(128, total // instances)
 
 
 def resolve_async_resets(flag, instances: int) -> bool:
@@ -91,14 +105,16 @@ def session_banner(timesteps: int, start_timestep: int = 0,
 
 
 def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs):
-    """SupervisedVecEnv -> VecMonitor -> VecNormalize.
+    """SupervisedVecEnv -> RealEpisodeVecMonitor -> RealEpisodeVecNormalize.
 
     Returns (env, supervisor): the outermost wrapper for PPO, plus the
     supervisor itself so the checkpoint callback can read its recovery
     count.
 
-    VecMonitor sits below the normalizer so its episode records carry raw
-    rewards and true lengths. It gets no info_keywords: VecMonitor indexes
+    The monitor is RealEpisodeVecMonitor so isolated-mode async-reset
+    throwaway episodes never reach the monitor CSV, the dashboard, or
+    ep_rew_mean. It sits below the normalizer so its episode records carry
+    raw rewards and true lengths. It gets no info_keywords: VecMonitor indexes
     every keyword into each done step's info, and the supervisor's recovery
     frames carry only terminal_observation, so a keyword would KeyError there
     and kill the run on its first recovery. GenerationCallback reads
@@ -111,22 +127,25 @@ def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs
     fake. Stacking on top would only feed the LSTM redundant, delayed copies
     of frames it already remembers.
 
-    VecNormalize shares PPO's gamma so its return normalization tracks the
-    same discounted quantity the value head learns.
+    The normalizer is RealEpisodeVecNormalize so placeholder frames never
+    update the obs/return running statistics. It shares PPO's gamma so its
+    return normalization tracks the same discounted quantity the value head
+    learns.
     """
     supervisor = SupervisedVecEnv(list(ports), relaunch=relaunch, **supervisor_kwargs)
     session = time.strftime("%Y%m%d_%H%M%S")
     # Session-stamped so a resumed run appends a new episode log instead of
     # truncating the previous session's.
-    mon = VecMonitor(supervisor, filename=str(Path(run_dir) / f"monitor_{session}"))
+    mon = RealEpisodeVecMonitor(
+        supervisor, filename=str(Path(run_dir) / f"monitor_{session}"))
     if resume_vecnorm is not None:
         # The saved statistics are the distribution the resumed weights were
         # trained under; loading them together is what makes a resume a
         # continuation. training stays on so they keep adapting.
-        env = VecNormalize.load(str(resume_vecnorm), mon)
+        env = RealEpisodeVecNormalize.load(str(resume_vecnorm), mon)
         env.training = True
     else:
-        env = VecNormalize(mon, gamma=GAMMA, clip_obs=10.0)
+        env = RealEpisodeVecNormalize(mon, gamma=GAMMA, clip_obs=10.0)
     return env, supervisor
 
 
@@ -135,12 +154,17 @@ def build_model(env, run_dir, resume_model=None, seed=None,
     """A RecurrentPPO for this env, fresh or loaded from a generation
     checkpoint.
 
+    The masked subclass so async-reset placeholder transitions never reach
+    the gradient (hkrl/masking.py); loading an old plain-RecurrentPPO
+    checkpoint through it is fine, the weights are identical.
+
     On resume every hyperparameter comes from the checkpoint zip; the
     keyword arguments here shape fresh models only.
     """
     if resume_model is not None:
-        return RecurrentPPO.load(str(resume_model), env=env, device="cpu")
-    return RecurrentPPO(
+        return MaskedRecurrentPPO.load(str(resume_model), env=env,
+                                       device="cpu")
+    return MaskedRecurrentPPO(
         "MlpLstmPolicy",
         env,
         # ~13s credit horizon at 15 Hz, so a dodge can still be credited
@@ -275,11 +299,14 @@ def main() -> None:
     ap.add_argument("--gen-every", type=int, default=15_000)
     ap.add_argument("--n-steps", type=int, default=None,
                     help="PPO rollout length PER INSTANCE (default: "
-                         "2048 // instances). The default divides so the "
-                         "total batch -- and with it the update's wall-clock "
-                         "time -- stays constant as --instances grows: the "
-                         "games run on in real time while the update "
-                         "computes, every Knight standing in a live fight")
+                         "2048 // instances, inflated ~23%% when async "
+                         "resets are on so the update still sees ~2048 REAL "
+                         "samples after the placeholder mask). The default "
+                         "divides so the total batch -- and with it the "
+                         "update's wall-clock time -- stays roughly constant "
+                         "as --instances grows: the games run on in real "
+                         "time while the update computes, every Knight "
+                         "standing in a live fight")
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--n-epochs", type=int, default=5,
                     help="PPO epochs per update. Kept at 5 so the recurrent "
@@ -320,10 +347,11 @@ def main() -> None:
         print("hkrl: --async-resets is a no-op at --instances 1 (no sibling "
               "to freeze); running synchronously", file=sys.stderr, flush=True)
     # Resolved before the config dump below so config.jsonl records the
-    # value actually used, not None.
-    if args.n_steps is None:
-        args.n_steps = default_n_steps(args.instances)
+    # values actually used, not None. async_resets first: the n_steps
+    # default inflates to cover the placeholder rows it masks out.
     async_resets = resolve_async_resets(args.async_resets, args.instances)
+    if args.n_steps is None:
+        args.n_steps = default_n_steps(args.instances, async_resets)
 
     if args.resume is not None:
         run_dir = args.resume.expanduser()
