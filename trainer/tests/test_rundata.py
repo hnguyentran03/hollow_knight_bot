@@ -137,9 +137,16 @@ def test_a_config_only_run_has_status_but_no_series(tmp_path):
     assert run["status"]["eta_s"] is None
 
 
-def test_recoveries_reported_from_the_latest_generation(tmp_path):
-    _write_manifest(tmp_path, [_gen(1, 15_000, 1000.0, recoveries=3)])
-    assert load_run(tmp_path, now=0)["status"]["recoveries"] == 3
+def test_wins_summed_across_all_generations(tmp_path):
+    """win_rate is a per-generation mean, so the run's win total is the sum
+    of each generation's rate times its episode count."""
+    _write_manifest(tmp_path, [
+        _gen(1, 15_000, 1000.0, episodes=20, win_rate=0.1),
+        _gen(2, 30_000, 2000.0, episodes=18, win_rate=0.5),
+    ])
+    status = load_run(tmp_path, now=0)["status"]
+    assert status["wins"] == 11
+    assert "recoveries" not in status
 
 
 def test_scan_runs_sorts_by_recent_activity_and_summarizes(tmp_path):

@@ -93,6 +93,14 @@ def _steps_per_hour(generations: list[dict]) -> float | None:
     return (last["timestep"] - start_timestep) / wall * 3600.0
 
 
+def _wins(generations: list[dict]) -> int:
+    """Whole-of-run win total. Each manifest line records the generation's
+    win_rate over its episode count, so the count of wins is recoverable
+    exactly: rate * episodes is an integer up to float error."""
+    return sum(round(g.get("win_rate", 0.0) * g.get("episodes", 0))
+               for g in generations)
+
+
 def _target_timestep(generations: list[dict], config: dict | None) -> int | None:
     """--timesteps is additive on resume: the current session's target is the
     resumed-from generation's timestep plus the session's budget."""
@@ -131,7 +139,7 @@ def load_run(run_dir, now: float | None = None) -> dict:
             "target_timestep": target,
             "steps_per_hour": rate,
             "eta_s": eta_s,
-            "recoveries": generations[-1].get("recoveries", 0) if generations else 0,
+            "wins": _wins(generations),
             "sessions": len(configs),
         },
     }

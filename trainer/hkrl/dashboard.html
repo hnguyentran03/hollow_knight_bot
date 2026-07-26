@@ -717,8 +717,8 @@ function render() {
   tiles.appendChild(tile("Generations", String(gens.length),
     latest ? "win rate " + fmtPct(latest.win_rate) : ""));
   tiles.appendChild(tile("Episodes", String(run.episodes.length), "all sessions"));
-  tiles.appendChild(tile("Recoveries", String(st.recoveries),
-    "this session · " + st.sessions + " session" + (st.sessions === 1 ? "" : "s")));
+  tiles.appendChild(tile("Wins", String(st.wins),
+    "all sessions · " + st.sessions + " session" + (st.sessions === 1 ? "" : "s")));
 
   const s1 = css("--s1"), s2 = css("--s2"), muted = css("--muted");
   drawChart(document.getElementById("chart-learning"), {
