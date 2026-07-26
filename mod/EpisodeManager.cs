@@ -38,6 +38,10 @@ namespace HKRLBot
         // Sticky "boss confirmed dead" flag for the current episode. See the
         // note above ComputeWon for why this exists.
         private bool wonLatched;
+        // Whether any sampled frame of the current episode has seen the boss
+        // present. Backs ComputeWon's disappearance fallback: "present
+        // earlier, gone now" only means a win if it was ever present.
+        private bool sawBossThisEpisode;
 
         // True once TickReset has observed at least one NOT-live frame (fight
         // over / wrong scene / boss not yet respawned) since the current
@@ -274,7 +278,7 @@ namespace HKRLBot
 
             var k = HKRLBotMod.Instance.Reader.ReadKnight();
             var b = HKRLBotMod.Instance.Reader.ReadBoss();
-            bool won = ComputeWon(b);
+            bool won = ComputeWon(k, b);
             bool lost = k == null || k.Dead || k.Hp <= 0;
             bool done = lost || won || Scene != BossScene;
 
@@ -291,24 +295,43 @@ namespace HKRLBot
             phase = Phase.AwaitingAction;
         }
 
-        // A one-shot `b.Present && b.Hp <= 0` check on whatever frame the
-        // decision cycle happened to land on is not enough: because state is
-        // only sampled once per hold window, it's possible for the boss's
-        // GameObject to be torn down by its death sequence (Present flips to
-        // false) in the same window in which its HP reading crossed to <=0,
-        // without this loop ever observing a frame where both were true
-        // simultaneously. A one-shot check would then report won=false
-        // forever, and the episode would only end later via the `Scene !=
-        // BossScene` fallback once the game transitions to GG_Workshop --
-        // reporting a real win as a loss/timeout to the trainer, corrupting
-        // the reward signal. Fix: latch `wonLatched` the first time we ever
-        // observe (Present && Hp<=0) in a given episode, and keep reporting
-        // won=true for the rest of that episode even if the boss object
-        // later disappears. Reset on every fresh episode start (TickReset's
-        // fightLive branch).
-        private bool ComputeWon(BossState b)
+        // Win detection latches from three signals, strongest first. The
+        // original polled check -- `b.Present && b.Hp <= 0` on whatever frame
+        // the decision cycle sampled -- NEVER fired in practice: across every
+        // archived run there was not one won=True in a ModLog, against
+        // replayed episodes that dealt 100% boss damage (2026-07-26). In Hall
+        // of Gods the fatal blow's death sequence tears the boss GameObject
+        // down inside one ~67ms hold window, so no sampled frame ever shows
+        // Present with Hp <= 0; the episode then dragged on until the `Scene
+        // != BossScene` fallback ended it as a loss, paying the death penalty
+        // on exactly the episodes the win bonus exists for.
+        //
+        //   1. b.Died: the On.HealthManager.Die hook (HKRLBotMod.Initialize
+        //      -> StateReader.NoteDeath) records the death the frame it
+        //      happens, immune to the sampling race. The primary signal.
+        //   2. Present && Hp <= 0: the original check, kept as a backstop in
+        //      case a death path skips HealthManager.Die.
+        //   3. Disappearance: the boss was seen this episode and is now gone
+        //      while the knight is alive and the arena scene is still
+        //      current. A destroyed boss with a live knight mid-scene is a
+        //      win even if neither signal above caught it (StateReader's
+        //      find-cache never re-searches after a successful find, so
+        //      Present cannot flap back).
+        //
+        // All three latch `wonLatched` -- once won, an episode stays won even
+        // after the boss object is gone. Reset on every fresh episode start
+        // (TickReset's fightLive branch), alongside sawBossThisEpisode.
+        private bool ComputeWon(KnightState k, BossState b)
         {
-            if (b.Present && b.Hp <= 0) wonLatched = true;
+            if (b.Present) sawBossThisEpisode = true;
+            bool knightAlive = k != null && !k.Dead && k.Hp > 0;
+            if (b.Died
+                || (b.Present && b.Hp <= 0)
+                || (sawBossThisEpisode && !b.Present && knightAlive
+                    && Scene == BossScene))
+            {
+                wonLatched = true;
+            }
             return wonLatched;
         }
 
@@ -492,6 +515,7 @@ namespace HKRLBot
                 episodeActive = true;
                 phase = Phase.AwaitingAction;
                 wonLatched = false;
+                sawBossThisEpisode = false;
                 attempt++;
                 // The reset macro (ResetMacro.Tick, below) drives virtual input
                 // right up until this frame (confirm pulses, walk-to-statue). If we

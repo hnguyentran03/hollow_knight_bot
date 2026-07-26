@@ -16,6 +16,11 @@ namespace HKRLBot
     public class BossState
     {
         public bool Present;
+        // The boss's HealthManager ran Die() this scene. Event-driven (see
+        // StateReader.NoteDeath), so it stays true after the death sequence
+        // tears the GameObject down and Present/Hp can no longer say
+        // anything -- the signal EpisodeManager's win detection needs.
+        public bool Died;
         public float X, Y, Vx, Vy;
         public int Hp;
         public string FsmState = "";
@@ -48,11 +53,30 @@ namespace HKRLBot
         // optimization exists for. Cleared by OnSceneChange() alongside the
         // other cached handles so a scene change always gets a fresh search.
         private bool bossSearchDone;
+        // Set by NoteDeath the moment the boss's HealthManager runs Die().
+        // Cleared on scene change: a Godhome retry reloads the arena scene,
+        // so scene lifetime IS fight lifetime for this flag.
+        private bool bossDied;
 
         public void OnSceneChange()
         {
             bossGo = null; bossHm = null; bossFsm = null; bossRb = null; needleGo = null;
             bossSearchDone = false;
+            bossDied = false;
+        }
+
+        // Called from HKRLBotMod's On.HealthManager.Die hook for EVERY
+        // HealthManager death in the game (minions, spawned hazards, other
+        // scenes); the identity check against the cached bossHm is what
+        // narrows it to the boss. Event-driven because polling cannot work
+        // here: in Hall of Gods the fatal blow's death sequence tears the
+        // boss GameObject down within one ~67ms action-hold window, so no
+        // sampled frame ever shows Present && Hp <= 0 -- measured across
+        // entire runs (0 won=True in any ModLog against 100%-damage
+        // episodes) before this hook existed.
+        public void NoteDeath(HealthManager hm)
+        {
+            if (hm != null && bossHm != null && hm == bossHm) bossDied = true;
         }
 
         public KnightState ReadKnight()
@@ -94,13 +118,14 @@ namespace HKRLBot
                 // else: leave bossSearchDone false so the next ReadBoss() call
                 // retries the search instead of latching a false negative.
             }
-            if (bossGo == null) return new BossState { Present = false };
+            if (bossGo == null) return new BossState { Present = false, Died = bossDied };
 
             if (needleGo == null) needleGo = GameObject.Find("Needle");
             var bp = bossGo.transform.position;
             var s = new BossState
             {
                 Present = true,
+                Died = bossDied,
                 X = bp.x, Y = bp.y,
                 // .velocity, not .linearVelocity -- see the note in ReadKnight above.
                 Vx = bossRb != null ? bossRb.velocity.x : 0f,
