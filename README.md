@@ -5,7 +5,7 @@ A reinforcement-learning bot that learns to fight **Hornet (Hall of Gods, Attune
 The project has two halves:
 
 - **`mod/`** — a C# game mod (HKRLBot) that runs inside Hollow Knight. It exposes a TCP bridge that accepts button actions, holds them for one 67&nbsp;ms tick, samples the game state (Knight + Hornet positions, velocities, HP, SOUL, Hornet's FSM state), and sends it back. It also drives all episode resets itself: from a fresh boot it can walk through the title menu, stand up from the Hall of Gods bench, run to the Hornet statue, and start the fight — no human input needed.
-- **`trainer/`** — a Python package (`hkrl`) exposing the mod as a Gymnasium environment, plus scripts for training (Stable-Baselines3 PPO), replaying checkpoints, and smoke-testing with a random agent.
+- **`trainer/`** — a Python package (`hkrl`) exposing the mod as a Gymnasium environment, plus scripts for training (RecurrentPPO from sb3-contrib), replaying checkpoints, and smoke-testing with a random agent.
 
 ## How it works
 
@@ -17,7 +17,7 @@ The project has two halves:
 └────────────────────────┘   {"type":"state","obs":{...},...}    └───────────────────────────┘
 ```
 
-One decision every 67&nbsp;ms (15&nbsp;Hz). The agent picks one of **21 discrete moves** (walk, jump, slash, dash, pogo, spells via Quick Cast, Focus — including directional combinations); buttons stay held across consecutive steps that repeat them, so jump height, healing, and nail-art charging are emergent. Observations are 46 floats (18 normalized scalars + a 28-way one-hot of Hornet's FSM state), frame-stacked ×4. Reward is dominated by boss damage dealt (+0.03/HP), hits taken (−1/mask), win (+10), death (−5), and a small per-step time penalty.
+One decision every 67&nbsp;ms (15&nbsp;Hz). The agent picks one of **21 discrete moves** (walk, jump, slash, dash, pogo, spells via Quick Cast, Focus — including directional combinations); buttons stay held across consecutive steps that repeat them, so jump height, healing, and nail-art charging are emergent. Observations are 46 floats (18 normalized scalars + a 28-way one-hot of Hornet's FSM state); the policy is a recurrent LSTM, so it carries its own memory instead of frame stacking. Reward is dominated by boss damage dealt (+0.03/HP), hits taken (−1/mask), win (+10), death (−5), and a small per-step time penalty.
 
 Training is fault-tolerant end to end: the trainer launches and owns the game process, reconnects through the mod's normal reset-budget drops, and if the game wedges or crashes it relaunches it and keeps training. Checkpoints ("generations") are saved every 15k steps, so a crash or Ctrl-C never loses more than ~17 minutes.
 
@@ -115,12 +115,14 @@ caffeinate -dims ./.venv/bin/python scripts/train.py --timesteps 500000 --run-id
 
 (On Windows, run `.venv\Scripts\python scripts\train.py ...` without the `caffeinate` prefix — sleep suppression comes from the power settings above.)
 
-### Multiple instances (experimental)
+### Multiple instances
 
 `--instances N` runs N game instances in parallel (bridge ports `--port`
 through `--port + N - 1`), each a slot of the same vectorized PPO — roughly
 N× the samples per hour. The supervisor recovers each slot independently,
-exactly as it does at N=1.
+exactly as it does at N=1. Verified live at N=2: an async two-instance run
+reached a higher reward than the single-instance baseline in less
+wall-clock time (2026-07-26).
 
 ```bash
 caffeinate -dims ./.venv/bin/python scripts/train.py --instances 2 --timesteps 500000 --run-id my-run
@@ -131,17 +133,21 @@ What to know before trying it:
 - **Every instance is a full game client.** 2–3 on one machine is realistic;
   each window must stay visible (see App Nap above), so tile them, don't
   stack them.
-- **`--n-steps` is per instance and its default divides by N** (2048 → 1024
-  at N=2) so the total batch, and with it the PPO update's wall-clock time,
-  stays constant. The keepalive pinger keeps connections alive through the
-  update, but the games keep running in real time while it computes — every
-  Knight stands in a live fight for the duration — so if you override
-  `--n-steps`, keep `n_steps × instances` around 2048.
-- **One slot's episode reset blocks the whole lockstep step** (the mod's
-  reset macro can run its full 22.5 s budget). The other instances' Knights
-  stand in their live fights for that long; their connections survive it
-  via the keepalive pinger. Expect episode throughput somewhat below N× for
-  this reason.
+- **`--n-steps` is per instance and its default divides by N** (so the
+  total batch, and with it the PPO update's wall-clock time, stays roughly
+  constant), then inflates ~23% when async resets are on so each update
+  still sees ~2048 *real* samples after the placeholder rows are masked
+  out. The keepalive pinger keeps connections alive through the update,
+  but the games keep running in real time while it computes — every Knight
+  stands in a live fight for the duration — so if you override
+  `--n-steps`, keep the total real batch around 2048.
+- **Episode resets run asynchronously by default at N ≥ 2** (the mod's
+  reset macro can run its full 22.5 s budget; synchronously it would
+  freeze every sibling mid-fight for that long). The resetting slot feeds
+  the learner placeholder frames — masked out of the gradient, the
+  monitoring, and the normalization statistics — while the others keep
+  taking real steps. `--no-async-resets` restores the old lockstep
+  behavior; expect episode throughput somewhat below N× with it.
 - **Each instance gets its own save/log sandbox (macOS).** Instances
   sharing one save directory autosave the same slot concurrently, which
   corrupted the master save in live testing (both games saved in the same
@@ -174,8 +180,8 @@ Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / 
 ### Monitor progress
 
 The web dashboard shows every run under `~/hkrl/runs/`: live/stopped status,
-timestep progress and ETA, steps/hour, the learning curves (boss damage, win
-rate, reward, episode length per generation), and a per-episode reward chart
+timestep progress and ETA, steps/hour, total wins, the learning curves (boss
+damage, win rate, reward, episode length per generation), and a per-episode reward chart
 that updates between checkpoints. It is read-only — it never touches the game
 port — so it is safe to leave up beside a live run:
 
