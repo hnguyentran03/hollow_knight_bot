@@ -533,7 +533,7 @@ function drawChart(card, opts) {
   }
 
   const W = Math.max(280, card.clientWidth - 24), H = opts.height || 190;
-  const M = { l: 42, r: 14, t: 8, b: 22 };
+  const M = { l: opts.yLabel ? 56 : 42, r: 14, t: 8, b: opts.xLabel ? 34 : 22 };
   const xs = allPts.map(p => p.x), ys = allPts.map(p => p.y);
   const xlo = opts.xDomain ? opts.xDomain[0] : Math.min(...xs);
   const xhi = opts.xDomain ? opts.xDomain[1] : Math.max(...xs);
@@ -566,8 +566,20 @@ function drawChart(card, opts) {
   el("line", { x1: M.l, x2: W - M.r, y1: Y(Math.max(ylo, Math.min(0, yhi))), y2: Y(Math.max(ylo, Math.min(0, yhi))),
                stroke: css("--baseline"), "stroke-width": 1 });
   for (const t of niceTicks(xlo, xhi, 5)) {
-    const txt = el("text", { x: X(t), y: H - 6, "text-anchor": "middle" });
+    const txt = el("text", { x: X(t), y: H - M.b + 16, "text-anchor": "middle" });
     txt.textContent = opts.xFormat(t);
+  }
+
+  if (opts.xLabel) {
+    const txt = el("text", { x: M.l + (W - M.l - M.r) / 2, y: H - 5,
+                             "text-anchor": "middle" });
+    txt.textContent = opts.xLabel;
+  }
+  if (opts.yLabel) {
+    const cy = M.t + (H - M.t - M.b) / 2;
+    const txt = el("text", { x: 11, y: cy, "text-anchor": "middle",
+                             transform: `rotate(-90 11 ${cy})` });
+    txt.textContent = opts.yLabel;
   }
 
   for (const s of opts.series) {
@@ -731,18 +743,21 @@ function render() {
     ],
     yDomain: [0, 1], yFormat: fmtPct, xFormat: fmtK,
     xTipFormat: x => "timestep " + fmtK(x),
+    xLabel: "timestep",
   });
   drawChart(document.getElementById("chart-reward"), {
     series: [{ name: "mean reward", color: s1,
                points: gens.map(g => ({ x: g.timestep, y: g.mean_reward })) }],
     yFormat: v => v.toFixed(1), xFormat: fmtK,
     xTipFormat: x => "timestep " + fmtK(x),
+    xLabel: "timestep", yLabel: "reward",
   });
   drawChart(document.getElementById("chart-eplen"), {
     series: [{ name: "mean episode length", color: s1,
                points: gens.map(g => ({ x: g.timestep, y: g.mean_episode_len })) }],
     yFormat: v => fmtK(v), xFormat: fmtK,
     xTipFormat: x => "timestep " + fmtK(x),
+    xLabel: "timestep", yLabel: "steps",
   });
   const eps = run.episodes.map(e => ({ x: e.t, y: e.r }));
   drawChart(document.getElementById("chart-episodes"), {
@@ -752,6 +767,7 @@ function render() {
       { name: "rolling mean (20)", color: s1, points: rollingMean(eps, 20), endDot: false },
     ],
     yFormat: v => v.toFixed(1), xFormat: fmtClock, xTipFormat: fmtClock,
+    xLabel: "time", yLabel: "reward",
   });
 
   const config = document.getElementById("config");
