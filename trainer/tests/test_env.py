@@ -75,6 +75,25 @@ def test_win_and_loss_bonuses_and_termination():
         env.close()
 
 
+def test_win_bonus_scales_with_masks_remaining():
+    # Winning with 7 of 9 masks left pays the flat win bonus plus
+    # health_bonus per remaining mask (spec: docs/superpowers/specs/
+    # 2026-07-29-value-reshaping-design.md).
+    episode = [state(obs(bhp=100, khp=7)),
+               state(obs(bhp=0, khp=7), done=True, won=True)]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        _, r, terminated, _, info = env.step(0)
+        env.close()
+    assert terminated and info["won"]
+    expected = (DEFAULT_REWARD["time_penalty"]
+                + 100 * DEFAULT_REWARD["boss_hp_scale"]
+                + DEFAULT_REWARD["win"]
+                + 7 * DEFAULT_REWARD["health_bonus"])
+    assert r == pytest.approx(expected)
+
+
 def test_unknown_boss_state_maps_to_fallback_slot():
     episode = [state(obs(boss_state="Some Brand New Move")), state(obs())]
     with FakeGame([episode]) as fg:

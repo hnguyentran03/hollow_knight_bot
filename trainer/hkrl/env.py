@@ -89,6 +89,7 @@ DEFAULT_REWARD = {
     "boss_hp_scale": 0.03,   # per boss HP point removed
     "knight_hit": -1.0,      # per mask lost
     "win": 10.0,
+    "health_bonus": 1.0,     # per mask remaining, on a win
     "death": -5.0,
     "time_penalty": -0.001,  # per decision step
 }
@@ -173,7 +174,10 @@ class HKEnv(gym.Env):
         if cur["khp"] < prev["khp"]:
             r += (prev["khp"] - cur["khp"]) * self.reward["knight_hit"]
         if done:
-            r += self.reward["win"] if won else self.reward["death"]
+            if won:
+                r += self.reward["win"] + cur["khp"] * self.reward["health_bonus"]
+            else:
+                r += self.reward["death"]
         return r
 
     # -- gym API --
