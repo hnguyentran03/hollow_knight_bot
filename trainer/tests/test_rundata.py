@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from hkrl.rundata import load_run, read_jsonl, scan_runs
+from hkrl.rundata import attribute_generations, load_run, read_jsonl, scan_runs
 
 
 def _write_manifest(run_dir, lines):
@@ -191,3 +191,33 @@ def test_scan_runs_carries_instances_and_target(tmp_path):
 
 def test_scan_runs_of_a_missing_root_is_empty(tmp_path):
     assert scan_runs(tmp_path / "nowhere", now=0) == []
+
+
+def test_attribute_generations_partitions_by_manifest_counts():
+    eps = [{"t": float(i)} for i in range(7)]
+    gens = [{"gen": 1, "episodes": 3}, {"gen": 2, "episodes": 2}]
+    attribute_generations(eps, gens)
+    assert [e["gen"] for e in eps] == [1, 1, 1, 2, 2, None, None]
+
+
+def test_attribute_generations_empty_manifest_marks_all_in_progress():
+    eps = [{"t": 0.0}, {"t": 1.0}]
+    attribute_generations(eps, [])
+    assert [e["gen"] for e in eps] == [None, None]
+
+
+def test_attribute_generations_with_fewer_episodes_than_counted():
+    # A lost/severed monitor CSV: fewer episodes on disk than the manifest
+    # counted. Attribute the prefix in order, no crash.
+    eps = [{"t": 0.0}, {"t": 1.0}]
+    gens = [{"gen": 1, "episodes": 5}]
+    attribute_generations(eps, gens)
+    assert [e["gen"] for e in eps] == [1, 1]
+
+
+def test_load_run_attributes_episode_generations(tmp_path):
+    _write_manifest(tmp_path, [_gen(1, 10_000, 100.0, episodes=2)])
+    _write_monitor(tmp_path, "a", t_start=1000.0,
+                   rows=[(1.0, 100, 10.0), (2.0, 100, 20.0), (3.0, 100, 30.0)])
+    run = load_run(tmp_path, now=0)
+    assert [e["gen"] for e in run["episodes"]] == [1, 1, None]
