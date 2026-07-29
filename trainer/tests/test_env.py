@@ -75,6 +75,25 @@ def test_win_and_loss_bonuses_and_termination():
         env.close()
 
 
+def test_win_bonus_scales_with_masks_remaining():
+    # Winning with 7 of 9 masks left pays the flat win bonus plus
+    # health_bonus per remaining mask (spec: docs/superpowers/specs/
+    # 2026-07-29-value-reshaping-design.md).
+    episode = [state(obs(bhp=100, khp=7)),
+               state(obs(bhp=0, khp=7), done=True, won=True)]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        _, r, terminated, _, info = env.step(0)
+        env.close()
+    assert terminated and info["won"]
+    expected = (DEFAULT_REWARD["time_penalty"]
+                + 100 * DEFAULT_REWARD["boss_hp_scale"]
+                + DEFAULT_REWARD["win"]
+                + 7 * DEFAULT_REWARD["health_bonus"])
+    assert r == pytest.approx(expected)
+
+
 def test_unknown_boss_state_maps_to_fallback_slot():
     episode = [state(obs(boss_state="Some Brand New Move")), state(obs())]
     with FakeGame([episode]) as fg:
@@ -143,6 +162,34 @@ def test_truncation_reports_boss_damage_dealt_so_far():
         env.close()
     assert done is False and truncated is True
     assert info["boss_damage_frac"] == pytest.approx(0.5)
+
+
+def test_truncation_applies_the_death_penalty():
+    # Running out the clock is a loss: the truncation step's reward carries
+    # the death penalty, closing the stall-out loophole where a timeout was
+    # cheaper (~-2.7 accumulated time penalty) than dying (-5).
+    episode = [state(obs(bhp=900)), state(obs(bhp=900))]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, max_steps=1)
+        env.reset()
+        _, r, terminated, truncated, _ = env.step(0)
+        env.close()
+    assert truncated and not terminated
+    assert r == pytest.approx(DEFAULT_REWARD["time_penalty"]
+                              + DEFAULT_REWARD["death"])
+
+
+def test_step_before_max_steps_carries_no_terminal_term():
+    # One step short of the ceiling is still an ordinary step: time penalty
+    # only, no death term leaking in early.
+    episode = [state(obs()), state(obs()), state(obs())]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, max_steps=2)
+        env.reset()
+        _, r, terminated, truncated, _ = env.step(0)
+        assert not terminated and not truncated
+        assert r == pytest.approx(DEFAULT_REWARD["time_penalty"])
+        env.close()
 
 
 def test_reset_reconnects_through_the_mods_budget_expiry_drops():

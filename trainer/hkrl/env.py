@@ -89,6 +89,7 @@ DEFAULT_REWARD = {
     "boss_hp_scale": 0.03,   # per boss HP point removed
     "knight_hit": -1.0,      # per mask lost
     "win": 10.0,
+    "health_bonus": 1.0,     # per mask remaining, on a win
     "death": -5.0,
     "time_penalty": -0.001,  # per decision step
 }
@@ -166,14 +167,21 @@ class HKEnv(gym.Env):
             onehot[-1] = 1.0
         return np.asarray(v + onehot, dtype=np.float32)
 
-    def _reward(self, prev, cur, done, won):
+    def _reward(self, prev, cur, done, won, truncated):
         r = self.reward["time_penalty"]
         if cur["bhp"] < prev["bhp"]:
             r += (prev["bhp"] - cur["bhp"]) * self.reward["boss_hp_scale"]
         if cur["khp"] < prev["khp"]:
             r += (prev["khp"] - cur["khp"]) * self.reward["knight_hit"]
         if done:
-            r += self.reward["win"] if won else self.reward["death"]
+            if won:
+                r += self.reward["win"] + cur["khp"] * self.reward["health_bonus"]
+            else:
+                r += self.reward["death"]
+        elif truncated:
+            # Running out the clock is a loss, not a free exit: without this
+            # a timeout undercuts dying and stalling becomes the best play.
+            r += self.reward["death"]
         return r
 
     # -- gym API --
@@ -246,10 +254,10 @@ class HKEnv(gym.Env):
         msg = self.conn.recv()
         cur, info = msg["obs"], dict(msg["info"])
         done, won = bool(msg["done"]), bool(info.get("won", False))
-        reward = self._reward(self._prev, cur, done, won)
+        truncated = not done and self._steps + 1 >= self.max_steps
+        reward = self._reward(self._prev, cur, done, won, truncated)
         self._prev = cur
         self._steps += 1
-        truncated = not done and self._steps >= self.max_steps
         if done or truncated:
             # Fraction of the boss's starting HP removed this episode. Lives
             # in terminal info so the random-agent exploration gate and the
