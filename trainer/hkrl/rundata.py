@@ -58,6 +58,27 @@ def _episodes(run_dir: Path) -> list[dict]:
     return episodes
 
 
+def attribute_generations(episodes: list[dict], generations: list[dict]) -> None:
+    """Stamp each episode with the generation whose stats it fed.
+
+    Each manifest line counts the episodes that were aggregated into it, in
+    the same time order the monitor CSVs record, so a cumulative-count walk
+    recovers the mapping. Episodes past the manifest's total (fought after
+    the latest checkpoint) get None. A session that died before its first
+    checkpoint leaves uncounted episodes that shift attribution onto the
+    next recorded generation -- accepted, the consumer is a tooltip.
+    """
+    i = 0
+    for gen in generations:
+        for _ in range(int(gen.get("episodes", 0))):
+            if i >= len(episodes):
+                return
+            episodes[i]["gen"] = gen["gen"]
+            i += 1
+    for ep in episodes[i:]:
+        ep["gen"] = None
+
+
 def _last_activity(run_dir: Path) -> float | None:
     paths = [run_dir / "generations.jsonl", run_dir / "config.jsonl",
              *run_dir.glob("monitor_*.monitor.csv")]
@@ -127,10 +148,13 @@ def load_run(run_dir, now: float | None = None) -> dict:
         eta_s = (target - timestep) / rate * 3600.0
     last_activity = _last_activity(run_dir)
 
+    episodes = _episodes(run_dir)
+    attribute_generations(episodes, generations)
+
     return {
         "id": run_dir.name,
         "generations": generations,
-        "episodes": _episodes(run_dir),
+        "episodes": episodes,
         "config": config,
         "status": {
             "live": last_activity is not None and now - last_activity < LIVE_WINDOW_S,

@@ -498,6 +498,19 @@ const fmtAgo = epoch => {
 };
 const fmtClock = epoch =>
   new Date(epoch * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const fmtDate = epoch =>
+  new Date(epoch * 1000).toLocaleDateString([], { month: "short", day: "numeric" });
+// Local midnights inside [lo, hi]: where each new calendar day actually
+// begins. Drawn as labeled boundary rules on wall-clock charts -- a date on
+// an arbitrary tick would misplace the boundary at that tick's time.
+const midnightsBetween = (lo, hi) => {
+  const out = [];
+  const d = new Date(lo * 1000);
+  d.setHours(24, 0, 0, 0);
+  for (; d.getTime() / 1000 <= hi; d.setDate(d.getDate() + 1))
+    out.push(d.getTime() / 1000);
+  return out;
+};
 
 /* ---------- generic SVG line/scatter chart with crosshair tooltip ---------- */
 function niceTicks(lo, hi, n) {
@@ -533,7 +546,7 @@ function drawChart(card, opts) {
   }
 
   const W = Math.max(280, card.clientWidth - 24), H = opts.height || 190;
-  const M = { l: 42, r: 14, t: 8, b: 22 };
+  const M = { l: opts.yLabel ? 56 : 42, r: 14, t: 8, b: opts.xLabel ? 34 : 22 };
   const xs = allPts.map(p => p.x), ys = allPts.map(p => p.y);
   const xlo = opts.xDomain ? opts.xDomain[0] : Math.min(...xs);
   const xhi = opts.xDomain ? opts.xDomain[1] : Math.max(...xs);
@@ -566,8 +579,34 @@ function drawChart(card, opts) {
   el("line", { x1: M.l, x2: W - M.r, y1: Y(Math.max(ylo, Math.min(0, yhi))), y2: Y(Math.max(ylo, Math.min(0, yhi))),
                stroke: css("--baseline"), "stroke-width": 1 });
   for (const t of niceTicks(xlo, xhi, 5)) {
-    const txt = el("text", { x: X(t), y: H - 6, "text-anchor": "middle" });
+    const txt = el("text", { x: X(t), y: H - M.b + 16, "text-anchor": "middle" });
     txt.textContent = opts.xFormat(t);
+  }
+
+  /* xMarks: [{x, label}] -- dashed vertical rules at meaningful x positions
+     (day boundaries), labeled at the top of the plot where the new span
+     begins. Dashed to read as furniture, distinct from the solid crosshair. */
+  for (const m of opts.xMarks || []) {
+    if (m.x < xlo || m.x > xhi) continue;
+    el("line", { x1: X(m.x), x2: X(m.x), y1: M.t, y2: H - M.b,
+                 stroke: css("--baseline"), "stroke-width": 1,
+                 "stroke-dasharray": "2 3" });
+    const atEnd = X(m.x) > W - M.r - 46;
+    const txt = el("text", { x: X(m.x) + (atEnd ? -4 : 4), y: M.t + 9,
+                             "text-anchor": atEnd ? "end" : "start" });
+    txt.textContent = m.label;
+  }
+
+  if (opts.xLabel) {
+    const txt = el("text", { x: M.l + (W - M.l - M.r) / 2, y: H - 5,
+                             "text-anchor": "middle" });
+    txt.textContent = opts.xLabel;
+  }
+  if (opts.yLabel) {
+    const cy = M.t + (H - M.t - M.b) / 2;
+    const txt = el("text", { x: 11, y: cy, "text-anchor": "middle",
+                             transform: `rotate(-90 11 ${cy})` });
+    txt.textContent = opts.yLabel;
   }
 
   for (const s of opts.series) {
@@ -612,6 +651,15 @@ function drawChart(card, opts) {
     tx.className = "tx";
     tx.textContent = opts.xTipFormat ? opts.xTipFormat(best) : opts.xFormat(best);
     tip.appendChild(tx);
+    if (opts.tipMeta) {
+      const meta = opts.tipMeta(best);
+      if (meta) {
+        const tm = document.createElement("div");
+        tm.className = "tx";
+        tm.textContent = meta;
+        tip.appendChild(tm);
+      }
+    }
     for (const s of opts.series) {
       const near = s.points.reduce((a, p) =>
         Math.abs(p.x - best) < Math.abs(a.x - best) ? p : a, s.points[0]);
@@ -721,6 +769,8 @@ function render() {
     "all sessions · " + st.sessions + " session" + (st.sessions === 1 ? "" : "s")));
 
   const s1 = css("--s1"), s2 = css("--s2"), muted = css("--muted");
+  const genAt = new Map(gens.map(g => [g.timestep, g.gen]));
+  const genTip = x => "gen " + genAt.get(x) + " · timestep " + fmtK(x);
   drawChart(document.getElementById("chart-learning"), {
     height: 220,
     series: [
@@ -730,28 +780,41 @@ function render() {
         points: gens.map(g => ({ x: g.timestep, y: g.win_rate })) },
     ],
     yDomain: [0, 1], yFormat: fmtPct, xFormat: fmtK,
-    xTipFormat: x => "timestep " + fmtK(x),
+    xTipFormat: genTip,
+    xLabel: "timestep",
   });
   drawChart(document.getElementById("chart-reward"), {
     series: [{ name: "mean reward", color: s1,
                points: gens.map(g => ({ x: g.timestep, y: g.mean_reward })) }],
     yFormat: v => v.toFixed(1), xFormat: fmtK,
-    xTipFormat: x => "timestep " + fmtK(x),
+    xTipFormat: genTip,
+    xLabel: "timestep", yLabel: "reward",
   });
   drawChart(document.getElementById("chart-eplen"), {
     series: [{ name: "mean episode length", color: s1,
                points: gens.map(g => ({ x: g.timestep, y: g.mean_episode_len })) }],
     yFormat: v => fmtK(v), xFormat: fmtK,
-    xTipFormat: x => "timestep " + fmtK(x),
+    xTipFormat: genTip,
+    xLabel: "timestep", yLabel: "steps",
   });
   const eps = run.episodes.map(e => ({ x: e.t, y: e.r }));
+  const genByTime = new Map(run.episodes.map(e => [e.t, e.gen]));
   drawChart(document.getElementById("chart-episodes"), {
     height: 220,
     series: [
       { name: "episode reward", color: muted, kind: "dots", points: eps, snapExempt: false },
       { name: "rolling mean (20)", color: s1, points: rollingMean(eps, 20), endDot: false },
     ],
-    yFormat: v => v.toFixed(1), xFormat: fmtClock, xTipFormat: fmtClock,
+    yFormat: v => v.toFixed(1),
+    xFormat: fmtClock,
+    xTipFormat: x => fmtDate(x) + " · " + fmtClock(x),
+    xMarks: eps.length ? midnightsBetween(eps[0].x, eps[eps.length - 1].x)
+                           .map(x => ({ x, label: fmtDate(x) })) : [],
+    xLabel: "time", yLabel: "reward",
+    tipMeta: gens.length ? x => {
+      const g = genByTime.get(x);
+      return g == null ? "gen in progress" : "gen " + g;
+    } : null,
   });
 
   const config = document.getElementById("config");
