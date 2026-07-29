@@ -624,6 +624,15 @@ function drawChart(card, opts) {
     tx.className = "tx";
     tx.textContent = opts.xTipFormat ? opts.xTipFormat(best) : opts.xFormat(best);
     tip.appendChild(tx);
+    if (opts.tipMeta) {
+      const meta = opts.tipMeta(best);
+      if (meta) {
+        const tm = document.createElement("div");
+        tm.className = "tx";
+        tm.textContent = meta;
+        tip.appendChild(tm);
+      }
+    }
     for (const s of opts.series) {
       const near = s.points.reduce((a, p) =>
         Math.abs(p.x - best) < Math.abs(a.x - best) ? p : a, s.points[0]);
@@ -733,6 +742,8 @@ function render() {
     "all sessions · " + st.sessions + " session" + (st.sessions === 1 ? "" : "s")));
 
   const s1 = css("--s1"), s2 = css("--s2"), muted = css("--muted");
+  const genAt = new Map(gens.map(g => [g.timestep, g.gen]));
+  const genTip = x => "gen " + genAt.get(x) + " · timestep " + fmtK(x);
   drawChart(document.getElementById("chart-learning"), {
     height: 220,
     series: [
@@ -742,24 +753,25 @@ function render() {
         points: gens.map(g => ({ x: g.timestep, y: g.win_rate })) },
     ],
     yDomain: [0, 1], yFormat: fmtPct, xFormat: fmtK,
-    xTipFormat: x => "timestep " + fmtK(x),
+    xTipFormat: genTip,
     xLabel: "timestep",
   });
   drawChart(document.getElementById("chart-reward"), {
     series: [{ name: "mean reward", color: s1,
                points: gens.map(g => ({ x: g.timestep, y: g.mean_reward })) }],
     yFormat: v => v.toFixed(1), xFormat: fmtK,
-    xTipFormat: x => "timestep " + fmtK(x),
+    xTipFormat: genTip,
     xLabel: "timestep", yLabel: "reward",
   });
   drawChart(document.getElementById("chart-eplen"), {
     series: [{ name: "mean episode length", color: s1,
                points: gens.map(g => ({ x: g.timestep, y: g.mean_episode_len })) }],
     yFormat: v => fmtK(v), xFormat: fmtK,
-    xTipFormat: x => "timestep " + fmtK(x),
+    xTipFormat: genTip,
     xLabel: "timestep", yLabel: "steps",
   });
   const eps = run.episodes.map(e => ({ x: e.t, y: e.r }));
+  const genByTime = new Map(run.episodes.map(e => [e.t, e.gen]));
   drawChart(document.getElementById("chart-episodes"), {
     height: 220,
     series: [
@@ -768,6 +780,10 @@ function render() {
     ],
     yFormat: v => v.toFixed(1), xFormat: fmtClock, xTipFormat: fmtClock,
     xLabel: "time", yLabel: "reward",
+    tipMeta: gens.length ? x => {
+      const g = genByTime.get(x);
+      return g == null ? "gen in progress" : "gen " + g;
+    } : null,
   });
 
   const config = document.getElementById("config");
