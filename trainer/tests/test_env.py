@@ -164,6 +164,34 @@ def test_truncation_reports_boss_damage_dealt_so_far():
     assert info["boss_damage_frac"] == pytest.approx(0.5)
 
 
+def test_truncation_applies_the_death_penalty():
+    # Running out the clock is a loss: the truncation step's reward carries
+    # the death penalty, closing the stall-out loophole where a timeout was
+    # cheaper (~-2.7 accumulated time penalty) than dying (-5).
+    episode = [state(obs(bhp=900)), state(obs(bhp=900))]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, max_steps=1)
+        env.reset()
+        _, r, terminated, truncated, _ = env.step(0)
+        env.close()
+    assert truncated and not terminated
+    assert r == pytest.approx(DEFAULT_REWARD["time_penalty"]
+                              + DEFAULT_REWARD["death"])
+
+
+def test_step_before_max_steps_carries_no_terminal_term():
+    # One step short of the ceiling is still an ordinary step: time penalty
+    # only, no death term leaking in early.
+    episode = [state(obs()), state(obs()), state(obs())]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, max_steps=2)
+        env.reset()
+        _, r, terminated, truncated, _ = env.step(0)
+        assert not terminated and not truncated
+        assert r == pytest.approx(DEFAULT_REWARD["time_penalty"])
+        env.close()
+
+
 def test_reset_reconnects_through_the_mods_budget_expiry_drops():
     """The mod's 22.5s reset budget is deliberately smaller than a cold
     boot-to-fight, so each expiry drops the connection and the NEXT reset

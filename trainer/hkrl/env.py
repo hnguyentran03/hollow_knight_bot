@@ -167,7 +167,7 @@ class HKEnv(gym.Env):
             onehot[-1] = 1.0
         return np.asarray(v + onehot, dtype=np.float32)
 
-    def _reward(self, prev, cur, done, won):
+    def _reward(self, prev, cur, done, won, truncated):
         r = self.reward["time_penalty"]
         if cur["bhp"] < prev["bhp"]:
             r += (prev["bhp"] - cur["bhp"]) * self.reward["boss_hp_scale"]
@@ -178,6 +178,10 @@ class HKEnv(gym.Env):
                 r += self.reward["win"] + cur["khp"] * self.reward["health_bonus"]
             else:
                 r += self.reward["death"]
+        elif truncated:
+            # Running out the clock is a loss, not a free exit: without this
+            # a timeout undercuts dying and stalling becomes the best play.
+            r += self.reward["death"]
         return r
 
     # -- gym API --
@@ -250,10 +254,10 @@ class HKEnv(gym.Env):
         msg = self.conn.recv()
         cur, info = msg["obs"], dict(msg["info"])
         done, won = bool(msg["done"]), bool(info.get("won", False))
-        reward = self._reward(self._prev, cur, done, won)
+        truncated = not done and self._steps + 1 >= self.max_steps
+        reward = self._reward(self._prev, cur, done, won, truncated)
         self._prev = cur
         self._steps += 1
-        truncated = not done and self._steps >= self.max_steps
         if done or truncated:
             # Fraction of the boss's starting HP removed this episode. Lives
             # in terminal info so the random-agent exploration gate and the
