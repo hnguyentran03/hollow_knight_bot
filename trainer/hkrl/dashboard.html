@@ -500,12 +500,17 @@ const fmtClock = epoch =>
   new Date(epoch * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const fmtDate = epoch =>
   new Date(epoch * 1000).toLocaleDateString([], { month: "short", day: "numeric" });
-const sameDay = (a, b) =>
-  new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
-// First tick and every day change get a date prefix; used only when the
-// chart's data spans more than one calendar day.
-const fmtDayTick = (t, prev) =>
-  (prev == null || !sameDay(t, prev)) ? fmtDate(t) + " " + fmtClock(t) : fmtClock(t);
+// Local midnights inside [lo, hi]: where each new calendar day actually
+// begins. Drawn as labeled boundary rules on wall-clock charts -- a date on
+// an arbitrary tick would misplace the boundary at that tick's time.
+const midnightsBetween = (lo, hi) => {
+  const out = [];
+  const d = new Date(lo * 1000);
+  d.setHours(24, 0, 0, 0);
+  for (; d.getTime() / 1000 <= hi; d.setDate(d.getDate() + 1))
+    out.push(d.getTime() / 1000);
+  return out;
+};
 
 /* ---------- generic SVG line/scatter chart with crosshair tooltip ---------- */
 function niceTicks(lo, hi, n) {
@@ -573,11 +578,23 @@ function drawChart(card, opts) {
   }
   el("line", { x1: M.l, x2: W - M.r, y1: Y(Math.max(ylo, Math.min(0, yhi))), y2: Y(Math.max(ylo, Math.min(0, yhi))),
                stroke: css("--baseline"), "stroke-width": 1 });
-  let prevTick = null;
   for (const t of niceTicks(xlo, xhi, 5)) {
     const txt = el("text", { x: X(t), y: H - M.b + 16, "text-anchor": "middle" });
-    txt.textContent = opts.xFormat(t, prevTick);
-    prevTick = t;
+    txt.textContent = opts.xFormat(t);
+  }
+
+  /* xMarks: [{x, label}] -- dashed vertical rules at meaningful x positions
+     (day boundaries), labeled at the top of the plot where the new span
+     begins. Dashed to read as furniture, distinct from the solid crosshair. */
+  for (const m of opts.xMarks || []) {
+    if (m.x < xlo || m.x > xhi) continue;
+    el("line", { x1: X(m.x), x2: X(m.x), y1: M.t, y2: H - M.b,
+                 stroke: css("--baseline"), "stroke-width": 1,
+                 "stroke-dasharray": "2 3" });
+    const atEnd = X(m.x) > W - M.r - 46;
+    const txt = el("text", { x: X(m.x) + (atEnd ? -4 : 4), y: M.t + 9,
+                             "text-anchor": atEnd ? "end" : "start" });
+    txt.textContent = m.label;
   }
 
   if (opts.xLabel) {
@@ -781,7 +798,6 @@ function render() {
     xLabel: "timestep", yLabel: "steps",
   });
   const eps = run.episodes.map(e => ({ x: e.t, y: e.r }));
-  const multiDay = eps.length > 1 && !sameDay(eps[0].x, eps[eps.length - 1].x);
   const genByTime = new Map(run.episodes.map(e => [e.t, e.gen]));
   drawChart(document.getElementById("chart-episodes"), {
     height: 220,
@@ -790,8 +806,10 @@ function render() {
       { name: "rolling mean (20)", color: s1, points: rollingMean(eps, 20), endDot: false },
     ],
     yFormat: v => v.toFixed(1),
-    xFormat: multiDay ? fmtDayTick : fmtClock,
+    xFormat: fmtClock,
     xTipFormat: x => fmtDate(x) + " · " + fmtClock(x),
+    xMarks: eps.length ? midnightsBetween(eps[0].x, eps[eps.length - 1].x)
+                           .map(x => ({ x, label: fmtDate(x) })) : [],
     xLabel: "time", yLabel: "reward",
     tipMeta: gens.length ? x => {
       const g = genByTime.get(x);
