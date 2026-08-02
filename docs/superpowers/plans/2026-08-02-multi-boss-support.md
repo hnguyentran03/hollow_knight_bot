@@ -1023,6 +1023,10 @@ git commit -m "Record the Gruz Mother discovery session in DISCOVERED.md: statue
 
 ### Task 12: Transcribe Gruz Mother into both registries
 
+> **Carried over from the final branch review (2026-08-02), do alongside this task:**
+> 1. `trainer/scripts/train.py` `resolve_boss`: validate the recorded boss with `get_boss(recorded)` before returning it, so a resumed run whose config names a boss this registry lacks fails at the guard, not deep in worker env construction.
+> 2. `mod/EpisodeManager.cs` `GateConfirm`: the healthy-path check is still `tier == 0` while the LoadBoss invoke uses `BossRegistry.Current.TierIndex` — change the comparison to `tier == BossRegistry.Current.TierIndex` (and mind `StateReader.SelectAttunedChallengeTier`'s tier1Button assumption) so a future boss with a non-zero Attuned index can't have the gate fight the invoke.
+
 **Files:**
 - Modify: `trainer/hkrl/bosses.py`, `mod/BossRegistry.cs`
 - Test: `trainer/tests/test_bosses.py`
