@@ -106,6 +106,31 @@ def test_build_model_masks_placeholder_transitions(tmp_path):
             env.close()
 
 
+def test_build_model_target_kl_fresh_and_resume_override(tmp_path):
+    """--target-kl must reach a fresh model AND override a resumed one:
+    SB3's load() restores every hyperparameter from the checkpoint zip, so
+    without an explicit post-load override the flag would be silently
+    ignored on exactly the runs it exists to fix."""
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path)
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8,
+                                      target_kl=0.05)
+            assert model.target_kl == 0.05
+            saved = tmp_path / "model.zip"
+            model.save(saved)
+            # Flag unset: the checkpoint's own value survives the resume.
+            resumed = train.build_model(env, tmp_path, resume_model=saved)
+            assert resumed.target_kl == 0.05
+            # Flag set: it wins over the checkpoint.
+            overridden = train.build_model(env, tmp_path, resume_model=saved,
+                                           target_kl=0.02)
+            assert overridden.target_kl == 0.02
+        finally:
+            env.close()
+
+
 def test_two_instance_training_collects_from_both_games(tmp_path):
     """--instances N end to end at N=2 (minus the real processes): two
     bridges feed one vectorized PPO through build_env, and the rollout

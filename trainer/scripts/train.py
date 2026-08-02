@@ -150,7 +150,7 @@ def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs
 
 
 def build_model(env, run_dir, resume_model=None, seed=None,
-                n_steps=2048, batch_size=64, n_epochs=10):
+                n_steps=2048, batch_size=64, n_epochs=10, target_kl=None):
     """A RecurrentPPO for this env, fresh or loaded from a generation
     checkpoint.
 
@@ -159,11 +159,16 @@ def build_model(env, run_dir, resume_model=None, seed=None,
     checkpoint through it is fine, the weights are identical.
 
     On resume every hyperparameter comes from the checkpoint zip; the
-    keyword arguments here shape fresh models only.
+    keyword arguments here shape fresh models only -- except target_kl,
+    which when set overrides the checkpoint too, because the flag exists
+    to change update dynamics on a run already in progress.
     """
     if resume_model is not None:
-        return MaskedRecurrentPPO.load(str(resume_model), env=env,
-                                       device="cpu")
+        model = MaskedRecurrentPPO.load(str(resume_model), env=env,
+                                        device="cpu")
+        if target_kl is not None:
+            model.target_kl = target_kl
+        return model
     return MaskedRecurrentPPO(
         "MlpLstmPolicy",
         env,
@@ -202,6 +207,14 @@ def build_model(env, run_dir, resume_model=None, seed=None,
         # RecurrentPPO's default -- it is the memory, not the per-step
         # capacity, this net_arch controls.
         policy_kwargs=dict(net_arch=dict(pi=[256, 256], vf=[256, 256])),
+        # Off (None) unless --target-kl is passed: aborts an update's
+        # remaining epochs once approx_kl exceeds ~1.5x this. Both overnight
+        # 2-instance runs trained at approx_kl ~0.10-0.25 with clip_fraction
+        # ~0.45 -- every update far outside the clip trust region -- which
+        # reads as fast early learning, then a win-rate peak that slides and
+        # oscillates instead of settling. A cap keeps late-run updates from
+        # rewriting a policy that is already winning.
+        target_kl=target_kl,
         seed=seed,
         verbose=1,
         # The policy is a small LSTM + MLP; CPU avoids the per-batch device
@@ -315,6 +328,15 @@ def main() -> None:
                          "through longer updates, but the Knights stand in "
                          "their live fights for the whole update. Raise "
                          "only if the net moves off CPU.")
+    ap.add_argument("--target-kl", type=float, default=None,
+                    help="early-stop an update's remaining epochs once "
+                         "approx_kl exceeds ~1.5x this (SB3 semantics). "
+                         "Unset: no cap, and a resumed checkpoint keeps "
+                         "whatever it trained with. When set it also "
+                         "overrides the checkpoint on resume, unlike the "
+                         "other hyperparameters. Try 0.05 against the "
+                         "late-run win-rate slide (observed approx_kl "
+                         "~0.15-0.25 without a cap).")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--auto", action="store_true",
                     help="skip the interactive ready prompt (unattended/"
@@ -444,7 +466,8 @@ def main() -> None:
         model = build_model(env, run_dir,
                             resume_model=resume[1] if resume else None,
                             seed=args.seed, n_steps=args.n_steps,
-                            batch_size=args.batch_size, n_epochs=args.n_epochs)
+                            batch_size=args.batch_size, n_epochs=args.n_epochs,
+                            target_kl=args.target_kl)
         if resume:
             print(f"{run_dir}: " + session_banner(
                 args.timesteps, start_timestep=model.num_timesteps,
