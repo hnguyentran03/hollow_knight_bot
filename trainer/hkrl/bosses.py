@@ -30,15 +30,6 @@ class BossSpec:
 
 
 BOSSES = {
-    # Gruz Mother. Stub for testing.
-    "gruz_mother": BossSpec(
-        id="gruz_mother",
-        fsm_states=("Idle", "UNKNOWN"),
-        arena_center_x=26.5,
-        arena_half_w=11.23,
-        floor_y=28.41,
-        arena_height=9.59,
-    ),
     # Hornet 1 (Hall of Gods, Attuned). States: DISCOVERED.md section 1;
     # arena: section 2 (walls 15.27/37.73, floor 28.41, top 38).
     "hornet1": BossSpec(

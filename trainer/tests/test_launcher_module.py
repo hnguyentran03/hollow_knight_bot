@@ -477,19 +477,29 @@ def test_delete_requires_a_run_id(tmp_path):
             launcher.delete(tmp_path, bad)
 
 
-def test_command_forwards_boss_on_new_runs(tmp_path):
+def _fake_boss(monkeypatch, boss_id="testboss"):
+    from hkrl.bosses import BOSSES, BossSpec
+    monkeypatch.setitem(BOSSES, boss_id, BossSpec(
+        id=boss_id, fsm_states=("Idle", "UNKNOWN"),
+        arena_center_x=0.0, arena_half_w=1.0, floor_y=0.0, arena_height=1.0))
+    return boss_id
+
+
+def test_command_forwards_boss_on_new_runs(tmp_path, monkeypatch):
+    boss_id = _fake_boss(monkeypatch, "testboss")
     cmd = launcher.command(tmp_path, {"mode": "new", "run_id": "r1",
-                                      "boss": "gruz_mother"},
+                                      "boss": boss_id},
                            platform="linux")
     assert "--boss" in cmd
-    assert cmd[cmd.index("--boss") + 1] == "gruz_mother"
+    assert cmd[cmd.index("--boss") + 1] == boss_id
 
 
-def test_command_drops_boss_on_resume(tmp_path):
+def test_command_drops_boss_on_resume(tmp_path, monkeypatch):
     # A resume derives the boss from the run's own config (train.py's
     # resolve_boss); forwarding it would be redundant at best.
+    boss_id = _fake_boss(monkeypatch, "testboss")
     cmd = launcher.command(tmp_path, {"mode": "resume", "run_id": "r1",
-                                      "boss": "gruz_mother"},
+                                      "boss": boss_id},
                            platform="linux")
     assert "--boss" not in cmd
 
@@ -500,11 +510,12 @@ def test_validate_rejects_an_unknown_boss(tmp_path):
                                     "boss": "grimm"}, platform="linux")
 
 
-def test_restart_params_carries_the_boss(tmp_path):
+def test_restart_params_carries_the_boss(tmp_path, monkeypatch):
+    boss_id = _fake_boss(monkeypatch, "testboss")
     run_dir = tmp_path / "r1"
     run_dir.mkdir()
     (run_dir / "config.jsonl").write_text(
-        json.dumps({"boss": "gruz_mother", "n_steps": 512}) + "\n")
+        json.dumps({"boss": boss_id, "n_steps": 512}) + "\n")
     params = launcher._restart_params(run_dir, {"mode": "resume",
                                                 "run_id": "r1"})
-    assert params["boss"] == "gruz_mother"
+    assert params["boss"] == boss_id
