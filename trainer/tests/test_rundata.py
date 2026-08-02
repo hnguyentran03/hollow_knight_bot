@@ -22,10 +22,10 @@ def _gen(gen, timestep, wall, **extra):
 
 
 def _write_config(run_dir, timesteps=100_000, resumed_from_gen=None,
-                  instances=1):
+                  instances=1, boss="hornet1"):
     with (run_dir / "config.jsonl").open("a") as f:
         f.write(json.dumps({"timesteps": timesteps, "run_id": "r",
-                            "instances": instances,
+                            "instances": instances, "boss": boss,
                             "resumed_from_gen": resumed_from_gen,
                             "started_at": "2026-07-20T01:00:00"}) + "\n")
 
@@ -187,6 +187,26 @@ def test_scan_runs_carries_instances_and_target(tmp_path):
     old = next(r for r in found if r["id"] == "old-style")
     assert old["instances"] is None
     assert old["target_timestep"] == 50_000
+
+
+def test_scan_runs_carries_the_boss(tmp_path):
+    """The summon page's previous-runs row shows each run's boss without a
+    second fetch, so the summary carries it -- None for a pre-feature
+    config, same degrade-to-None pattern as instances."""
+    d = tmp_path / "runs" / "shaped"
+    d.mkdir(parents=True)
+    _write_config(d, boss="gruz_mother")
+    _write_manifest(d, [_gen(1, 15_000, 1000.0)])
+    found = scan_runs(tmp_path, now=0)
+    assert found[0]["boss"] == "gruz_mother"
+
+    d2 = tmp_path / "runs" / "old-style"
+    d2.mkdir(parents=True)
+    with (d2 / "config.jsonl").open("a") as f:
+        f.write(json.dumps({"timesteps": 50_000, "run_id": "r"}) + "\n")
+    found = scan_runs(tmp_path, now=0)
+    old = next(r for r in found if r["id"] == "old-style")
+    assert old["boss"] is None
 
 
 def test_scan_runs_of_a_missing_root_is_empty(tmp_path):

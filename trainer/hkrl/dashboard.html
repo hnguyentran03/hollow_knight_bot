@@ -228,7 +228,7 @@
   .launch form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
   .launch form[hidden] { display: none; }  /* .launch form's display:grid outranks the UA's [hidden] rule */
   .launch label { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
-  .launch input {
+  .launch input, .launch select {
     width: 100%; font: inherit; color: var(--ink); background: var(--raised);
     border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
   }
@@ -333,6 +333,7 @@
     <form id="launch-form" hidden>
       <div><label for="f-run-id">Run id</label><input id="f-run-id" name="run_id" autocomplete="off"></div>
       <div><label for="f-instances">Instances</label><input id="f-instances" name="instances" type="number" min="1" max="3" value="1"></div>
+      <div><label for="f-boss">Boss</label><select id="f-boss" name="boss"></select></div>
       <div><label for="f-timesteps">Timesteps</label><input id="f-timesteps" name="timesteps" type="number" min="1" value="500000"></div>
       <details class="advanced">
         <summary>Advanced</summary>
@@ -755,6 +756,8 @@ function render() {
     tsTile.appendChild(mini);
   }
   tiles.appendChild(tsTile);
+  tiles.appendChild(tile("Boss",
+    run.config && run.config.boss ? run.config.boss : "hornet1"));
   tiles.appendChild(tile("Instances",
     run.config && run.config.instances ? String(run.config.instances) : "—",
     "game clients"));
@@ -820,8 +823,8 @@ function render() {
   const config = document.getElementById("config");
   config.replaceChildren();
   if (run.config) {
-    const keys = ["started_at", "instances", "timesteps", "resumed_from_gen", "gen_every",
-                  "n_steps", "batch_size", "n_epochs", "gamma", "ent_coef",
+    const keys = ["started_at", "boss", "instances", "timesteps", "resumed_from_gen",
+                  "gen_every", "n_steps", "batch_size", "n_epochs", "gamma", "ent_coef",
                   "n_stack", "seed", "port"];
     for (const k of keys) {
       if (!(k in run.config)) continue;
@@ -903,7 +906,7 @@ function launchError(msg) {
 
 function formParams() {
   const params = {};
-  for (const input of document.querySelectorAll("#launch-form input")) {
+  for (const input of document.querySelectorAll("#launch-form input, #launch-form select")) {
     if (input.value !== "") params[input.name] = input.value;
   }
   return params;
@@ -917,6 +920,17 @@ async function refreshLauncher() {
     return; // the banner already reports a lost server
   }
   document.getElementById("launch").hidden = false;
+  const bossSel = document.getElementById("f-boss");
+  const bosses = data.bosses || ["hornet1"];
+  if ([...bossSel.options].map(o => o.value).join() !== bosses.join()) {
+    bossSel.replaceChildren();
+    for (const b of bosses) {
+      const opt = document.createElement("option");
+      opt.value = b; opt.textContent = b;
+      bossSel.appendChild(opt);
+    }
+    bossSel.value = "hornet1";
+  }
   const active = data.active;
   document.getElementById("launch-active").hidden = !active;
   document.getElementById("launch-form").hidden = !!active;
@@ -1068,6 +1082,7 @@ async function renderPrevRuns(activeNow) {
     const meta = document.createElement("span");
     meta.className = "prev-run-meta";
     meta.textContent =
+      (r.boss || "hornet1") + " · " +
       (r.instances ? r.instances + " instance" + (r.instances === 1 ? "" : "s") + " · " : "") +
       fmtK(r.timestep) + " / " +
       (r.target_timestep ? fmtK(r.target_timestep) : "—") + " steps · " +

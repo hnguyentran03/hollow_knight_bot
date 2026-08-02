@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from hkrl import launcher
+from hkrl.bosses import BOSSES
 from hkrl.rundata import load_run, scan_runs
 
 PAGE = Path(__file__).with_name("dashboard.html")
@@ -56,6 +57,9 @@ class _Handler(BaseHTTPRequestHandler):
                     "instances": 1, "timesteps": 500_000,
                     "gen_every": 15_000, "batch_size": 64, "n_epochs": 5,
                 },
+                # Registry-driven, so the boss picker never drifts from what
+                # the launcher will actually accept.
+                "bosses": sorted(BOSSES),
             })
         elif path == "/api/launcher/log":
             query = parse_qs(urlsplit(self.path).query)
