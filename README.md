@@ -175,7 +175,9 @@ What to know before trying it:
 
 `train.py` launches the game itself — don't start one manually. When prompted, wait for the game to reach the Hall of Gods (the boot macro can drive it there; a few `reset ... reconnecting` retries on stderr are normal) and press Enter. 500k steps is roughly an overnight run (~54k steps/hour at 15&nbsp;Hz).
 
-Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (PPO rollout/update shape), `--target-kl` (early-stop an update's remaining epochs once approx KL exceeds ~1.5× this; off by default — try 0.05 if a long run peaks then slides), `--seed`, `--root` (default `~/hkrl`).
+Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (PPO rollout/update shape), `--target-kl` (early-stop an update's remaining epochs once approx KL exceeds ~1.5× this; off by default — try 0.05 if a long run peaks then slides), `--boss` (which boss to train against, default `hornet1`; picks from the registry in `hkrl/bosses.py`, which grows over time — `gruz_mother` is next in line), `--seed`, `--root` (default `~/hkrl`).
+
+A boss sets the observation space, so checkpoints are boss-specific — a resume always keeps the run's recorded boss (read from `config.jsonl`, even for runs from before `--boss` existed, which default to `hornet1`) and refuses a conflicting `--boss` flag up front, rather than failing on a shape mismatch deep inside model load.
 
 ### Monitor progress
 
