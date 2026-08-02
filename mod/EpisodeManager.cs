@@ -197,6 +197,7 @@ namespace HKRLBot
                 if (TryAnswerPing(server, msg)) return;
                 if ((string)msg["type"] == "reset")
                 {
+                    if (!TrySetBossFromReset(server, msg)) return;
                     awaitingReset = true;
                     sawNotLiveSinceReset = false;      // require a fresh not-live observation before the next reset is accepted
                     sawSceneReentrySinceReset = false; // require a fresh BossScene entry before the next reset is accepted
@@ -244,6 +245,12 @@ namespace HKRLBot
                         holdEndTime = Time.unscaledTime + ActionHoldSeconds;
                         break;
                     case "reset":
+                        if (!TrySetBossFromReset(server, reply))
+                        {
+                            episodeActive = false;
+                            HKRLBotMod.Instance.Input.Clear();
+                            break;
+                        }
                         episodeActive = false;
                         awaitingReset = true;
                         sawNotLiveSinceReset = false;      // require a fresh not-live observation before the next reset is accepted
@@ -414,6 +421,24 @@ namespace HKRLBot
         }
 
         // ---- reset handling ----
+
+        // Protocol v2: every reset names its boss. An unknown id is a
+        // registry-skew bug (trainer knows a boss this build doesn't) --
+        // refuse with an error the trainer raises on, rather than silently
+        // fighting whatever Current already was. Returns false when refused.
+        private bool TrySetBossFromReset(BridgeServer server, JObject msg)
+        {
+            string id = (string)msg["boss"];
+            if (BossRegistry.TrySet(id)) return true;
+            HKRLBotMod.Instance.Log(
+                $"EpisodeManager: reset named unknown boss '{id}' -- refusing "
+                + "and dropping the connection (rebuild skew between trainer "
+                + "and mod registries?)");
+            server.SendError($"unknown boss '{id}'; this mod build knows: "
+                + string.Join(", ", BossRegistry.All.Keys));
+            server.Drop();
+            return false;
+        }
 
         // nextMacroTickTime throttles ResetMacro.Tick() to ~20 ticks/sec on the
         // wall clock, so the macro's pulse cadence and diagnostic logging hold

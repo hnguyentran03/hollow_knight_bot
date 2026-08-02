@@ -74,7 +74,7 @@ namespace HKRLBot
                     stream.WriteTimeout = 10000;
                     reader = new StreamReader(stream);
                     writer = new StreamWriter(stream) { AutoFlush = true };
-                    writer.WriteLine("{\"type\":\"hello\",\"version\":1}");
+                    writer.WriteLine("{\"type\":\"hello\",\"version\":2}");
                 }
                 HKRLBotMod.Instance.Log("Trainer connected");
             }
@@ -137,6 +137,21 @@ namespace HKRLBot
             lock (gate)
             {
                 try { writer?.WriteLine("{\"type\":\"pong\"}"); }
+                catch (IOException) { DropLocked(); }
+            }
+        }
+
+        // Refuse a request with a reason the trainer can surface (e.g. a
+        // boss id this build's registry doesn't know). Same bounded, gated
+        // write path as SendState/SendPong; the caller decides whether to
+        // Drop() afterward.
+        public void SendError(string message)
+        {
+            var msg = new JObject { ["type"] = "error", ["message"] = message };
+            var text = msg.ToString(Formatting.None);
+            lock (gate)
+            {
+                try { writer?.WriteLine(text); }
                 catch (IOException) { DropLocked(); }
             }
         }
