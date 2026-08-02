@@ -292,3 +292,20 @@ def test_abort_during_the_reconnect_window_still_aborts_promptly(monkeypatch):
             env.reset()
         assert time.monotonic() - started < 2.0
         env.close()
+
+
+def test_env_rejects_an_unknown_boss_before_connecting():
+    # No FakeGame: the registry lookup must fail before any socket work.
+    with pytest.raises(ValueError, match="hornet1"):
+        HKEnv(port=1, boss="grimm")
+
+
+def test_obs_size_is_scalar_block_plus_boss_state_onehot():
+    from hkrl.bosses import get_boss
+    from hkrl.env import OBS_KEYS
+    episode = [state(obs())]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)   # default boss: hornet1
+        n = len(OBS_KEYS) + len(get_boss("hornet1").fsm_states)
+        assert env.observation_space.shape == (n,)
+        env.close()
