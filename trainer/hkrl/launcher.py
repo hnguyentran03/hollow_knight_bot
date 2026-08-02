@@ -21,6 +21,7 @@ import threading
 import time
 from pathlib import Path
 
+from hkrl.bosses import BOSSES
 from hkrl.game import DEFAULT_PORT
 from hkrl.generations import checkpoint_paths
 from hkrl.rundata import LIVE_WINDOW_S, read_jsonl
@@ -87,7 +88,7 @@ def _restart_params(run_dir: Path, request: dict) -> dict:
     configs = read_jsonl(run_dir / "config.jsonl")
     cfg = configs[-1] if configs else {}
     params = {"mode": "new", "run_id": run_dir.name}
-    for key in _INT_PARAMS:
+    for key in _INT_PARAMS + _STR_NEW_ONLY:
         value = request.get(key, cfg.get(key))
         if value is not None:
             params[key] = value
@@ -146,6 +147,11 @@ _NEW_ONLY = ("n_steps", "batch_size", "n_epochs", "seed")
 _ALWAYS = ("instances", "timesteps", "gen_every")
 _INT_PARAMS = _ALWAYS + _NEW_ONLY
 
+# String-valued params. boss is new-only for the same reason the model-
+# shaping ints are: on resume train.py derives it from the run's recorded
+# config (and refuses a conflicting flag), so forwarding it is noise.
+_STR_NEW_ONLY = ("boss",)
+
 
 def _validate(params: dict) -> dict:
     mode = params.get("mode", "new")
@@ -173,6 +179,12 @@ def _validate(params: dict) -> dict:
             clean[key] = int(value)
         except (TypeError, ValueError):
             raise ValueError(f"{key} must be an integer") from None
+    boss = params.get("boss")
+    if boss not in (None, ""):
+        if boss not in BOSSES:
+            raise ValueError(
+                f"unknown boss {boss!r}; known: {', '.join(sorted(BOSSES))}")
+        clean["boss"] = boss
     if not 1 <= clean.get("instances", 1) <= 3:
         raise ValueError("instances must be between 1 and 3")
     if clean.get("timesteps", 1) < 1:
@@ -204,7 +216,8 @@ def command(root, params: dict, platform: str = sys.platform) -> list[str]:
         cmd += ["--resume", str(root / "runs" / p["run_id"])]
     else:
         cmd += ["--run-id", p["run_id"]]
-    for key in (_ALWAYS if p["mode"] == "resume" else _INT_PARAMS):
+    keys = _ALWAYS if p["mode"] == "resume" else _INT_PARAMS + _STR_NEW_ONLY
+    for key in keys:
         if key in p:
             cmd += ["--" + key.replace("_", "-"), str(p[key])]
     return _caffeinate(cmd, platform)

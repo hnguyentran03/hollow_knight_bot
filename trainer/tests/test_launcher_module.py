@@ -475,3 +475,36 @@ def test_delete_requires_a_run_id(tmp_path):
     for bad in (None, ""):
         with pytest.raises(ValueError):
             launcher.delete(tmp_path, bad)
+
+
+def test_command_forwards_boss_on_new_runs(tmp_path):
+    cmd = launcher.command(tmp_path, {"mode": "new", "run_id": "r1",
+                                      "boss": "gruz_mother"},
+                           platform="linux")
+    assert "--boss" in cmd
+    assert cmd[cmd.index("--boss") + 1] == "gruz_mother"
+
+
+def test_command_drops_boss_on_resume(tmp_path):
+    # A resume derives the boss from the run's own config (train.py's
+    # resolve_boss); forwarding it would be redundant at best.
+    cmd = launcher.command(tmp_path, {"mode": "resume", "run_id": "r1",
+                                      "boss": "gruz_mother"},
+                           platform="linux")
+    assert "--boss" not in cmd
+
+
+def test_validate_rejects_an_unknown_boss(tmp_path):
+    with pytest.raises(ValueError, match="boss"):
+        launcher.command(tmp_path, {"mode": "new", "run_id": "r1",
+                                    "boss": "grimm"}, platform="linux")
+
+
+def test_restart_params_carries_the_boss(tmp_path):
+    run_dir = tmp_path / "r1"
+    run_dir.mkdir()
+    (run_dir / "config.jsonl").write_text(
+        json.dumps({"boss": "gruz_mother", "n_steps": 512}) + "\n")
+    params = launcher._restart_params(run_dir, {"mode": "resume",
+                                                "run_id": "r1"})
+    assert params["boss"] == "gruz_mother"
