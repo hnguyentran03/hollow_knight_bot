@@ -175,7 +175,7 @@ What to know before trying it:
 
 `train.py` launches the game itself — don't start one manually. When prompted, wait for the game to reach the Hall of Gods (the boot macro can drive it there; a few `reset ... reconnecting` retries on stderr are normal) and press Enter. 500k steps is roughly an overnight run (~54k steps/hour at 15&nbsp;Hz).
 
-Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (PPO rollout/update shape), `--seed`, `--root` (default `~/hkrl`).
+Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (PPO rollout/update shape), `--target-kl` (early-stop an update's remaining epochs once approx KL exceeds ~1.5× this; off by default — try 0.05 if a long run peaks then slides), `--seed`, `--root` (default `~/hkrl`).
 
 ### Monitor progress
 
@@ -227,7 +227,7 @@ their own terminal.
 caffeinate -dims ./.venv/bin/python scripts/train.py --resume ~/hkrl/runs/my-run
 ```
 
-This relaunches the game, reloads the latest generation's weights **and** its observation-normalization statistics, and continues the same run — same directory, continued generation numbering and TensorBoard curves. `--timesteps` is additive on resume ("collect this many more"). If a run dies overnight (recovery exhausted), it prints this exact `--resume` command before exiting; PPO hyperparameters come from the checkpoint on resume, so the `--n-steps`/`--batch-size`/`--n-epochs` flags only shape fresh runs.
+This relaunches the game, reloads the latest generation's weights **and** its observation-normalization statistics, and continues the same run — same directory, continued generation numbering and TensorBoard curves. `--timesteps` is additive on resume ("collect this many more"). If a run dies overnight (recovery exhausted), it prints this exact `--resume` command before exiting; PPO hyperparameters come from the checkpoint on resume, so the `--n-steps`/`--batch-size`/`--n-epochs` flags only shape fresh runs. The one exception is `--target-kl`, which when passed overrides the checkpoint's value too — it exists to change update dynamics on a run already in progress.
 
 ### Watch a checkpoint play
 
