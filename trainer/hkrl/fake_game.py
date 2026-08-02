@@ -19,7 +19,7 @@ def state(o, done=False, won=False):
 
 
 class FakeGame:
-    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0):
+    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, version=2, bosses=("hornet1", "gruz_mother")):
         self.episodes = [list(ep) for ep in episodes]
         # port=0 (default) binds an ephemeral port, same as before; a caller
         # that needs to stand a fresh fake back up on a specific port (e.g.
@@ -36,6 +36,14 @@ class FakeGame:
         # The client's reset parks in its blocking recv; abort tests
         # release it from another thread.
         self.hang_resets = hang_resets
+        # Protocol version greeted on connect; tests pass 1 to simulate a
+        # stale mod build.
+        self.version = version
+        # Boss ids this fake's "mod registry" knows; a reset naming any
+        # other id is answered with an error then a drop, like the real mod.
+        self.bosses = tuple(bosses)
+        # Boss id carried by each reset request, for assertions.
+        self.reset_bosses = []
         # Keepalive pings answered so far, for tests asserting the pinger
         # actually ran (hkrl/protocol.py's Connection keepalive thread).
         self.pings = 0
@@ -96,7 +104,7 @@ class FakeGame:
                 f.write(json.dumps(msg).encode() + b"\n")
                 f.flush()
 
-            send({"type": "hello", "version": 1})
+            send({"type": "hello", "version": self.version})
             ep = None
             while True:
                 line = f.readline()
@@ -104,6 +112,13 @@ class FakeGame:
                     return
                 msg = json.loads(line)
                 if msg["type"] == "reset":
+                    boss = msg.get("boss")
+                    self.reset_bosses.append(boss)
+                    if boss not in self.bosses:
+                        send({"type": "error",
+                              "message": f"unknown boss {boss!r}"})
+                        conn.shutdown(socket.SHUT_RDWR)
+                        return
                     if self.hang_resets > 0:
                         self.hang_resets -= 1
                         continue

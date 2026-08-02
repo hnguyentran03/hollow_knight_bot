@@ -1,4 +1,4 @@
-"""Gymnasium environment over the HKRLBot mod protocol (v1)."""
+"""Gymnasium environment over the HKRLBot mod protocol (v2)."""
 import sys
 import threading
 import time
@@ -8,7 +8,7 @@ import numpy as np
 from gymnasium import spaces
 
 from hkrl.bosses import get_boss
-from hkrl.protocol import Connection, ConnectionClosed
+from hkrl.protocol import Connection, ConnectionClosed, PROTOCOL_VERSION
 from hkrl.reset_metrics import append_reset_span, reset_log_path
 
 VEL_SCALE = 20.0
@@ -103,6 +103,12 @@ class HKEnv(gym.Env):
         self.conn = Connection(host=host, port=port, timeout=timeout,
                                keepalive=keepalive)
         self.conn.connect()
+        version = (self.conn.hello or {}).get("version")
+        if version != PROTOCOL_VERSION:
+            raise RuntimeError(
+                f"mod speaks protocol v{version}, this trainer needs "
+                f"v{PROTOCOL_VERSION} -- rebuild the mod (mod/build.sh) and "
+                f"restart the game")
         self._reset_abort = threading.Event()
         self._steps = 0
         self._prev = None
@@ -182,8 +188,15 @@ class HKEnv(gym.Env):
         started = time.perf_counter()
         for retry in range(self.reset_retries + 1):
             try:
-                self.conn.send({"type": "reset"})
+                self.conn.send({"type": "reset", "boss": self.boss.id})
                 msg = self.conn.recv()
+                if msg.get("type") == "error":
+                    # The mod refused the reset (e.g. a boss id its registry
+                    # doesn't know). A registry-skew bug, not protocol
+                    # rhythm: fail loudly instead of retrying into the same
+                    # refusal.
+                    raise RuntimeError(
+                        f"mod refused reset: {msg.get('message', msg)}")
                 break
             except (ConnectionClosed, BrokenPipeError, ConnectionResetError):
                 if self._reset_abort.is_set():

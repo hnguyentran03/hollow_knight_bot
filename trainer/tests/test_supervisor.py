@@ -64,7 +64,7 @@ class WedgedGame:
             if self._hello:
                 try:
                     conn.sendall(
-                        json.dumps({"type": "hello", "version": 1}).encode() + b"\n"
+                        json.dumps({"type": "hello", "version": 2}).encode() + b"\n"
                     )
                 except OSError:
                     return
@@ -565,7 +565,7 @@ class BootingGame:
                 f.write(json.dumps(msg).encode() + b"\n")
                 f.flush()
 
-            send({"type": "hello", "version": 1})
+            send({"type": "hello", "version": 2})
             ep = None
             while True:
                 line = f.readline()
@@ -724,7 +724,7 @@ class SuspendedGame:
         except OSError:
             return
         f = conn.makefile("rwb")
-        f.write(json.dumps({"type": "hello", "version": 1}).encode() + b"\n")
+        f.write(json.dumps({"type": "hello", "version": 2}).encode() + b"\n")
         f.flush()
         f.readline()  # the reset
         f.write(json.dumps(state(obs())).encode() + b"\n")

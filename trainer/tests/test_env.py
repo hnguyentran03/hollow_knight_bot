@@ -309,3 +309,27 @@ def test_obs_size_is_scalar_block_plus_boss_state_onehot():
         n = len(OBS_KEYS) + len(get_boss("hornet1").fsm_states)
         assert env.observation_space.shape == (n,)
         env.close()
+
+
+def test_reset_sends_the_boss_id():
+    with FakeGame([[state(obs())]]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        assert fg.reset_bosses == ["hornet1"]
+        env.close()
+
+
+def test_old_mod_version_is_refused_at_connect():
+    with FakeGame([[state(obs())]], version=1) as fg:
+        with pytest.raises(RuntimeError, match="protocol"):
+            HKEnv(port=fg.port)
+
+
+def test_mod_error_reply_fails_the_reset_loudly():
+    # A mod that doesn't know the requested boss answers with an error
+    # instead of a state; that must raise, not retry or hang.
+    with FakeGame([[state(obs())]], bosses=("gruz_mother",)) as fg:
+        env = HKEnv(port=fg.port)
+        with pytest.raises(RuntimeError, match="hornet1"):
+            env.reset()
+        env.close()
