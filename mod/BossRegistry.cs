@@ -61,7 +61,12 @@ namespace HKRLBot
                     Scene = "GG_Gruz_Mother",
                     ObjectName = "Giant Fly",
                     FsmName = "Big Fly Control",
-                    StatueX = 28.0f,
+                    // Menu-open readings spanned 27.96-31.15; the macro's
+                    // +/-0.5 settle window around 28.0 left the knight at
+                    // 27.7-27.9, just outside the interact region's left
+                    // edge (statue-menu stalls, 2026-08-03 smoke). 28.6
+                    // keeps the whole settle window inside the evidence.
+                    StatueX = 28.6f,
                     MaxAttunedHp = 700,
                     TierIndex = 0,
                     NeedleName = null,   // no tracked projectile
