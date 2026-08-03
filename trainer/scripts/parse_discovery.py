@@ -5,8 +5,10 @@ The mod's DiscoveryLogger (F4 in-game) writes "DISCOVERY ..." lines to
 ModLog.txt while a human plays a fight against a boss the registries don't
 know yet. This script reduces a ModLog to what a new BossSpec /
 BossRegistry entry needs: boss GameObject candidates ranked by peak HP,
-each candidate's Control-FSM state vocabulary in first-seen order, arena
-bounds per scene from the knight's extremes, and statue-stand X readings.
+each candidate's per-FSM state vocabulary in first-seen order (a boss can
+carry several FSMs; the main one is whichever cycles through attack-like
+states), arena bounds per scene from the knight's extremes, and
+statue-stand X readings.
 
 Usage:
     python scripts/parse_discovery.py path/to/ModLog.txt
@@ -15,7 +17,8 @@ import argparse
 import re
 from collections import defaultdict
 
-STATE_RE = re.compile(r"DISCOVERY state go='(?P<go>.*?)' state='(?P<state>.*?)'")
+STATE_RE = re.compile(
+    r"DISCOVERY state go='(?P<go>.*?)' fsm='(?P<fsm>.*?)' state='(?P<state>.*?)'")
 CANDIDATE_RE = re.compile(
     r"DISCOVERY candidate go='(?P<go>.*?)' hp=(?P<hp>\d+) scene=(?P<scene>\S*)")
 ARENA_RE = re.compile(
@@ -25,21 +28,22 @@ STATUE_RE = re.compile(r"DISCOVERY statue knightX=(?P<x>-?[\d.]+) scene=(?P<scen
 
 
 def summarize(lines):
-    states = defaultdict(list)   # go -> distinct states, first-seen order
-    candidates = {}              # go -> {"hp": peak, "scenes": set}
+    states = defaultdict(list)   # (go, fsm) -> distinct states, first-seen order
+    candidates = {}              # (go, scene) -> peak hp; per scene because
+                                 # each difficulty tier is its own scene and
+                                 # the tier HPs must not blur together
     arenas = {}                  # scene -> latest arena reading (floats)
     statue_xs = []
     for line in lines:
         m = STATE_RE.search(line)
         if m:
-            if m["state"] not in states[m["go"]]:
-                states[m["go"]].append(m["state"])
+            if m["state"] not in states[m["go"], m["fsm"]]:
+                states[m["go"], m["fsm"]].append(m["state"])
             continue
         m = CANDIDATE_RE.search(line)
         if m:
-            c = candidates.setdefault(m["go"], {"hp": 0, "scenes": set()})
-            c["hp"] = max(c["hp"], int(m["hp"]))
-            c["scenes"].add(m["scene"])
+            key = (m["go"], m["scene"])
+            candidates[key] = max(candidates.get(key, 0), int(m["hp"]))
             continue
         m = ARENA_RE.search(line)
         if m:
@@ -55,13 +59,15 @@ def summarize(lines):
 
 
 def report(s):
-    out = ["boss candidates (by peak HP; the boss is almost always the top one):"]
-    for go, c in sorted(s["candidates"].items(), key=lambda kv: -kv[1]["hp"]):
-        out.append(f"  go='{go}' peak hp={c['hp']} scenes={sorted(c['scenes'])}")
+    out = ["boss candidates (peak HP per scene; the boss is almost always the top one,"
+           " and each difficulty tier is its own scene):"]
+    for (go, scene), hp in sorted(s["candidates"].items(), key=lambda kv: -kv[1]):
+        out.append(f"  go='{go}' scene={scene} peak hp={hp}")
     out.append("")
-    out.append("Control-FSM states (first-seen order; append \"UNKNOWN\" when transcribing):")
-    for go, names in s["states"].items():
-        out.append(f"  go='{go}' ({len(names)} states):")
+    out.append("FSM states per (object, fsm), first-seen order; transcribe the boss's"
+               " main FSM and append \"UNKNOWN\":")
+    for (go, fsm), names in s["states"].items():
+        out.append(f"  go='{go}' fsm='{fsm}' ({len(names)} states):")
         out.extend(f'    "{n}",' for n in names)
     out.append("")
     out.append("arena per scene (knight extremes; re-tag both walls if the range looks short):")

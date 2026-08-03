@@ -9,8 +9,9 @@ namespace HKRLBot
     // registries: while enabled it watches whatever fight the human is
     // playing and logs, as "DISCOVERY ..." ModLog lines, what a new
     // registry entry needs -- boss-candidate GameObject names with their
-    // HP as each HealthManager first appears, every Control-FSM state
-    // transition on objects carrying a HealthManager, the knight's
+    // HP as each HealthManager first appears, every FSM state transition
+    // on objects carrying a HealthManager (bosses name their main FSM
+    // freely -- Hornet's is "Control", others differ), the knight's
     // per-scene X extremes / grounded floor Y / max height (tag both
     // arena walls once mid-fight), and the knight X at the instant the
     // statue challenge menu opens. Toggled with F4 (OverlayUI); OFF by
@@ -27,8 +28,8 @@ namespace HKRLBot
         private const float ScanPeriodSeconds = 0.25f;
         private static float nextScanTime;
 
-        // Last Control-FSM state per component instance id, so each
-        // transition logs exactly once.
+        // Last state per FSM component instance id, so each transition
+        // logs exactly once.
         private static readonly Dictionary<int, string> lastState = new Dictionary<int, string>();
         // HealthManager instance ids already reported as candidates.
         private static readonly HashSet<int> seenHm = new HashSet<int>();
@@ -79,14 +80,15 @@ namespace HKRLBot
                     int hp = ReflectionHelper.GetField<HealthManager, int>(hm, "hp");
                     mod.Log($"DISCOVERY candidate go='{hm.gameObject.name}' hp={hp} scene={scene}");
                 }
-                var fsm = FSMUtility.LocateFSM(hm.gameObject, "Control");
-                if (fsm == null) continue;
-                int id = fsm.GetInstanceID();
-                string cur = fsm.ActiveStateName;
-                if (!lastState.TryGetValue(id, out string prev) || prev != cur)
+                foreach (var fsm in hm.gameObject.GetComponents<PlayMakerFSM>())
                 {
-                    lastState[id] = cur;
-                    mod.Log($"DISCOVERY state go='{fsm.gameObject.name}' state='{cur}'");
+                    int id = fsm.GetInstanceID();
+                    string cur = fsm.ActiveStateName;
+                    if (!lastState.TryGetValue(id, out string prev) || prev != cur)
+                    {
+                        lastState[id] = cur;
+                        mod.Log($"DISCOVERY state go='{fsm.gameObject.name}' fsm='{fsm.FsmName}' state='{cur}'");
+                    }
                 }
             }
 
