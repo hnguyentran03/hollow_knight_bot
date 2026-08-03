@@ -891,10 +891,12 @@ namespace HKRLBot
             bool wantConfirmPulse = (elapsed % StatueMenuPeriodSeconds) < ConfirmPulseSeconds;
             int tier = mod.Reader.ReadSelectedChallengeTier();
 
-            if (tier == 0)
+            if (tier == BossRegistry.Current.TierIndex)
             {
                 // Attuned selected: let the confirm pulse fire. Silent
-                // healthy path, unchanged.
+                // healthy path. (SelectAttunedChallengeTier still assumes
+                // the first tier button; revisit both together if a boss
+                // ever has a non-zero Attuned index.)
                 return wantConfirmPulse;
             }
 

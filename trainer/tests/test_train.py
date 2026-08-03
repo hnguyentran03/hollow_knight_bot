@@ -502,3 +502,12 @@ def test_resolve_boss_refuses_a_conflicting_flag_on_resume(tmp_path):
         json.dumps({"boss": "hornet1"}) + "\n")
     with pytest.raises(ValueError, match="gruz_mother"):
         train.resolve_boss("gruz_mother", tmp_path)
+
+
+def test_resolve_boss_rejects_a_recorded_boss_this_registry_lacks(tmp_path):
+    # A run recorded against a boss this build doesn't know must fail at
+    # the guard, not deep in worker env construction.
+    (tmp_path / "config.jsonl").write_text(
+        json.dumps({"boss": "no_such_boss"}) + "\n")
+    with pytest.raises(ValueError, match="no_such_boss"):
+        train.resolve_boss(None, tmp_path)

@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
 
-from hkrl.bosses import BOSSES  # noqa: E402
+from hkrl.bosses import BOSSES, get_boss  # noqa: E402
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
 from hkrl.masking import MaskedRecurrentPPO  # noqa: E402
@@ -86,6 +86,9 @@ def resolve_boss(flag: str | None, run_dir: Path | None) -> str:
         return flag or "hornet1"
     configs = read_jsonl(run_dir / "config.jsonl")
     recorded = (configs[-1].get("boss") if configs else None) or "hornet1"
+    # A config naming a boss this registry lacks fails here, at the guard,
+    # not deep in worker env construction.
+    get_boss(recorded)
     if flag is not None and flag != recorded:
         raise ValueError(
             f"--boss {flag} conflicts with {run_dir}'s recorded boss "
