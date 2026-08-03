@@ -367,3 +367,8 @@ Max HP: 650 Attuned, 945 Ascended -> mod ceiling MaxAttunedHp = 700
 HP ceiling (backstop B) catches a wrong tier during the smoke run, and the
 Die-hook win report through the burst-into-gruzzers death sequence is also
 verified there.
+
+**Addendum (2026-08-03 smoke):** the trainer's unseen-state warning surfaced
+`Charge Recover R` during the first live gruz run -- the discovery fights
+never saw a right-wall charge recovery. Added to the `gruz_mother`
+`fsm_states` (17 recorded states + UNKNOWN).

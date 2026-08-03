@@ -58,6 +58,9 @@ BOSSES = {
             "Charge Recover D", "Super End", "Slam Antic", "Flying",
             "Slam Up", "Slam Down", "Launch Down", "Slam End",
             "Charge Recover U", "Charge Recover L", "Launch Up",
+            # Surfaced by the trainer's unseen-state warning during the
+            # 2026-08-03 smoke run; discovery never saw a right-wall recover.
+            "Charge Recover R",
             "UNKNOWN",
         ),
         arena_center_x=94.5,
