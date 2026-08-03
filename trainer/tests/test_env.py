@@ -103,6 +103,20 @@ def test_unknown_boss_state_maps_to_fallback_slot():
         env.close()
 
 
+def test_unseen_boss_state_warns_once_per_state(capfd):
+    episode = [state(obs()), state(obs(boss_state="Gruz Slam")),
+               state(obs(boss_state="Gruz Slam"))]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        env.step(0)
+        env.step(0)
+        env.close()
+    err = capfd.readouterr().err
+    assert err.count("Gruz Slam") == 1
+    assert "UNKNOWN" in err
+
+
 def test_truncation_at_max_steps():
     # Episode that never ends (no done=True), but we truncate at max_steps.
     # This guards against the bug where truncated timeout is incorrectly

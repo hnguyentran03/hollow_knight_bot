@@ -113,6 +113,7 @@ class HKEnv(gym.Env):
         self._steps = 0
         self._prev = None
         self._max_bhp = None
+        self._warned_states = set()
         n = len(OBS_KEYS) + len(self.boss.fsm_states)
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(n,), dtype=np.float32)
         self.action_space = spaces.Discrete(len(ACTIONS))
@@ -143,6 +144,13 @@ class HKEnv(gym.Env):
             onehot[b.fsm_states.index(obs["boss_state"])] = 1.0
         except ValueError:
             onehot[-1] = 1.0
+            unseen = obs["boss_state"]
+            if unseen and unseen not in self._warned_states:
+                self._warned_states.add(unseen)
+                print(f"hkrl: boss_state {unseen!r} is not in {self.boss.id}'s "
+                      f"registry list; mapped to UNKNOWN. If this repeats, it "
+                      f"is a candidate for the fsm_states list.",
+                      file=sys.stderr, flush=True)
         return np.asarray(v + onehot, dtype=np.float32)
 
     def _reward(self, prev, cur, done, won, truncated):

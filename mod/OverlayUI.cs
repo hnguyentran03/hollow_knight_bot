@@ -99,6 +99,7 @@ namespace HKRLBot
         {
             if (Input.GetKeyDown(KeyCode.F1)) show = !show;
             if (Input.GetKeyDown(KeyCode.F3)) FSMLogger.LogAll();
+            if (Input.GetKeyDown(KeyCode.F4)) DiscoveryLogger.Toggle();
 
             if (Input.GetKeyDown(KeyCode.F2)) { wiggle = !wiggle; if (!wiggle) HKRLBotMod.Instance.Input.Clear(); }
             if (wiggle)
@@ -258,7 +259,7 @@ namespace HKRLBot
 
             // ---------------- CONTROLS ----------------
             cy = SectionHeader(left, cy, cw, "CONTROLS");
-            GUI.Label(new Rect(left, cy, cw - 70f, RowH), "F1 show · F2 wiggle · F3 fsm-log", dim);
+            GUI.Label(new Rect(left, cy, cw - 70f, RowH), "F1 show · F2 wiggle · F3 fsm-log · F4 discovery", dim);
             float wy = cy + (RowH - ChipH) / 2f;
             DrawChip(new Rect(left + cw - 66f, wy, 66f, ChipH), wiggle ? "WIGGLE" : "IDLE", wiggle, DashOn);
         }

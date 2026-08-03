@@ -143,6 +143,11 @@ namespace HKRLBot
         // Also folds in the boss-latch handling documented above ComputeWon.
         private void LateUpdate()
         {
+            // Runs before the server.Connected early-return below on purpose:
+            // discovery must keep working during pure human play with no
+            // trainer connected at all. See DiscoveryLogger's own comment.
+            DiscoveryLogger.Tick();
+
             var server = HKRLBotMod.Instance.Server;
             if (!server.Connected)
             {
