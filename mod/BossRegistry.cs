@@ -16,6 +16,10 @@ namespace HKRLBot
         public string Scene;
         // The boss's root GameObject name, for StateReader's scene scan.
         public string ObjectName;
+        // Name of the boss's main FSM on that GameObject -- bosses name it
+        // freely (Hornet: "Control", Gruz Mother: "Big Fly Control"), so
+        // StateReader locates it per boss.
+        public string FsmName;
         // Knight X when standing at this boss's statue in GG_Workshop --
         // a measured value (F1 overlay), like Hornet's in DISCOVERED.md
         // section 3. A wrong-but-plausible number silently corrupts the
@@ -43,10 +47,24 @@ namespace HKRLBot
                     Id = "hornet1",
                     Scene = "GG_Hornet_1",
                     ObjectName = "Hornet Boss 1",
+                    FsmName = "Control",
                     StatueX = 62.21f,
                     MaxAttunedHp = 1000,
                     TierIndex = 0,
                     NeedleName = "Needle",
+                },
+                // Measured 2026-08-03, DISCOVERED.md sections 6 and 7.
+                // Attuned max HP 650, Ascended 945 -> ceiling 700.
+                ["gruz_mother"] = new BossSpec
+                {
+                    Id = "gruz_mother",
+                    Scene = "GG_Gruz_Mother",
+                    ObjectName = "Giant Fly",
+                    FsmName = "Big Fly Control",
+                    StatueX = 28.0f,
+                    MaxAttunedHp = 700,
+                    TierIndex = 0,
+                    NeedleName = null,   // no tracked projectile
                 },
             };
 

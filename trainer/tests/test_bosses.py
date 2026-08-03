@@ -23,3 +23,11 @@ def test_get_boss_rejects_unknown_ids_naming_the_known_ones():
 
 def test_registry_keys_match_spec_ids():
     assert all(spec.id == key for key, spec in BOSSES.items())
+
+
+def test_gruz_mother_is_registered_with_its_own_obs_space():
+    spec = get_boss("gruz_mother")
+    assert spec.id == "gruz_mother"
+    assert spec.fsm_states[-1] == "UNKNOWN"
+    # Different state list -> different obs size -> boss-specific policies.
+    assert spec.fsm_states != get_boss("hornet1").fsm_states

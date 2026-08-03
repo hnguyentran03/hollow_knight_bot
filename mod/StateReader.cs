@@ -117,7 +117,7 @@ namespace HKRLBot
                 {
                     bossSearchDone = true;
                     bossHm = bossGo.GetComponent<HealthManager>();
-                    bossFsm = FSMUtility.LocateFSM(bossGo, "Control");
+                    bossFsm = FSMUtility.LocateFSM(bossGo, BossRegistry.Current.FsmName);
                     bossRb = bossGo.GetComponent<Rigidbody2D>();
                 }
                 // else: leave bossSearchDone false so the next ReadBoss() call

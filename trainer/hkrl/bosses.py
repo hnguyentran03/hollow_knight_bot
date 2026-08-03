@@ -48,6 +48,23 @@ BOSSES = {
         floor_y=28.41,
         arena_height=9.59,
     ),
+    # Gruz Mother (Hall of Gods, Attuned). States and arena measured
+    # 2026-08-03, DISCOVERED.md sections 6 and 7 (walls 86.27/102.73,
+    # floor 15.40, top 24.66). Main FSM "Big Fly Control".
+    "gruz_mother": BossSpec(
+        id="gruz_mother",
+        fsm_states=(
+            "Wake", "GG Extra Pause", "Buzz", "Charge Antic", "Charge",
+            "Charge Recover D", "Super End", "Slam Antic", "Flying",
+            "Slam Up", "Slam Down", "Launch Down", "Slam End",
+            "Charge Recover U", "Charge Recover L", "Launch Up",
+            "UNKNOWN",
+        ),
+        arena_center_x=94.5,
+        arena_half_w=8.23,
+        floor_y=15.4,
+        arena_height=9.26,
+    ),
 }
 
 
