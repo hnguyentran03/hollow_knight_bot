@@ -997,19 +997,355 @@ git commit -m "Document protocol v2 and per-boss observation spaces in DOCS.md."
 
 ---
 
+### Task 10b: Boss-discovery instrumentation (added 2026-08-02)
+
+Automates most of Task 11's measurements: a mod-side logger that watches a
+human-played fight and emits `DISCOVERY ...` ModLog lines, plus a trainer-side
+parser that reduces them to registry-ready values, plus a trainer warning when
+a live `boss_state` is missing from the registry's list.
+
+**Files:**
+- Create: `mod/DiscoveryLogger.cs`, `trainer/scripts/parse_discovery.py`
+- Modify: `mod/EpisodeManager.cs` (one Tick call), `mod/OverlayUI.cs` (F4
+  toggle — verify F4 is unused there first; if taken use the next free F-key
+  and say so), `trainer/hkrl/env.py` (unknown-state warning)
+- Test: `trainer/tests/test_parse_discovery.py` (create), `trainer/tests/test_env.py`
+
+**Interfaces:**
+- Consumes: `StateReader.ReadKnight()` / `IsChallengeMenuOpen()`; `HKRLBotMod.Instance.Log`; `HKEnv.boss` (Task 2).
+- Produces: `DiscoveryLogger.Enabled` / `Toggle()` / `Tick()` (static);
+  `DISCOVERY state|candidate|arena|statue` ModLog line formats (the parser's
+  regexes below are the format contract); `summarize(lines)` / `report(s)` in
+  `parse_discovery.py`.
+
+- [ ] **Step 1: `mod/DiscoveryLogger.cs`**
+
+```csharp
+// mod/DiscoveryLogger.cs
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace HKRLBot
+{
+    // Boss-discovery instrumentation for adding a NEW boss to the
+    // registries: while enabled it watches whatever fight the human is
+    // playing and logs, as "DISCOVERY ..." ModLog lines, what a new
+    // registry entry needs -- boss-candidate GameObject names with their
+    // HP as each HealthManager first appears, every Control-FSM state
+    // transition on objects carrying a HealthManager, the knight's
+    // per-scene X extremes / grounded floor Y / max height (tag both
+    // arena walls once mid-fight), and the knight X at the instant the
+    // statue challenge menu opens. Toggled with F4 (OverlayUI); OFF by
+    // default so training runs pay one bool check and ModLog stays quiet.
+    // scripts/parse_discovery.py reduces the lines to registry values --
+    // its regexes are the format contract for every Log call here.
+    public static class DiscoveryLogger
+    {
+        public static bool Enabled;
+
+        // FindObjectsOfType is a scene sweep; 4/sec is plenty for state
+        // transitions (boss states last many frames) and invisible next
+        // to a human-played session.
+        private const float ScanPeriodSeconds = 0.25f;
+        private static float nextScanTime;
+
+        // Last Control-FSM state per component instance id, so each
+        // transition logs exactly once.
+        private static readonly Dictionary<int, string> lastState = new Dictionary<int, string>();
+        // HealthManager instance ids already reported as candidates.
+        private static readonly HashSet<int> seenHm = new HashSet<int>();
+
+        private static string lastScene = "";
+        private static float minKx, maxKx, floorY, maxKy;
+        private static bool menuWasOpen;
+
+        public static void Toggle()
+        {
+            Enabled = !Enabled;
+            HKRLBotMod.Instance.Log($"DISCOVERY logging {(Enabled ? "ON" : "OFF")}");
+            if (Enabled)
+            {
+                lastState.Clear();
+                seenHm.Clear();
+                lastScene = "";
+                menuWasOpen = false;
+                ResetArena();
+            }
+        }
+
+        private static void ResetArena()
+        {
+            minKx = float.PositiveInfinity;
+            maxKx = float.NegativeInfinity;
+            floorY = float.PositiveInfinity;
+            maxKy = float.NegativeInfinity;
+        }
+
+        private static string F(float v) =>
+            float.IsInfinity(v) ? "NaN" : v.ToString("F2");
+
+        public static void Tick()
+        {
+            if (!Enabled || Time.unscaledTime < nextScanTime) return;
+            nextScanTime = Time.unscaledTime + ScanPeriodSeconds;
+            var mod = HKRLBotMod.Instance;
+            string scene = GameManager.instance != null ? GameManager.instance.sceneName : "";
+            // Knight extremes are per scene: a workshop stroll must not
+            // widen the arena's measured range.
+            if (scene != lastScene) { lastScene = scene; ResetArena(); }
+
+            foreach (var hm in Object.FindObjectsOfType<HealthManager>())
+            {
+                if (seenHm.Add(hm.GetInstanceID()))
+                {
+                    int hp = Modding.ReflectionHelper.GetField<HealthManager, int>(hm, "hp");
+                    mod.Log($"DISCOVERY candidate go='{hm.gameObject.name}' hp={hp} scene={scene}");
+                }
+                var fsm = FSMUtility.LocateFSM(hm.gameObject, "Control");
+                if (fsm == null) continue;
+                int id = fsm.GetInstanceID();
+                string cur = fsm.ActiveStateName;
+                if (!lastState.TryGetValue(id, out string prev) || prev != cur)
+                {
+                    lastState[id] = cur;
+                    mod.Log($"DISCOVERY state go='{fsm.gameObject.name}' state='{cur}'");
+                }
+            }
+
+            var k = mod.Reader.ReadKnight();
+            if (k != null)
+            {
+                bool grew = false;
+                if (k.X < minKx) { minKx = k.X; grew = true; }
+                if (k.X > maxKx) { maxKx = k.X; grew = true; }
+                if (k.OnGround && k.Y < floorY) { floorY = k.Y; grew = true; }
+                if (k.Y > maxKy) { maxKy = k.Y; grew = true; }
+                if (grew)
+                    mod.Log($"DISCOVERY arena scene={scene} kxRange=[{F(minKx)}, {F(maxKx)}] "
+                        + $"floorY={F(floorY)} maxKy={F(maxKy)}");
+
+                bool menuOpen = mod.Reader.IsChallengeMenuOpen();
+                if (menuOpen && !menuWasOpen)
+                    mod.Log($"DISCOVERY statue knightX={k.X:F2} scene={scene}");
+                menuWasOpen = menuOpen;
+            }
+        }
+    }
+}
+```
+
+- [ ] **Step 2: Hook it in**
+
+`mod/EpisodeManager.cs`: first line of `LateUpdate()`, before the
+`server.Connected` check (discovery must run during pure human play, no
+trainer connected): `DiscoveryLogger.Tick();`
+
+`mod/OverlayUI.cs`: mirror the existing F3 → `FSMLogger.LogAll()` wiring with
+F4 → `DiscoveryLogger.Toggle()`, after verifying F4 is free in that file.
+
+- [ ] **Step 3: Trainer unknown-state warning (TDD)**
+
+Test first, in `trainer/tests/test_env.py`:
+
+```python
+def test_unseen_boss_state_warns_once_per_state(capfd):
+    episode = [state(obs()), state(obs(boss_state="Gruz Slam")),
+               state(obs(boss_state="Gruz Slam"))]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        env.step(0)
+        env.step(0)
+        env.close()
+    err = capfd.readouterr().err
+    assert err.count("Gruz Slam") == 1
+    assert "UNKNOWN" in err
+```
+
+Then in `HKEnv.__init__` add `self._warned_states = set()`, and in
+`_flatten`'s `except ValueError` branch:
+
+```python
+        except ValueError:
+            onehot[-1] = 1.0
+            unseen = obs["boss_state"]
+            if unseen and unseen not in self._warned_states:
+                self._warned_states.add(unseen)
+                print(f"hkrl: boss_state {unseen!r} is not in {self.boss.id}'s "
+                      f"registry list; mapped to UNKNOWN. If this repeats, it "
+                      f"is a candidate for the fsm_states list.",
+                      file=sys.stderr, flush=True)
+```
+
+- [ ] **Step 4: `trainer/scripts/parse_discovery.py` (TDD)**
+
+Tests first, `trainer/tests/test_parse_discovery.py`:
+
+```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+from parse_discovery import report, summarize
+
+SAMPLE = """\
+[INFO]:[HKRLBot] - DISCOVERY logging ON
+[INFO]:[HKRLBot] - DISCOVERY candidate go='Giant Fly' hp=660 scene=GG_Gruz_Mother
+[INFO]:[HKRLBot] - DISCOVERY state go='Giant Fly' state='Init'
+[INFO]:[HKRLBot] - DISCOVERY state go='Giant Fly' state='Fly'
+[INFO]:[HKRLBot] - DISCOVERY state go='Giant Fly' state='Charge Antic'
+[INFO]:[HKRLBot] - DISCOVERY state go='Giant Fly' state='Fly'
+[INFO]:[HKRLBot] - DISCOVERY arena scene=GG_Gruz_Mother kxRange=[10.00, 20.00] floorY=5.50 maxKy=12.50
+[INFO]:[HKRLBot] - DISCOVERY arena scene=GG_Gruz_Mother kxRange=[8.00, 30.00] floorY=5.50 maxKy=14.50
+[INFO]:[HKRLBot] - DISCOVERY statue knightX=55.30 scene=GG_Workshop
+""".splitlines()
+
+
+def test_summarize_dedupes_states_preserving_first_seen_order():
+    s = summarize(SAMPLE)
+    assert s["states"]["Giant Fly"] == ["Init", "Fly", "Charge Antic"]
+
+
+def test_summarize_tracks_peak_hp_and_last_arena_and_statue():
+    s = summarize(SAMPLE)
+    assert s["candidates"]["Giant Fly"]["hp"] == 660
+    a = s["arenas"]["GG_Gruz_Mother"]
+    assert (a["min"], a["max"], a["floor"], a["top"]) == (8.0, 30.0, 5.5, 14.5)
+    assert s["statue_xs"] == [55.3]
+
+
+def test_report_derives_registry_values():
+    out = report(summarize(SAMPLE))
+    assert "center_x=19.00" in out      # (8+30)/2
+    assert "half_w=11.00" in out        # (30-8)/2
+    assert "height=9.00" in out         # 14.5-5.5
+    assert "go='Giant Fly' peak hp=660" in out
+```
+
+Then the script:
+
+```python
+#!/usr/bin/env python3
+"""Summarize a discovery session's DISCOVERY lines into registry-ready values.
+
+The mod's DiscoveryLogger (F4 in-game) writes "DISCOVERY ..." lines to
+ModLog.txt while a human plays a fight against a boss the registries don't
+know yet. This script reduces a ModLog to what a new BossSpec /
+BossRegistry entry needs: boss GameObject candidates ranked by peak HP,
+each candidate's Control-FSM state vocabulary in first-seen order, arena
+bounds per scene from the knight's extremes, and statue-stand X readings.
+
+Usage:
+    python scripts/parse_discovery.py path/to/ModLog.txt
+"""
+import argparse
+import re
+from collections import defaultdict
+
+STATE_RE = re.compile(r"DISCOVERY state go='(?P<go>.*?)' state='(?P<state>.*?)'")
+CANDIDATE_RE = re.compile(
+    r"DISCOVERY candidate go='(?P<go>.*?)' hp=(?P<hp>\d+) scene=(?P<scene>\S*)")
+ARENA_RE = re.compile(
+    r"DISCOVERY arena scene=(?P<scene>\S*) kxRange=\[(?P<min>-?[\d.]+|NaN), "
+    r"(?P<max>-?[\d.]+|NaN)\] floorY=(?P<floor>-?[\d.]+|NaN) maxKy=(?P<top>-?[\d.]+|NaN)")
+STATUE_RE = re.compile(r"DISCOVERY statue knightX=(?P<x>-?[\d.]+) scene=(?P<scene>\S*)")
+
+
+def summarize(lines):
+    states = defaultdict(list)   # go -> distinct states, first-seen order
+    candidates = {}              # go -> {"hp": peak, "scenes": set}
+    arenas = {}                  # scene -> latest arena reading (floats)
+    statue_xs = []
+    for line in lines:
+        m = STATE_RE.search(line)
+        if m:
+            if m["state"] not in states[m["go"]]:
+                states[m["go"]].append(m["state"])
+            continue
+        m = CANDIDATE_RE.search(line)
+        if m:
+            c = candidates.setdefault(m["go"], {"hp": 0, "scenes": set()})
+            c["hp"] = max(c["hp"], int(m["hp"]))
+            c["scenes"].add(m["scene"])
+            continue
+        m = ARENA_RE.search(line)
+        if m:
+            arenas[m["scene"]] = {
+                k: (float("nan") if m[k] == "NaN" else float(m[k]))
+                for k in ("min", "max", "floor", "top")}
+            continue
+        m = STATUE_RE.search(line)
+        if m:
+            statue_xs.append(float(m["x"]))
+    return {"states": dict(states), "candidates": candidates,
+            "arenas": arenas, "statue_xs": statue_xs}
+
+
+def report(s):
+    out = ["boss candidates (by peak HP; the boss is almost always the top one):"]
+    for go, c in sorted(s["candidates"].items(), key=lambda kv: -kv[1]["hp"]):
+        out.append(f"  go='{go}' peak hp={c['hp']} scenes={sorted(c['scenes'])}")
+    out.append("")
+    out.append("Control-FSM states (first-seen order; append \"UNKNOWN\" when transcribing):")
+    for go, names in s["states"].items():
+        out.append(f"  go='{go}' ({len(names)} states):")
+        out.extend(f'    "{n}",' for n in names)
+    out.append("")
+    out.append("arena per scene (knight extremes; re-tag both walls if the range looks short):")
+    for scene, a in s["arenas"].items():
+        out.append(
+            f"  scene={scene}: center_x={(a['min'] + a['max']) / 2:.2f} "
+            f"half_w={(a['max'] - a['min']) / 2:.2f} floor_y={a['floor']:.2f} "
+            f"height={a['top'] - a['floor']:.2f} "
+            f"(raw min={a['min']:.2f} max={a['max']:.2f} top={a['top']:.2f})")
+    out.append("")
+    xs = s["statue_xs"]
+    out.append("statue knightX readings: "
+               + (", ".join(f"{x:.2f}" for x in xs) if xs else "none")
+               + "  (use the one from standing settled at the target statue)")
+    return "\n".join(out)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("modlog", help="path to ModLog.txt from a discovery session")
+    args = ap.parse_args()
+    with open(args.modlog, errors="replace") as f:
+        print(report(summarize(f)))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+- [ ] **Step 5: Verify** — full trainer suite green; `mod/build.sh` succeeds.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add mod/DiscoveryLogger.cs mod/EpisodeManager.cs mod/OverlayUI.cs trainer/hkrl/env.py trainer/scripts/parse_discovery.py trainer/tests/test_parse_discovery.py trainer/tests/test_env.py
+git commit -m "Add boss-discovery instrumentation: an F4-toggled mod logger that records boss candidates, FSM state transitions, arena extremes, and statue X to ModLog during human play, a parser that reduces those lines to registry-ready values, and a trainer warning when a live boss_state is missing from the registry list."
+```
+
+---
+
 ### Task 11: In-game discovery session for Gruz Mother (user drives)
 
 **Files:**
 - Modify: `mod/DISCOVERED.md` (new sections; follow its "How to gather these values" conventions)
 
-This task needs the real game and the user at the keyboard. Produce a new DISCOVERED.md section per item, each with the measured value and how it was measured. **A temporary `--boss gruz_mother` cannot run yet** (the registries have no entry), so measurements come from a normal human-played session with the mod's F1 overlay and ModLog, standing at / fighting the Gruz Mother statue in the Hall of Gods:
+This task needs the real game and the user at the keyboard, with Task 10b's
+DiscoveryLogger built into the installed mod. **A temporary `--boss
+gruz_mother` cannot run yet** (the registries have no entry); the session is
+normal human play:
 
-- [ ] **Step 1: Statue-stand X** — stand at the Gruz Mother statue in `GG_Workshop`, read Knight X off the F1 overlay. Record like section 3 did for Hornet (62.21).
-- [ ] **Step 2: Arena scene name and bounds** — enter the Attuned fight; ModLog's scene-change line names the arena scene (expected `GG_Gruz_Mother` — record what's actually logged). Walk to the left wall, right wall, and note floor Y and usable ceiling off the F1 overlay, then derive center/half-width/height the way section 2 does.
-- [ ] **Step 3: Boss GameObject name** — needed for `ObjectName`. Add a temporary ModLog line (or use the FSMLogger's object naming) that logs the root GameObject name of the scene's `HealthManager` owner during the fight; record the exact string.
-- [ ] **Step 4: FSM state names** — with the FSMLogger active, play several full fights (win at least one, lose at least one) and collect the distinct state names of the boss's `Control` FSM. Record the list; it plus `UNKNOWN` becomes `fsm_states`.
-- [ ] **Step 5: Attuned max HP + ceiling** — record `bossMaxHp` from the fight logs across the fights; pick a ceiling safely above the stable Attuned value and below the next tier's (fight one Ascended round to read its value, mirroring how Hornet's 1000 was chosen between 900 and 1186/1250).
-- [ ] **Step 6: Tier gate + win detection sanity** — confirm the statue's challenge menu has the same three-tier layout (Attuned = tier index 0), and note anything odd about the death sequence (Gruz bursts into baby gruzzers; the `On.HealthManager.Die` hook should fire on the fatal blow regardless — this is fully verified in Task 13's smoke).
+- [ ] **Step 1: Enable discovery logging** — launch the game (mod on), press F4; ModLog shows `DISCOVERY logging ON`.
+- [ ] **Step 2: Play the fights** — challenge Gruz Mother at her statue on Attuned and play several full fights: win at least one, lose at least one, and once mid-fight walk to touch the left wall, the right wall, and jump near the ceiling (this tags the arena extremes). The statue X logs itself when the challenge menu opens; the scene name, boss candidates, HP, and FSM transitions log themselves during the fights.
+- [ ] **Step 3: One Ascended reading** — open the statue menu once on Ascended and let the fight start (then die/leave); its `candidate ... hp=` line gives the next tier's HP so the Attuned ceiling can be chosen between the two, mirroring Hornet's 1000 between 900 and 1186/1250.
+- [ ] **Step 4: Parse** — run `python scripts/parse_discovery.py <ModLog path>`; it prints boss candidates by peak HP, the FSM state list in first-seen order, derived arena center/half-width/floor/height, and the statue X readings.
+- [ ] **Step 5: Record** — copy the parsed values into new DISCOVERED.md sections (statue X, arena, GameObject name, states, HP + chosen ceiling), noting each came from a DiscoveryLogger session and the date.
+- [ ] **Step 6: Sanity notes** — confirm the statue menu is the usual three-tier layout (Attuned = tier index 0), and note anything odd about the death sequence (Gruz bursts into baby gruzzers; the `On.HealthManager.Die` hook should fire on the fatal blow regardless — fully verified in Task 13's smoke).
 - [ ] **Step 7: Commit**
 
 ```bash
