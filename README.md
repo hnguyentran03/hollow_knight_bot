@@ -17,7 +17,7 @@ The project has two halves:
 └────────────────────────┘   {"type":"state","obs":{...},...}    └───────────────────────────┘
 ```
 
-One decision every 67&nbsp;ms (15&nbsp;Hz). The agent picks one of **21 discrete moves** (walk, jump, slash, dash, pogo, spells via Quick Cast, Focus — including directional combinations); buttons stay held across consecutive steps that repeat them, so jump height, healing, and nail-art charging are emergent. Observations are 46 floats (18 normalized scalars + a 28-way one-hot of Hornet's FSM state); the policy is a recurrent LSTM, so it carries its own memory instead of frame stacking. Reward is dominated by boss damage dealt (+0.03/HP), hits taken (−1/mask), win (+10), death (−5), and a small per-step time penalty.
+One decision every 67&nbsp;ms (15&nbsp;Hz). The agent picks one of **21 discrete moves** (walk, jump, slash, dash, pogo, spells via Quick Cast, Focus — including directional combinations); buttons stay held across consecutive steps that repeat them, so jump height, healing, and nail-art charging are emergent. Observations are 18 normalized scalars plus a one-hot of the boss's FSM state, sized per boss (46 floats against Hornet&nbsp;1, 36 against Gruz Mother); the policy is a recurrent LSTM, so it carries its own memory instead of frame stacking. Reward is dominated by boss damage dealt (+0.03/HP), hits taken (−1/mask), win (+10), death (−5), and a small per-step time penalty.
 
 Training is fault-tolerant end to end: the trainer launches and owns the game process, reconnects through the mod's normal reset-budget drops, and if the game wedges or crashes it relaunches it and keeps training. Checkpoints ("generations") are saved every 15k steps, so a crash or Ctrl-C never loses more than ~17 minutes.
 
@@ -175,9 +175,11 @@ What to know before trying it:
 
 `train.py` launches the game itself — don't start one manually. When prompted, wait for the game to reach the Hall of Gods (the boot macro can drive it there; a few `reset ... reconnecting` retries on stderr are normal) and press Enter. 500k steps is roughly an overnight run (~54k steps/hour at 15&nbsp;Hz).
 
-Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (PPO rollout/update shape), `--target-kl` (early-stop an update's remaining epochs once approx KL exceeds ~1.5× this; off by default — try 0.05 if a long run peaks then slides), `--boss` (which boss to train against, default `hornet1`; picks from the registry in `hkrl/bosses.py`, which grows over time — `gruz_mother` is next in line), `--seed`, `--root` (default `~/hkrl`).
+Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (PPO rollout/update shape), `--target-kl` (early-stop an update's remaining epochs once approx KL exceeds ~1.5× this; off by default — try 0.05 if a long run peaks then slides), `--boss` (which boss to train against, default `hornet1`; picks from the registry in `hkrl/bosses.py` — currently `hornet1` and `gruz_mother`, both trained to a winning policy), `--seed`, `--root` (default `~/hkrl`).
 
 A boss sets the observation space, so checkpoints are boss-specific — a resume always keeps the run's recorded boss (read from `config.jsonl`, even for runs from before `--boss` existed, which default to `hornet1`) and refuses a conflicting `--boss` flag up front, rather than failing on a shape mismatch deep inside model load.
+
+Adding a boss is a measurement job, not a coding one: press F4 in a normal (human-played) game session and the mod's discovery logger records boss candidates with HP, every FSM's state transitions, the knight's arena extremes, and the statue-stand X to ModLog while you fight the new boss a few times; `scripts/parse_discovery.py <ModLog path>` then reduces that to registry-ready values, which get transcribed into `hkrl/bosses.py` (trainer side) and `mod/BossRegistry.cs` (mod side) following `mod/DISCOVERED.md`. Gruz Mother went through exactly this pipeline and trained to a sustained 100% win rate inside a single 500k-step run (~90% by 120k steps, a solid 1.0 from ~250k on).
 
 ### Monitor progress
 
