@@ -25,6 +25,8 @@ ARENA_RE = re.compile(
     r"DISCOVERY arena scene=(?P<scene>\S*) kxRange=\[(?P<min>-?[\d.]+|NaN), "
     r"(?P<max>-?[\d.]+|NaN)\] floorY=(?P<floor>-?[\d.]+|NaN) maxKy=(?P<top>-?[\d.]+|NaN)")
 STATUE_RE = re.compile(r"DISCOVERY statue knightX=(?P<x>-?[\d.]+) scene=(?P<scene>\S*)")
+PROJECTILE_RE = re.compile(
+    r"DISCOVERY projectile go='(?P<go>.*?)' id=(?P<id>-?\d+) scene=(?P<scene>\S*)")
 
 
 def summarize(lines):
@@ -33,6 +35,7 @@ def summarize(lines):
                                  # each difficulty tier is its own scene and
                                  # the tier HPs must not blur together
     arenas = {}                  # scene -> latest arena reading (floats)
+    projectiles = defaultdict(set)  # (go, scene) -> set of instance ids
     statue_xs = []
     for line in lines:
         m = STATE_RE.search(line)
@@ -51,11 +54,15 @@ def summarize(lines):
                 k: (float("nan") if m[k] == "NaN" else float(m[k]))
                 for k in ("min", "max", "floor", "top")}
             continue
+        m = PROJECTILE_RE.search(line)
+        if m:
+            projectiles[m["go"], m["scene"]].add(int(m["id"]))
+            continue
         m = STATUE_RE.search(line)
         if m:
             statue_xs.append(float(m["x"]))
     return {"states": dict(states), "candidates": candidates,
-            "arenas": arenas, "statue_xs": statue_xs}
+            "arenas": arenas, "projectiles": dict(projectiles), "statue_xs": statue_xs}
 
 
 def report(s):
@@ -82,6 +89,15 @@ def report(s):
     out.append("statue knightX readings: "
                + (", ".join(f"{x:.2f}" for x in xs) if xs else "none")
                + "  (use the one from standing settled at the target statue)")
+    out.append("")
+    out.append("projectile candidates (DamageHero objects owned by no enemy; NeedleName"
+               " wants a persistent single-instance object -- many ids means per-shot"
+               " clones, use null instead):")
+    if s["projectiles"]:
+        for (go, scene), ids in sorted(s["projectiles"].items()):
+            out.append(f"  go='{go}' scene={scene} instances={len(ids)}")
+    else:
+        out.append("  none")
     return "\n".join(out)
 
 

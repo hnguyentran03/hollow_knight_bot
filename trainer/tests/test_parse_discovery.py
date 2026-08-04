@@ -15,6 +15,9 @@ SAMPLE = """\
 [INFO]:[HKRLBot] - DISCOVERY state go='Giant Fly' fsm='Mega Fly' state='Fly'
 [INFO]:[HKRLBot] - DISCOVERY arena scene=GG_Gruz_Mother kxRange=[10.00, 20.00] floorY=5.50 maxKy=12.50
 [INFO]:[HKRLBot] - DISCOVERY arena scene=GG_Gruz_Mother kxRange=[8.00, 30.00] floorY=5.50 maxKy=14.50
+[INFO]:[HKRLBot] - DISCOVERY projectile go='Needle' id=1234 scene=GG_Hornet_1
+[INFO]:[HKRLBot] - DISCOVERY projectile go='Shot Gruz' id=-500 scene=GG_Gruz_Mother
+[INFO]:[HKRLBot] - DISCOVERY projectile go='Shot Gruz' id=-501 scene=GG_Gruz_Mother
 [INFO]:[HKRLBot] - DISCOVERY statue knightX=55.30 scene=GG_Workshop
 """.splitlines()
 
@@ -39,3 +42,15 @@ def test_report_derives_registry_values():
     assert "half_w=11.00" in out        # (30-8)/2
     assert "height=9.00" in out         # 14.5-5.5
     assert "go='Giant Fly' scene=GG_Gruz_Mother peak hp=660" in out
+
+
+def test_summarize_collects_projectile_instance_ids_per_name_and_scene():
+    s = summarize(SAMPLE)
+    assert s["projectiles"]["Needle", "GG_Hornet_1"] == {1234}
+    assert s["projectiles"]["Shot Gruz", "GG_Gruz_Mother"] == {-500, -501}
+
+
+def test_report_lists_projectile_candidates_with_instance_counts():
+    out = report(summarize(SAMPLE))
+    assert "go='Needle' scene=GG_Hornet_1 instances=1" in out
+    assert "go='Shot Gruz' scene=GG_Gruz_Mother instances=2" in out
