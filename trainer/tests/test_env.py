@@ -103,6 +103,20 @@ def test_unknown_boss_state_maps_to_fallback_slot():
         env.close()
 
 
+def test_unseen_boss_state_warns_once_per_state(capfd):
+    episode = [state(obs()), state(obs(boss_state="Gruz Slam")),
+               state(obs(boss_state="Gruz Slam"))]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        env.step(0)
+        env.step(0)
+        env.close()
+    err = capfd.readouterr().err
+    assert err.count("Gruz Slam") == 1
+    assert "UNKNOWN" in err
+
+
 def test_truncation_at_max_steps():
     # Episode that never ends (no done=True), but we truncate at max_steps.
     # This guards against the bug where truncated timeout is incorrectly
@@ -291,4 +305,45 @@ def test_abort_during_the_reconnect_window_still_aborts_promptly(monkeypatch):
         with pytest.raises(ConnectionClosed):
             env.reset()
         assert time.monotonic() - started < 2.0
+        env.close()
+
+
+def test_env_rejects_an_unknown_boss_before_connecting():
+    # No FakeGame: the registry lookup must fail before any socket work.
+    with pytest.raises(ValueError, match="hornet1"):
+        HKEnv(port=1, boss="grimm")
+
+
+def test_obs_size_is_scalar_block_plus_boss_state_onehot():
+    from hkrl.bosses import get_boss
+    from hkrl.env import OBS_KEYS
+    episode = [state(obs())]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)   # default boss: hornet1
+        n = len(OBS_KEYS) + len(get_boss("hornet1").fsm_states)
+        assert env.observation_space.shape == (n,)
+        env.close()
+
+
+def test_reset_sends_the_boss_id():
+    with FakeGame([[state(obs())]]) as fg:
+        env = HKEnv(port=fg.port)
+        env.reset()
+        assert fg.reset_bosses == ["hornet1"]
+        env.close()
+
+
+def test_old_mod_version_is_refused_at_connect():
+    with FakeGame([[state(obs())]], version=1) as fg:
+        with pytest.raises(RuntimeError, match="protocol"):
+            HKEnv(port=fg.port)
+
+
+def test_mod_error_reply_fails_the_reset_loudly():
+    # A mod that doesn't know the requested boss answers with an error
+    # instead of a state; that must raise, not retry or hang.
+    with FakeGame([[state(obs())]], bosses=("gruz_mother",)) as fg:
+        env = HKEnv(port=fg.port)
+        with pytest.raises(RuntimeError, match="hornet1"):
+            env.reset()
         env.close()

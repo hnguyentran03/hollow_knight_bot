@@ -192,6 +192,7 @@ def scan_runs(root, now: float | None = None) -> list[dict]:
             # The summon page's run rows state a run's shape without a
             # second fetch; None where an older config predates the field.
             "instances": config.get("instances"),
+            "boss": config.get("boss"),
             "target_timestep": run["status"]["target_timestep"],
             "mean_boss_damage": latest.get("mean_boss_damage"),
             "win_rate": latest.get("win_rate"),

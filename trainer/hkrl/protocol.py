@@ -1,8 +1,15 @@
-"""Line-delimited JSON protocol to the HKRLBot mod (protocol v1)."""
+"""Line-delimited JSON protocol to the HKRLBot mod (protocol v2)."""
 import json
 import socket
 import threading
 import time
+
+# The version the mod must greet with ({"type": "hello", "version": N}).
+# Bumped 1 -> 2 when the reset request gained a required "boss" id: a v1 mod
+# would ignore the field and silently fight Hornet while the trainer builds
+# a different boss's observation space -- exactly the mismatch a version
+# check exists to catch. The consumer-side check lives in HKEnv.__init__.
+PROTOCOL_VERSION = 2
 
 
 class ConnectionClosed(Exception):

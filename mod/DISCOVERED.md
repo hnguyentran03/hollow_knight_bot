@@ -324,3 +324,51 @@ it becomes (it is the one branch that itself presses Up to open the menu).
 now reset whenever `IsChallengeMenuOpen()` reads false on ANY `GG_Workshop`
 tick (previously only checked inside the `statue-menu` branch), matching
 their existing "zeroed every tick the menu is not open" contract.
+
+## 6. Gruz Mother FSM state names
+
+Recorded 2026-08-03 with the F4 `DiscoveryLogger` across two sessions (the
+first session captured no states — the logger watched only an FSM named
+`Control`, Hornet's name; fixed to log every FSM on a HealthManager owner,
+tagged with the FSM name). Boss GameObject: `Giant Fly`. Main FSM:
+**`Big Fly Control`**, 16 distinct states in first-seen order over full
+Attuned fights:
+
+```
+Wake, GG Extra Pause, Buzz, Charge Antic, Charge, Charge Recover D,
+Super End, Slam Antic, Flying, Slam Up, Slam Down, Launch Down, Slam End,
+Charge Recover U, Charge Recover L, Launch Up
+```
+
+A secondary `bouncer_control` FSM on the same object (`Stopped`, `Fly 2`)
+is movement plumbing and is not transcribed. Because the main FSM's name is
+boss-specific, `BossRegistry.BossSpec` gained an `FsmName` field and
+`StateReader` locates the boss FSM through it.
+
+## 7. Gruz Mother arena, statue, and HP
+
+Same 2026-08-03 sessions, via the DiscoveryLogger's knight-extreme and
+statue lines (walls tagged, ceiling jumped mid-fight):
+
+```
+Scene (Attuned):         GG_Gruz_Mother   (Ascended: GG_Gruz_Mother_V)
+Knight X at left wall:   86.27
+Knight X at right wall:  102.73
+Floor Y:                 15.40
+Knight Y at arena top:   24.66
+Arena center X    = (86.27 + 102.73) / 2 = 94.50
+Arena half-width  = (102.73 - 86.27) / 2 = 8.23
+Arena height      = 24.66 - 15.40        = 9.26
+Knight X at Gruz statue in GG_Workshop: 28.0 (settled readings 27.96-28.08)
+Max HP: 650 Attuned, 945 Ascended -> mod ceiling MaxAttunedHp = 700
+```
+
+`LoadBoss(0)` was not separately re-verified at the Gruz statue; the 700
+HP ceiling (backstop B) catches a wrong tier during the smoke run, and the
+Die-hook win report through the burst-into-gruzzers death sequence is also
+verified there.
+
+**Addendum (2026-08-03 smoke):** the trainer's unseen-state warning surfaced
+`Charge Recover R` during the first live gruz run -- the discovery fights
+never saw a right-wall charge recovery. Added to the `gruz_mother`
+`fsm_states` (17 recorded states + UNKNOWN).

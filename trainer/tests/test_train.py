@@ -478,3 +478,36 @@ def test_supervisor_recovery_composes_with_async_resets(tmp_path):
     # placeholders forever.
     assert gens[-1]["episodes"] >= 1
     assert gens[-1]["win_rate"] > 0.0
+
+
+def test_resolve_boss_fresh_run_defaults_to_hornet1():
+    assert train.resolve_boss(None, None) == "hornet1"
+    assert train.resolve_boss("gruz_mother", None) == "gruz_mother"
+
+
+def test_resolve_boss_resume_reads_the_recorded_boss(tmp_path):
+    (tmp_path / "config.jsonl").write_text(
+        json.dumps({"boss": "gruz_mother"}) + "\n")
+    assert train.resolve_boss(None, tmp_path) == "gruz_mother"
+
+
+def test_resolve_boss_resume_without_a_recorded_boss_is_hornet1(tmp_path):
+    # Runs from before the boss field existed.
+    (tmp_path / "config.jsonl").write_text(json.dumps({"instances": 1}) + "\n")
+    assert train.resolve_boss(None, tmp_path) == "hornet1"
+
+
+def test_resolve_boss_refuses_a_conflicting_flag_on_resume(tmp_path):
+    (tmp_path / "config.jsonl").write_text(
+        json.dumps({"boss": "hornet1"}) + "\n")
+    with pytest.raises(ValueError, match="gruz_mother"):
+        train.resolve_boss("gruz_mother", tmp_path)
+
+
+def test_resolve_boss_rejects_a_recorded_boss_this_registry_lacks(tmp_path):
+    # A run recorded against a boss this build doesn't know must fail at
+    # the guard, not deep in worker env construction.
+    (tmp_path / "config.jsonl").write_text(
+        json.dumps({"boss": "no_such_boss"}) + "\n")
+    with pytest.raises(ValueError, match="no_such_boss"):
+        train.resolve_boss(None, tmp_path)

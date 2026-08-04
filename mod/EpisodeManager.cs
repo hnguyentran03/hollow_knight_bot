@@ -15,7 +15,7 @@ namespace HKRLBot
         // max_steps=2700 (env.py) is a ~3-minute episode timeout against this
         // rate; changing it changes that timeout's real-world length.
         private const float ActionHoldSeconds = FrameSkip / 60f;
-        private const string BossScene = "GG_Hornet_1";
+        private static string BossScene => BossRegistry.Current.Scene;
 
         // Decision-cycle state machine for an active episode. See the note
         // above LateUpdate on why the cycle is split into two phases instead
@@ -91,14 +91,6 @@ namespace HKRLBot
         // gate), which is what actually needed fixing here.
         private const float ResetMacroBudgetSeconds = 22.5f; // must stay below the 30s trainer socket timeout (trainer/hkrl/env.py)
 
-        // Attuned Hornet 1's max HP is 900 (704/704 Attuned bossMaxHp readings
-        // in the archived ModLogs); wrong-tier readings seen were 1250
-        // (Ascended) and 1186. A fight that goes live above this ceiling is a
-        // wrong-tier fight the statue tier gate (GateConfirm) should have
-        // prevented; 1000 sits safely above the stable 900 and below both
-        // higher tiers. Last resort only -- see the note at its use site.
-        private const int MaxAttunedHornetHp = 1000;
-
         private string Scene => GameManager.instance != null
             ? GameManager.instance.sceneName : "";
 
@@ -151,6 +143,11 @@ namespace HKRLBot
         // Also folds in the boss-latch handling documented above ComputeWon.
         private void LateUpdate()
         {
+            // Runs before the server.Connected early-return below on purpose:
+            // discovery must keep working during pure human play with no
+            // trainer connected at all. See DiscoveryLogger's own comment.
+            DiscoveryLogger.Tick();
+
             var server = HKRLBotMod.Instance.Server;
             if (!server.Connected)
             {
@@ -197,6 +194,7 @@ namespace HKRLBot
                 if (TryAnswerPing(server, msg)) return;
                 if ((string)msg["type"] == "reset")
                 {
+                    if (!TrySetBossFromReset(server, msg)) return;
                     awaitingReset = true;
                     sawNotLiveSinceReset = false;      // require a fresh not-live observation before the next reset is accepted
                     sawSceneReentrySinceReset = false; // require a fresh BossScene entry before the next reset is accepted
@@ -244,6 +242,12 @@ namespace HKRLBot
                         holdEndTime = Time.unscaledTime + ActionHoldSeconds;
                         break;
                     case "reset":
+                        if (!TrySetBossFromReset(server, reply))
+                        {
+                            episodeActive = false;
+                            HKRLBotMod.Instance.Input.Clear();
+                            break;
+                        }
                         episodeActive = false;
                         awaitingReset = true;
                         sawNotLiveSinceReset = false;      // require a fresh not-live observation before the next reset is accepted
@@ -415,6 +419,24 @@ namespace HKRLBot
 
         // ---- reset handling ----
 
+        // Protocol v2: every reset names its boss. An unknown id is a
+        // registry-skew bug (trainer knows a boss this build doesn't) --
+        // refuse with an error the trainer raises on, rather than silently
+        // fighting whatever Current already was. Returns false when refused.
+        private bool TrySetBossFromReset(BridgeServer server, JObject msg)
+        {
+            string id = (string)msg["boss"];
+            if (BossRegistry.TrySet(id)) return true;
+            HKRLBotMod.Instance.Log(
+                $"EpisodeManager: reset named unknown boss '{id}' -- refusing "
+                + "and dropping the connection (rebuild skew between trainer "
+                + "and mod registries?)");
+            server.SendError($"unknown boss '{id}'; this mod build knows: "
+                + string.Join(", ", BossRegistry.All.Keys));
+            server.Drop();
+            return false;
+        }
+
         // nextMacroTickTime throttles ResetMacro.Tick() to ~20 ticks/sec on the
         // wall clock, so the macro's pulse cadence and diagnostic logging hold
         // their real-world rate no matter how fast the game renders. Calls
@@ -497,11 +519,12 @@ namespace HKRLBot
                 // exhaust and the run ends in InstanceDown. Fail-loud by design
                 // -- a dead run, never hours against the wrong boss. With the
                 // statue tier gate in place this should essentially never fire.
-                if (b.Hp > MaxAttunedHornetHp)
+                if (b.Hp > BossRegistry.Current.MaxAttunedHp)
                 {
                     HKRLBotMod.Instance.Log(
                         $"EpisodeManager: fight went live at bossMaxHp={b.Hp}, above the "
-                        + $"Attuned Hornet ceiling ({MaxAttunedHornetHp}) -- wrong difficulty "
+                        + $"Attuned ceiling for boss '{BossRegistry.Current.Id}' "
+                        + $"({BossRegistry.Current.MaxAttunedHp}) -- wrong difficulty "
                         + "tier. Clearing input and dropping the connection.");
                     HKRLBotMod.Instance.Input.Clear();
                     server.Drop();
@@ -791,17 +814,10 @@ namespace HKRLBot
             blindConfirmFallbackLogged = false;
         }
 
-        // From mod/DISCOVERED.md section 3 ("Statue-stand X in GG_Workshop"),
-        // recorded from a live play session with the F1 overlay on 2026-07-18:
-        // "Knight X at Hornet statue in GG_Workshop: 62.21". This is a measured
-        // value, not an estimate -- do not change it without re-measuring in
-        // game (DISCOVERED.md's own warning: a wrong-but-plausible number here
-        // silently corrupts the reset macro with no visible error). If the game
-        // build or arena layout ever changes, re-verify against the overlay
-        // before trusting this again.
-        private const float StatueX = 62.21f;
+        // Measured per-boss; see the warning on BossSpec.StatueX (BossRegistry.cs).
+        private static float StatueX => BossRegistry.Current.StatueX;
 
-        // Retry-prompt confirm pulse (GG_Hornet_1, dead): hold Jump for
+        // Retry-prompt confirm pulse (the boss arena scene, dead): hold Jump for
         // RetryPulseSeconds out of every RetryPulsePeriodSeconds.
         private const float RetryPulseSeconds = 0.2f;
         private const float RetryPulsePeriodSeconds = 2.0f;
@@ -875,10 +891,12 @@ namespace HKRLBot
             bool wantConfirmPulse = (elapsed % StatueMenuPeriodSeconds) < ConfirmPulseSeconds;
             int tier = mod.Reader.ReadSelectedChallengeTier();
 
-            if (tier == 0)
+            if (tier == BossRegistry.Current.TierIndex)
             {
                 // Attuned selected: let the confirm pulse fire. Silent
-                // healthy path, unchanged.
+                // healthy path. (SelectAttunedChallengeTier still assumes
+                // the first tier button; revisit both together if a boss
+                // ever has a non-zero Attuned index.)
                 return wantConfirmPulse;
             }
 
@@ -960,7 +978,7 @@ namespace HKRLBot
 
             // The latch only ever means anything inside GG_Workshop; clear it
             // whenever the scene isn't Workshop so a later re-entry (e.g. a
-            // fresh reset that lands back in GG_Hornet_1 first) starts the
+            // fresh reset that lands back in the boss arena scene first) starts the
             // walk-then-menu sequence over rather than resuming mid-confirm
             // against a menu that no longer exists.
             if (scene != "GG_Workshop")
@@ -984,7 +1002,7 @@ namespace HKRLBot
                 workshopEnteredAt = elapsed;
             }
 
-            if (scene == "GG_Hornet_1")
+            if (scene == BossRegistry.Current.Scene)
             {
                 // Dead in the boss scene: pulse confirm (jump button) at the retry prompt.
                 branch = "dead-retry-pulse";
@@ -1072,7 +1090,7 @@ namespace HKRLBot
                         // stalled, release the walk -- holding a direction could
                         // navigate an open difficulty menu off Attuned -- and
                         // pulse menuSubmit (bound to Jump) instead. An open menu
-                        // then starts the fight (loading GG_Hornet_1, which ends
+                        // then starts the fight (loading the boss arena scene, which ends
                         // this branch); a genuinely free knight never stalls and
                         // keeps walking. No Up in the recovery: the menu is
                         // already open, and a second Up would move the selection.

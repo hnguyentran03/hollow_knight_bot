@@ -1,3 +1,4 @@
+import json
 import pathlib
 import sys
 
@@ -46,7 +47,8 @@ def test_replay_reports_per_episode_stats(tmp_path, capsys):
     weights, vecnorm = _make_checkpoint(tmp_path)
     # One extra scripted episode: DummyVecEnv autoresets on the final terminal step, eagerly consuming one more reset() before replay()'s loop exits.
     with FakeGame([_scripted(win=True), _scripted(win=False), _scripted(win=False)]) as fg:
-        model, env = replay.load_policy(weights, vecnorm, port=fg.port)
+        model, env = replay.load_policy(weights, vecnorm, port=fg.port,
+                                        run_dir=tmp_path)
         try:
             summaries = replay.replay(model, env, episodes=2)
         finally:
@@ -96,7 +98,8 @@ def test_replay_stops_at_the_episode_boundary_when_flagged(tmp_path):
     stop = threading.Event()
     stop.set()
     with FakeGame([_scripted(win=True), _scripted(win=False)]) as fg:
-        model, env = replay.load_policy(weights, vecnorm, port=fg.port)
+        model, env = replay.load_policy(weights, vecnorm, port=fg.port,
+                                        run_dir=tmp_path)
         try:
             summaries = replay.replay(model, env, episodes=5, stop=stop)
         finally:
@@ -112,9 +115,17 @@ def test_deterministic_replay_reproduces_itself(tmp_path):
     for _ in range(2):
         # One extra scripted episode: DummyVecEnv autoresets on the final terminal step, eagerly consuming one more reset() before replay()'s loop exits.
         with FakeGame([_scripted(win=False), _scripted(win=False)]) as fg:
-            model, env = replay.load_policy(weights, vecnorm, port=fg.port)
+            model, env = replay.load_policy(weights, vecnorm, port=fg.port,
+                                            run_dir=tmp_path)
             try:
                 results.append(replay.replay(model, env, episodes=1))
             finally:
                 env.close()
     assert results[0] == results[1]
+
+
+def test_run_boss_reads_config_and_defaults_to_hornet1(tmp_path):
+    assert replay.run_boss(tmp_path) == "hornet1"          # no config at all
+    (tmp_path / "config.jsonl").write_text(
+        json.dumps({"boss": "gruz_mother"}) + "\n")
+    assert replay.run_boss(tmp_path) == "gruz_mother"

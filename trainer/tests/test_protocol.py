@@ -27,7 +27,7 @@ def _serve(handler):
 def test_connect_reads_hello_and_roundtrips():
     def handler(conn):
         f = conn.makefile("rwb")
-        f.write(b'{"type": "hello", "version": 1}\n')
+        f.write(b'{"type": "hello", "version": 2}\n')
         f.flush()
         line = f.readline()
         msg = json.loads(line)
@@ -38,7 +38,7 @@ def test_connect_reads_hello_and_roundtrips():
     port = _serve(handler)
     c = Connection(port=port, timeout=5.0)
     c.connect()
-    assert c.hello == {"type": "hello", "version": 1}
+    assert c.hello == {"type": "hello", "version": 2}
     c.send({"type": "reset"})
     assert c.recv() == {"type": "state", "done": False}
     c.close()
@@ -47,7 +47,7 @@ def test_connect_reads_hello_and_roundtrips():
 def test_recv_raises_on_eof():
     def handler(conn):
         f = conn.makefile("wb")
-        f.write(b'{"type": "hello", "version": 1}\n')
+        f.write(b'{"type": "hello", "version": 2}\n')
         f.flush()
 
     port = _serve(handler)

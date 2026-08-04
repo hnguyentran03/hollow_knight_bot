@@ -31,6 +31,7 @@ from stable_baselines3.common.vec_env import (  # noqa: E402
 
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import checkpoint_paths, latest_checkpoint  # noqa: E402
+from hkrl.rundata import read_jsonl  # noqa: E402
 from hkrl.vec import make_env  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -40,7 +41,17 @@ from launch_instances import (  # noqa: E402
 )
 
 
-def load_policy(weights: Path, vecnorm: Path, port: int, host: str = "127.0.0.1"):
+def run_boss(run_dir) -> str:
+    """The boss the run trained against, from its recorded config; runs
+    from before the boss field read as hornet1. The checkpoint's
+    observation space was built for this boss, so the replay env must be
+    too."""
+    configs = read_jsonl(Path(run_dir) / "config.jsonl")
+    return ((configs[-1].get("boss") if configs else None) or "hornet1")
+
+
+def load_policy(weights: Path, vecnorm: Path, port: int, run_dir: Path,
+                 host: str = "127.0.0.1"):
     """The training pipeline minus training: one env, normalized.
 
     Mirrors scripts/train.py's build_env exactly (SupervisedVecEnv there,
@@ -51,7 +62,7 @@ def load_policy(weights: Path, vecnorm: Path, port: int, host: str = "127.0.0.1"
     DummyVecEnv rather than Subproc: with a single env there are no parallel
     socket waits to overlap, so a subprocess would add IPC for nothing.
     """
-    venv = DummyVecEnv([make_env(port, host=host)])
+    venv = DummyVecEnv([make_env(port, host=host, boss=run_boss(run_dir))])
     env = VecNormalize.load(str(vecnorm), venv)
     env.training = False     # statistics are a checkpoint artifact, frozen here
     env.norm_reward = False  # report the env's real rewards, not scaled ones
@@ -145,10 +156,12 @@ def _print_summary(summaries) -> None:
           f"{damage * 100:.1f}%", flush=True)
 
 
-def run_connected(weights, vecnorm, *, host, port, episodes, deterministic):
+def run_connected(weights, vecnorm, *, run_dir, host, port, episodes,
+                   deterministic):
     """Replay against a game already running on --port (the default mode --
     behavior unchanged)."""
-    model, env = load_policy(weights, vecnorm, port=port, host=host)
+    model, env = load_policy(weights, vecnorm, port=port, run_dir=run_dir,
+                             host=host)
     try:
         return replay(model, env, episodes=episodes,
                       deterministic=deterministic)
@@ -156,7 +169,8 @@ def run_connected(weights, vecnorm, *, host, port, episodes, deterministic):
         env.close()
 
 
-def run_auto(weights, vecnorm, *, root, app, port, episodes, deterministic):
+def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
+             deterministic):
     """Self-contained replay: launch one game, replay against it, shut it
     down. Mirrors train.py's game handling so the dashboard can drive a
     replay exactly as it drives a run.
@@ -205,7 +219,7 @@ def run_auto(weights, vecnorm, *, root, app, port, episodes, deterministic):
         # After start() so a Ctrl-C during the cold boot still unwinds
         # through the finally's game.stop() rather than this handler.
         signal.signal(signal.SIGINT, request_stop)
-        model, env = load_policy(weights, vecnorm, port=port)
+        model, env = load_policy(weights, vecnorm, port=port, run_dir=run_dir)
         return replay(model, env, episodes=episodes,
                       deterministic=deterministic, stop=stop)
     finally:
@@ -227,12 +241,13 @@ def main() -> None:
 
     if args.auto:
         summaries = run_auto(
-            weights, vecnorm, root=args.root.expanduser(), app=DEFAULT_APP,
+            weights, vecnorm, run_dir=run_dir,
+            root=args.root.expanduser(), app=DEFAULT_APP,
             port=args.port, episodes=args.episodes,
             deterministic=not args.stochastic)
     else:
         summaries = run_connected(
-            weights, vecnorm, host=args.host, port=args.port,
+            weights, vecnorm, run_dir=run_dir, host=args.host, port=args.port,
             episodes=args.episodes, deterministic=not args.stochastic)
     _print_summary(summaries)
 

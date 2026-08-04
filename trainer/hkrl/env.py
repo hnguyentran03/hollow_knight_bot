@@ -1,4 +1,4 @@
-"""Gymnasium environment over the HKRLBot mod protocol (v1)."""
+"""Gymnasium environment over the HKRLBot mod protocol (v2)."""
 import sys
 import threading
 import time
@@ -7,42 +7,10 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from hkrl.protocol import Connection, ConnectionClosed
+from hkrl.bosses import get_boss
+from hkrl.protocol import Connection, ConnectionClosed, PROTOCOL_VERSION
 from hkrl.reset_metrics import append_reset_span, reset_log_path
 
-# Hornet 1 FSM states, recorded from live play in Hall of Gods (Hornet 1,
-# Attuned), Godhome. See mod/DISCOVERED.md section 1 ("Hornet FSM state
-# names") for the source measurement. Unknown/unseen states map to the
-# trailing "UNKNOWN" fallback slot.
-HORNET_STATES = [
-    "Flourish", "Run", "A Dash", "Hard Land", "Idle", "Throw Antic",
-    "Thrown", "Throw Recover", "In Air", "ADash Antic", "Run Antic",
-    "G Dash Antic", "G Dash", "Jump Antic", "Land", "GDash Recover1",
-    "GDash Recover2", "Evade", "Evade Antic", "Evade Land", "Wall L",
-    "Sphere A", "Sphere Antic A", "Sphere Recover A", "Wall R",
-    "Stun Air", "Stun Land",
-    "UNKNOWN",
-]
-
-# Normalization constants. Recorded from live play in Hall of Gods (Hornet 1
-# arena), see mod/DISCOVERED.md section 2 ("Arena bounds").
-#   Knight X at left wall:  15.27
-#   Knight X at right wall: 37.73
-#   Floor Y:                28.41
-#   Arena center X = (15.27 + 37.73) / 2 = 26.5
-#   Arena half-width X = (37.73 - 15.27) / 2 = 11.23
-ARENA_CENTER_X = 26.5
-ARENA_HALF_W = 11.23
-FLOOR_Y = 28.41
-# Vertical scale for all vertical position terms: the arena's full height above
-# the floor (top - floor = 38 - 28.41), measured off the F1 overlay per
-# DISCOVERED.md section 2. NOT a "half" like ARENA_HALF_W -- vertical is
-# normalized floor-relative ((ky - FLOOR_Y) / ARENA_HEIGHT: floor -> 0, top ->
-# ~1), not center-relative, so there is no /2. The horizontal half-width MUST
-# NOT be reused here: the arena is far wider than it is tall, so normalizing a
-# vertical offset by 11.23 would squash every jump/leap into a sliver near zero
-# and make vertical spacing nearly invisible to the policy.
-ARENA_HEIGHT = 9.59
 VEL_SCALE = 20.0
 
 OBS_KEYS = [  # scalar block order (before the boss-state one-hot)
@@ -123,7 +91,10 @@ class HKEnv(gym.Env):
     # tests, and non-measurement training pay nothing.
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
                  max_steps=2700, timeout=30.0, reset_retries=8,
-                 keepalive=3.0, reset_log_dir=None):
+                 keepalive=3.0, reset_log_dir=None, boss="hornet1"):
+        # Resolved before any socket work so an unknown id fails instantly
+        # and locally, not after a game connection is already up.
+        self.boss = get_boss(boss)
         self.reward = dict(DEFAULT_REWARD, **(reward_config or {}))
         self.max_steps = max_steps
         self.reset_retries = reset_retries
@@ -132,11 +103,18 @@ class HKEnv(gym.Env):
         self.conn = Connection(host=host, port=port, timeout=timeout,
                                keepalive=keepalive)
         self.conn.connect()
+        version = (self.conn.hello or {}).get("version")
+        if version != PROTOCOL_VERSION:
+            raise RuntimeError(
+                f"mod speaks protocol v{version}, this trainer needs "
+                f"v{PROTOCOL_VERSION} -- rebuild the mod (mod/build.sh) and "
+                f"restart the game")
         self._reset_abort = threading.Event()
         self._steps = 0
         self._prev = None
         self._max_bhp = None
-        n = len(OBS_KEYS) + len(HORNET_STATES)
+        self._warned_states = set()
+        n = len(OBS_KEYS) + len(self.boss.fsm_states)
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(n,), dtype=np.float32)
         self.action_space = spaces.Discrete(len(ACTIONS))
 
@@ -145,26 +123,34 @@ class HKEnv(gym.Env):
     def _flatten(self, obs):
         if self._max_bhp is None or obs["bhp"] > self._max_bhp:
             self._max_bhp = max(obs["bhp"], 1)
+        b = self.boss
         v = [
-            (obs["kx"] - ARENA_CENTER_X) / ARENA_HALF_W,
-            (obs["ky"] - FLOOR_Y) / ARENA_HEIGHT,
+            (obs["kx"] - b.arena_center_x) / b.arena_half_w,
+            (obs["ky"] - b.floor_y) / b.arena_height,
             obs["kvx"] / VEL_SCALE, obs["kvy"] / VEL_SCALE,
             obs["khp"] / 9.0, obs["soul"] / 99.0,
             float(obs["on_ground"]), float(obs["dashing"]),
             float(obs["invuln"]), float(obs["facing_right"]),
-            (obs["bx"] - obs["kx"]) / ARENA_HALF_W,
-            (obs["by"] - obs["ky"]) / ARENA_HEIGHT,
+            (obs["bx"] - obs["kx"]) / b.arena_half_w,
+            (obs["by"] - obs["ky"]) / b.arena_height,
             obs["bvx"] / VEL_SCALE, obs["bvy"] / VEL_SCALE,
             obs["bhp"] / self._max_bhp,
             float(obs["needle_active"]),
-            (obs["nx"] - obs["kx"]) / ARENA_HALF_W if obs["needle_active"] else 0.0,
-            (obs["ny"] - obs["ky"]) / ARENA_HEIGHT if obs["needle_active"] else 0.0,
+            (obs["nx"] - obs["kx"]) / b.arena_half_w if obs["needle_active"] else 0.0,
+            (obs["ny"] - obs["ky"]) / b.arena_height if obs["needle_active"] else 0.0,
         ]
-        onehot = [0.0] * len(HORNET_STATES)
+        onehot = [0.0] * len(b.fsm_states)
         try:
-            onehot[HORNET_STATES.index(obs["boss_state"])] = 1.0
+            onehot[b.fsm_states.index(obs["boss_state"])] = 1.0
         except ValueError:
             onehot[-1] = 1.0
+            unseen = obs["boss_state"]
+            if unseen and unseen not in self._warned_states:
+                self._warned_states.add(unseen)
+                print(f"hkrl: boss_state {unseen!r} is not in {self.boss.id}'s "
+                      f"registry list; mapped to UNKNOWN. If this repeats, it "
+                      f"is a candidate for the fsm_states list.",
+                      file=sys.stderr, flush=True)
         return np.asarray(v + onehot, dtype=np.float32)
 
     def _reward(self, prev, cur, done, won, truncated):
@@ -210,8 +196,15 @@ class HKEnv(gym.Env):
         started = time.perf_counter()
         for retry in range(self.reset_retries + 1):
             try:
-                self.conn.send({"type": "reset"})
+                self.conn.send({"type": "reset", "boss": self.boss.id})
                 msg = self.conn.recv()
+                if msg.get("type") == "error":
+                    # The mod refused the reset (e.g. a boss id its registry
+                    # doesn't know). A registry-skew bug, not protocol
+                    # rhythm: fail loudly instead of retrying into the same
+                    # refusal.
+                    raise RuntimeError(
+                        f"mod refused reset: {msg.get('message', msg)}")
                 break
             except (ConnectionClosed, BrokenPipeError, ConnectionResetError):
                 if self._reset_abort.is_set():

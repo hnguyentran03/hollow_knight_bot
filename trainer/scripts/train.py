@@ -22,9 +22,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
 
+from hkrl.bosses import BOSSES, get_boss  # noqa: E402
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
 from hkrl.masking import MaskedRecurrentPPO  # noqa: E402
+from hkrl.rundata import read_jsonl  # noqa: E402
 from hkrl.supervisor import InstanceDown, SupervisedVecEnv  # noqa: E402
 from hkrl.vec import RealEpisodeVecMonitor, RealEpisodeVecNormalize  # noqa: E402
 
@@ -71,6 +73,29 @@ def resolve_async_resets(flag, instances: int) -> bool:
     if instances < 2:
         return False
     return True if flag is None else bool(flag)
+
+
+def resolve_boss(flag: str | None, run_dir: Path | None) -> str:
+    """The boss this session fights. Fresh runs take the flag (default
+    hornet1). A resume takes the run's recorded boss -- the checkpoint's
+    observation space is built from it, so it is not overridable: an
+    explicit conflicting --boss is a hard error here, with a clear message
+    instead of a shape mismatch deep inside model load. Configs from before
+    the boss field read as hornet1."""
+    if run_dir is None:
+        return flag or "hornet1"
+    configs = read_jsonl(run_dir / "config.jsonl")
+    recorded = (configs[-1].get("boss") if configs else None) or "hornet1"
+    # A config naming a boss this registry lacks fails here, at the guard,
+    # not deep in worker env construction.
+    get_boss(recorded)
+    if flag is not None and flag != recorded:
+        raise ValueError(
+            f"--boss {flag} conflicts with {run_dir}'s recorded boss "
+            f"{recorded!r}; a checkpoint's observation space is built for "
+            f"its boss, so a resume always keeps it. Start a new run to "
+            f"train against {flag}.")
+    return recorded
 
 
 def build_config_dict(args, async_resets, resume=None, started_at=None):
@@ -337,6 +362,11 @@ def main() -> None:
                          "other hyperparameters. Try 0.05 against the "
                          "late-run win-rate slide (observed approx_kl "
                          "~0.15-0.25 without a cap).")
+    ap.add_argument("--boss", default=None, choices=sorted(BOSSES),
+                    help="which boss to train against (default: hornet1). "
+                         "Sets the observation space, so checkpoints are "
+                         "boss-specific: a resume always keeps the run's "
+                         "recorded boss and refuses a conflicting flag.")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--auto", action="store_true",
                     help="skip the interactive ready prompt (unattended/"
@@ -387,6 +417,12 @@ def main() -> None:
             sys.exit(f"{run_dir} already exists. Restarting into an existing "
                      f"run is never implicit: pass --resume {run_dir} to "
                      f"continue it, or a different --run-id to start fresh.")
+
+    try:
+        args.boss = resolve_boss(args.boss,
+                                 run_dir if args.resume is not None else None)
+    except ValueError as exc:
+        sys.exit(str(exc))
 
     # One JSON object per session, appended, so a resumed run's full history
     # stays inspectable next to its checkpoints.
@@ -450,6 +486,7 @@ def main() -> None:
         env, supervisor = build_env(
             game.ports, game.relaunch, run_dir,
             resume_vecnorm=resume[2] if resume else None,
+            boss=args.boss,
             # Boot-to-fight spans several 22.5s reset budgets, so a single
             # relaunch legitimately consumes a few attempts (see the
             # boot-retry note in hkrl/supervisor.py); the default 3 would

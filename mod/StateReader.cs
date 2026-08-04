@@ -105,14 +105,19 @@ namespace HKRLBot
 
         public BossState ReadBoss()
         {
+            // BossRegistry.Current only changes at reset acceptance, and that
+            // always precedes the arena (re)entry that triggers OnSceneChange
+            // (which clears bossGo/bossSearchDone below) -- so a boss switch
+            // can never leave this cache holding a stale bossGo from the
+            // previous boss.
             if (bossGo == null && !bossSearchDone)
             {
-                bossGo = GameObject.Find("Hornet Boss 1");
+                bossGo = GameObject.Find(BossRegistry.Current.ObjectName);
                 if (bossGo != null)
                 {
                     bossSearchDone = true;
                     bossHm = bossGo.GetComponent<HealthManager>();
-                    bossFsm = FSMUtility.LocateFSM(bossGo, "Control");
+                    bossFsm = FSMUtility.LocateFSM(bossGo, BossRegistry.Current.FsmName);
                     bossRb = bossGo.GetComponent<Rigidbody2D>();
                 }
                 // else: leave bossSearchDone false so the next ReadBoss() call
@@ -120,7 +125,9 @@ namespace HKRLBot
             }
             if (bossGo == null) return new BossState { Present = false, Died = bossDied };
 
-            if (needleGo == null) needleGo = GameObject.Find("Needle");
+            string needleName = BossRegistry.Current.NeedleName;
+            if (needleName != null && needleGo == null)
+                needleGo = GameObject.Find(needleName);
             var bp = bossGo.transform.position;
             var s = new BossState
             {
@@ -268,7 +275,7 @@ namespace HKRLBot
                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
                     null, new[] { typeof(int) }, null);
                 if (method == null) return false;
-                method.Invoke(ui, new object[] { 0 });
+                method.Invoke(ui, new object[] { BossRegistry.Current.TierIndex });
                 return true;
             }
             catch { return false; }

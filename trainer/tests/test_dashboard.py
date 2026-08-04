@@ -7,6 +7,7 @@ import urllib.request
 
 import pytest
 
+import hkrl.bosses
 from hkrl.dashboard import make_server
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.generations import GenerationCallback
@@ -146,6 +147,11 @@ def test_api_launcher_reports_the_active_run(base_url, monkeypatch):
     monkeypatch.setattr(dash.launcher, "status", lambda root: rec)
     data = json.loads(_get(base_url + "/api/launcher")[2])
     assert data["active"] == rec
+
+
+def test_api_launcher_lists_the_known_bosses(base_url):
+    data = json.loads(_get(base_url + "/api/launcher")[2])
+    assert data["bosses"] == sorted(hkrl.bosses.BOSSES)
 
 
 def test_post_launch_delegates_and_returns_the_run_id(base_url, monkeypatch):
