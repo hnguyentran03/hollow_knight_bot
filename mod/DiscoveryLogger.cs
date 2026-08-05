@@ -122,7 +122,7 @@ namespace HKRLBot
 
                 bool menuOpen = mod.Reader.IsChallengeMenuOpen();
                 if (menuOpen && !menuWasOpen)
-                    mod.Log($"DISCOVERY statue knightX={k.X:F2} scene={scene}");
+                    mod.Log($"DISCOVERY statue knightX={k.X:F2} knightY={k.Y:F2} scene={scene}");
                 menuWasOpen = menuOpen;
             }
         }

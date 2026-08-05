@@ -24,7 +24,8 @@ CANDIDATE_RE = re.compile(
 ARENA_RE = re.compile(
     r"DISCOVERY arena scene=(?P<scene>\S*) kxRange=\[(?P<min>-?[\d.]+|NaN), "
     r"(?P<max>-?[\d.]+|NaN)\] floorY=(?P<floor>-?[\d.]+|NaN) maxKy=(?P<top>-?[\d.]+|NaN)")
-STATUE_RE = re.compile(r"DISCOVERY statue knightX=(?P<x>-?[\d.]+) scene=(?P<scene>\S*)")
+STATUE_RE = re.compile(
+    r"DISCOVERY statue knightX=(?P<x>-?[\d.]+)(?: knightY=(?P<y>-?[\d.]+))? scene=(?P<scene>\S*)")
 PROJECTILE_RE = re.compile(
     r"DISCOVERY projectile go='(?P<go>.*?)' id=(?P<id>-?\d+) scene=(?P<scene>\S*)")
 
@@ -36,7 +37,7 @@ def summarize(lines):
                                  # the tier HPs must not blur together
     arenas = {}                  # scene -> latest arena reading (floats)
     projectiles = defaultdict(set)  # (go, scene) -> set of instance ids
-    statue_xs = []
+    statues = []  # (x, y-or-None) in file order; y is None for old-format lines
     for line in lines:
         m = STATE_RE.search(line)
         if m:
@@ -60,9 +61,9 @@ def summarize(lines):
             continue
         m = STATUE_RE.search(line)
         if m:
-            statue_xs.append(float(m["x"]))
+            statues.append((float(m["x"]), float(m["y"]) if m["y"] else None))
     return {"states": dict(states), "candidates": candidates,
-            "arenas": arenas, "projectiles": dict(projectiles), "statue_xs": statue_xs}
+            "arenas": arenas, "projectiles": dict(projectiles), "statues": statues}
 
 
 def report(s):
@@ -85,9 +86,12 @@ def report(s):
             f"height={a['top'] - a['floor']:.2f} "
             f"(raw min={a['min']:.2f} max={a['max']:.2f} top={a['top']:.2f})")
     out.append("")
-    xs = s["statue_xs"]
+    statues = s["statues"]
+    readings = ", ".join(
+        (f"{x:.2f} (y {y:.2f})" if y is not None else f"{x:.2f} (y unknown)")
+        for x, y in statues)
     out.append("statue knightX readings: "
-               + (", ".join(f"{x:.2f}" for x in xs) if xs else "none")
+               + (readings if statues else "none")
                + "  (use the one from standing settled at the target statue)")
     out.append("")
     out.append("projectile candidates (DamageHero objects owned by no enemy; NeedleName"
