@@ -696,3 +696,25 @@ several units, not a single point -- Soul Warrior's menu opened at both
 `StatueX` values (34.01 for Soul Warrior, 52.07 for False Knight) remain
 the settled multi-reading choices from their original discovery sessions
 (sections 9 and 11) and are unchanged by this session's readings.
+
+**Addendum (smoke-gorb-2, 2026-08-05):** with the teleport in place, the
+reset macro reached the upper walkway but still failed to open the
+challenge menu -- it parked the knight at 125.90-126.06 and every reset
+budget expired there. Diagnosis: every registered `StatueX` for the four
+new bosses came from menu-open readings taken at the spot where the user
+stopped walking when the prompt first appeared, i.e. the interact
+region's left edge, so the macro's +/-0.5 settle window straddled the
+edge instead of sitting inside the region -- the same failure mode Gruz
+Mother's 28.0->28.6 fix corrected (section 7). The X-spread observation
+above supplied the second, right-edge reading needed to fix three of the
+four; `gorb` had only the one left-edge reading and its fix is
+extrapolated by the same margin. New values:
+
+```
+gorb:          evidence 126.21-126.25 (left edge only) -> StatueX = 126.8  (extrapolated)
+marmu:         evidence 91.34 and 94.52                -> StatueX = 92.9   (midpoint)
+soul_warrior:  evidence 34.01 and 37.19                -> StatueX = 35.6   (midpoint)
+false_knight:  evidence 52.07 and 55.19                -> StatueX = 53.6   (midpoint)
+```
+
+`hornet1` and `gruz_mother` are unaffected -- both already proven working.

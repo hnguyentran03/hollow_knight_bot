@@ -87,11 +87,17 @@ namespace HKRLBot
                     Scene = "GG_Ghost_Gorb",
                     ObjectName = "Ghost Warrior Slug",
                     FsmName = "Attacking",
-                    // Settled menu-open readings 126.22-126.25 (first-approach
-                    // outlier 134.66 excluded); the macro's +/-0.5 settle
-                    // window around 126.23 (125.73-126.73) contains all of
-                    // them (Gruz 28.0->28.6 lesson satisfied).
-                    StatueX = 126.23f,
+                    // smoke-gorb-2 (2026-08-05): macro settled the knight at
+                    // 125.90-126.06, just left of the interact region --
+                    // the challenge menu never opened. Evidence readings
+                    // (126.21-126.25) all came from one standing spot, the
+                    // region's left edge -- the same miss Gruz's fix
+                    // corrected. 126.8 (left edge + 0.6, the same margin
+                    // Gruz's fix used past its lowest reading) is
+                    // extrapolated, not measured from a second standing
+                    // spot -- the only extrapolated value of the four; the
+                    // smoke run verifies it.
+                    StatueX = 126.8f,
                     // upper-walkway stand, DISCOVERED.md section 12
                     StatueY = 36.41f,
                     MaxAttunedHp = 700,
@@ -110,11 +116,12 @@ namespace HKRLBot
                     Scene = "GG_Mage_Knight",
                     ObjectName = "Mage Knight",
                     FsmName = "Mage Knight",
-                    // Settled menu-open readings 34.01, 34.01 (first-approach
-                    // outlier 37.12 excluded); the macro's +/-0.5 settle
-                    // window around 34.01 (33.51-34.51) contains all settled
-                    // readings (Gruz 28.0->28.6 lesson satisfied).
-                    StatueX = 34.01f,
+                    // smoke-gorb-2 (2026-08-05) diagnosis: the registered
+                    // 34.01 was a left-edge-only reading. Two-ended evidence
+                    // (34.01, 37.19) gives a midpoint of 35.6; the macro's
+                    // +/-0.5 settle window (35.1-36.1) sits fully inside the
+                    // evidence span.
+                    StatueX = 35.6f,
                     StatueY = 36.41f,
                     MaxAttunedHp = 800,
                     TierIndex = 0,   // re-verify at this statue during smoke
@@ -128,11 +135,12 @@ namespace HKRLBot
                     Scene = "GG_Ghost_Marmu",
                     ObjectName = "Ghost Warrior Marmu",
                     FsmName = "Control",
-                    // Settled menu-open readings 91.34, 91.34 (first-approach
-                    // outlier 94.52 excluded); the macro's +/-0.5 settle
-                    // window around 91.34 (90.84-91.84) contains all settled
-                    // readings (Gruz 28.0->28.6 lesson satisfied).
-                    StatueX = 91.34f,
+                    // smoke-gorb-2 (2026-08-05) diagnosis: the registered
+                    // 91.34 was a left-edge-only reading. Two-ended evidence
+                    // (91.34, 94.52) gives a midpoint of 92.9; the macro's
+                    // +/-0.5 settle window (92.4-93.4) sits fully inside the
+                    // evidence span.
+                    StatueX = 92.9f,
                     StatueY = 36.41f,
                     MaxAttunedHp = 450,
                     TierIndex = 0,   // re-verify at this statue during smoke
@@ -150,11 +158,12 @@ namespace HKRLBot
                     Scene = "GG_False_Knight",
                     ObjectName = "False Knight New",
                     FsmName = "FalseyControl",
-                    // Settled menu-open readings 52.07, 52.07, 52.07 (no
-                    // outliers); the macro's +/-0.5 settle window
-                    // (51.57-52.57) contains all settled readings (Gruz
-                    // 28.0->28.6 lesson satisfied).
-                    StatueX = 52.07f,
+                    // smoke-gorb-2 (2026-08-05) diagnosis: the registered
+                    // 52.07 was a left-edge-only reading. Two-ended evidence
+                    // (52.07, 55.19) gives a midpoint of 53.6; the macro's
+                    // +/-0.5 settle window (53.1-54.1) sits fully inside the
+                    // evidence span.
+                    StatueX = 53.6f,
                     MaxAttunedHp = 300,
                     TierIndex = 0,   // re-verify at this statue during smoke
                     NeedleName = null,   // projectiles are per-shot clones; evidence in DISCOVERED.md section 11
