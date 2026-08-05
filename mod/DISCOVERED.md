@@ -434,3 +434,69 @@ with 96 distinct instance ids in `GG_Ghost_Gorb` -- per-shot clones, not
 trackable by the mod's find-by-name mechanism. `Spike Collider` /
 `Spike Collider (1)` (3 and 3 instances) are arena hazards, not a boss
 projectile.
+
+## 9. Soul Warrior FSM states, arena, statue, and HP
+
+Recorded 2026-08-05 with the F4 `DiscoveryLogger`, plus per-visit analysis of
+the raw ModLog. Scene (Attuned): `GG_Mage_Knight` (Ascended:
+`GG_Mage_Knight_V`). Boss GameObject: `Mage Knight`. Main FSM (named after
+the object): **`Mage Knight`**, 20 distinct states in first-seen order:
+
+```
+GG Pause, Up Tele, Stomp Antic, Stomp Air, Stomp Recover, Idle, Slash Antic,
+Dash, Slash Recover, Tele Antic, Side Tele, Shoot Antic, Shoot, Shoot CD,
+Slash, Televade, Evade, Stomp Slash, Evade Antic, Evade Recover
+```
+
+In the Ascended fight only, four `Mage Balloon Spawner (N)` objects (hp 13
+each, FSM `Control`: `Spawn` / `Chase - In Sight`) appeared -- Ascended-only
+summons, not part of the Attuned fight, and not transcribed (same precedent
+as Gruz's untranscribed `bouncer_control` and Gorb's untranscribed
+`Movement`).
+
+**Arena:** two independent Attuned visits agree exactly on the walls --
+both read min=35.01, max=58.94 (wall-pressed, corroborated across visits):
+
+```
+Knight X at left wall (both visits):  35.01
+Knight X at right wall (both visits): 58.94
+Floor Y (lowest grounded reading across visits: 5.39, 5.40, 5.40): 5.39
+Arena center X    = (35.01 + 58.94) / 2 = 46.97
+Arena half-width  = (58.94 - 35.01) / 2 = 11.96
+```
+
+**Arena top / height:** visit 1's ceiling-press top was 19.09, visit 2's was
+lower at 14.03; the highest across visits, 19.09, is used as the arena top
+(consistent with the Hornet/Gruz/Gorb convention of taking the highest
+measured top -- a tall arena covering the knight's aerial reach mid-fight),
+giving:
+
+```
+Arena top (highest across visits): 19.09
+Arena height = 19.09 - 5.39 = 13.70
+```
+
+**Statue:** settled menu-open readings 34.01, 34.01 (first-approach outlier
+37.12 excluded). `StatueX = 34.01` -- the macro's +/-0.5 settle window
+(33.51-34.51) contains all settled readings (Gruz 28.0->28.6 lesson
+satisfied, so no post-hoc nudge is needed here).
+
+**HP:** Max HP 750 Attuned (two visits, consistent), 1000 Ascended
+(`GG_Mage_Knight_V`) -> mod ceiling `MaxAttunedHp = 800` (same margin style
+as Gruz's 650/945 -> 700 and Gorb's 650/1000 -> 700). `TierIndex = 0`,
+re-verify at this statue during smoke (registry comment convention).
+
+**Projectile (`NeedleName` decision):** `NeedleName = null`. The only
+projectile candidate in `GG_Mage_Knight` was `Hero Hurter`, logged with 3
+distinct instance ids -- multiple instances, not a persistent single-instance
+object, so not trackable by the mod's find-by-name mechanism. No dagger-like
+single-instance candidate appeared. This is a measured absence, not a gap in
+the search: the same discovery session's fixture check confirmed the logger
+correctly catches persistent single-instance projectiles (Hornet's `Needle`,
+instances=1), so the 3-instance reading on `Hero Hurter` reflects the boss's
+actual per-shot-clone behavior. The FSM one-hot (`Shoot Antic` / `Shoot`)
+still telegraphs shots -- the spec's fallback, same as Gorb's.
+
+**Teleport discontinuities:** boss X/Y readings jump discontinuously between
+reads during `Up Tele` and `Side Tele` states -- expected (the boss is
+teleporting), not a reader bug. No trainer change needed.

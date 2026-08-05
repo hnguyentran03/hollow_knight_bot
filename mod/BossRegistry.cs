@@ -92,6 +92,23 @@ namespace HKRLBot
                     // objects are arena hazards, not a boss projectile.
                     NeedleName = null,
                 },
+                // Measured 2026-08-05, DISCOVERED.md section 9.
+                // Attuned max HP 750, Ascended 1000 -> ceiling 800.
+                ["soul_warrior"] = new BossSpec
+                {
+                    Id = "soul_warrior",
+                    Scene = "GG_Mage_Knight",
+                    ObjectName = "Mage Knight",
+                    FsmName = "Mage Knight",
+                    // Settled menu-open readings 34.01, 34.01 (first-approach
+                    // outlier 37.12 excluded); the macro's +/-0.5 settle
+                    // window around 34.01 (33.51-34.51) contains all settled
+                    // readings (Gruz 28.0->28.6 lesson satisfied).
+                    StatueX = 34.01f,
+                    MaxAttunedHp = 800,
+                    TierIndex = 0,   // re-verify at this statue during smoke
+                    NeedleName = null,   // no persistent projectile; evidence in DISCOVERED.md section 9
+                },
             };
 
         // The boss the current/next episode fights. Defaults to hornet1 so

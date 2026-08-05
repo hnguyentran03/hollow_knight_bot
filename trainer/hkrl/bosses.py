@@ -82,6 +82,24 @@ BOSSES = {
         floor_y=33.40,
         arena_height=10.84,
     ),
+    # Soul Warrior (Hall of Gods, Attuned). States and arena measured
+    # 2026-08-05, DISCOVERED.md section 9 (walls 35.01/58.94, floor 5.39,
+    # top 19.09). Main FSM "Mage Knight".
+    "soul_warrior": BossSpec(
+        id="soul_warrior",
+        fsm_states=(
+            "GG Pause", "Up Tele", "Stomp Antic", "Stomp Air",
+            "Stomp Recover", "Idle", "Slash Antic", "Dash", "Slash Recover",
+            "Tele Antic", "Side Tele", "Shoot Antic", "Shoot", "Shoot CD",
+            "Slash", "Televade", "Evade", "Stomp Slash", "Evade Antic",
+            "Evade Recover",
+            "UNKNOWN",
+        ),
+        arena_center_x=46.97,
+        arena_half_w=11.96,
+        floor_y=5.39,
+        arena_height=13.70,
+    ),
 }
 
 
