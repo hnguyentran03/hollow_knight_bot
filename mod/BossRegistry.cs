@@ -109,6 +109,23 @@ namespace HKRLBot
                     TierIndex = 0,   // re-verify at this statue during smoke
                     NeedleName = null,   // no persistent projectile; evidence in DISCOVERED.md section 9
                 },
+                // Measured 2026-08-05, DISCOVERED.md section 10.
+                // Attuned max HP 416, Ascended 600 -> ceiling 450.
+                ["marmu"] = new BossSpec
+                {
+                    Id = "marmu",
+                    Scene = "GG_Ghost_Marmu",
+                    ObjectName = "Ghost Warrior Marmu",
+                    FsmName = "Control",
+                    // Settled menu-open readings 91.34, 91.34 (first-approach
+                    // outlier 94.52 excluded); the macro's +/-0.5 settle
+                    // window around 91.34 (90.84-91.84) contains all settled
+                    // readings (Gruz 28.0->28.6 lesson satisfied).
+                    StatueX = 91.34f,
+                    MaxAttunedHp = 450,
+                    TierIndex = 0,   // re-verify at this statue during smoke
+                    NeedleName = null,   // no projectile candidates; evidence in DISCOVERED.md section 10
+                },
             };
 
         // The boss the current/next episode fights. Defaults to hornet1 so

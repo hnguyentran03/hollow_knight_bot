@@ -500,3 +500,65 @@ still telegraphs shots -- the spec's fallback, same as Gorb's.
 **Teleport discontinuities:** boss X/Y readings jump discontinuously between
 reads during `Up Tele` and `Side Tele` states -- expected (the boss is
 teleporting), not a reader bug. No trainer change needed.
+
+## 10. Marmu FSM states, arena, statue, and HP
+
+Recorded 2026-08-05 with the F4 `DiscoveryLogger`, plus per-visit analysis of
+the raw ModLog, including a dedicated clean measurement visit. Scene
+(Attuned): `GG_Ghost_Marmu` (Ascended: `GG_Ghost_Marmu_V`). Boss GameObject:
+`Ghost Warrior Marmu`. Main FSM: **`Control`**, 5 distinct states in
+first-seen order:
+
+```
+Start Pause, Antic, Chase, Unroll, Warp Out 2
+```
+
+The fifth state, `Warp Out 2`, surfaced only in the final (dedicated
+measurement) visit -- the plain fight visits never showed it. A
+`Broadcast Ghost Death` FSM (`Idle`) on the same object is death plumbing and
+is not transcribed (same precedent as Gruz's untranscribed
+`bouncer_control`).
+
+**Arena:** walls corroborated by two independent visits reading identically
+(min=51.27, max=88.73 in both the first fight visit and the dedicated
+measurement visit). An intermediate fight visit read narrower, 60.53-73.02,
+because the walls were never pressed during that visit -- not used:
+
+```
+Knight X at left wall (two visits agree):  51.27
+Knight X at right wall (two visits agree): 88.73
+Arena center X    = (51.27 + 88.73) / 2 = 70.0
+Arena half-width  = (88.73 - 51.27) / 2 = 18.73
+```
+
+**Floor:** readings 10.40/10.41 across visits -- the floor is FLAT. The
+spec's curved-floor caveat (grounded Y varying across the floor, requiring
+the lowest settled reading plus an approximate-normalization note) did not
+materialize here; `floor_y = 10.40` is exact, not an approximation.
+
+**Arena top / height:** the first visit's ceiling-press top read 23.09; the
+dedicated ceiling-press visit read lower, 22.09. Both are recorded; the
+maximum across visits, 23.09, is used as the arena top (consistent with the
+Hornet/Gruz/Gorb/Soul Warrior convention of taking the highest measured
+top), giving:
+
+```
+Arena top (maximum across visits): 23.09
+Arena height = 23.09 - 10.40 = 12.69
+```
+
+**Statue:** settled menu-open readings 91.34, 91.34 (first-approach outlier
+94.52 excluded). `StatueX = 91.34` -- the macro's +/-0.5 settle window
+(90.84-91.84) contains all settled readings (Gruz 28.0->28.6 lesson
+satisfied, so no post-hoc nudge is needed here).
+
+**HP:** Max HP 416 Attuned (three visits, consistent), 600 Ascended
+(`GG_Ghost_Marmu_V`) -> mod ceiling `MaxAttunedHp = 450` (same margin style
+as Gruz's 650/945 -> 700, Gorb's 650/1000 -> 700, and Soul Warrior's
+750/1000 -> 800). `TierIndex = 0`, re-verify at this statue during smoke
+(registry comment convention).
+
+**Projectile:** `NeedleName = null`. No projectile candidates at all
+appeared in `GG_Ghost_Marmu` (Attuned). A `Thorn Collider` (1 instance)
+appeared only in `GG_Ghost_Marmu_V` -- an Ascended-only arena hazard,
+irrelevant to the Attuned fight and not a boss projectile.

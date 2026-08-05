@@ -100,6 +100,20 @@ BOSSES = {
         floor_y=5.39,
         arena_height=13.70,
     ),
+    # Marmu (Hall of Gods, Attuned). States and arena measured 2026-08-05,
+    # DISCOVERED.md section 10 (walls 51.27/88.73, floor 10.40, top 23.09).
+    # Main FSM "Control".
+    "marmu": BossSpec(
+        id="marmu",
+        fsm_states=(
+            "Start Pause", "Antic", "Chase", "Unroll", "Warp Out 2",
+            "UNKNOWN",
+        ),
+        arena_center_x=70.0,
+        arena_half_w=18.73,
+        floor_y=10.40,
+        arena_height=12.69,
+    ),
 }
 
 
