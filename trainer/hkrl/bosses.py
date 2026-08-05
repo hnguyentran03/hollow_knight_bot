@@ -68,6 +68,20 @@ BOSSES = {
         floor_y=15.4,
         arena_height=9.26,
     ),
+    # Gorb (Hall of Gods, Attuned). States and arena measured 2026-08-05,
+    # DISCOVERED.md section 8. Main FSM "Attacking".
+    "gorb": BossSpec(
+        id="gorb",
+        fsm_states=(
+            "Init", "Wait", "Antic", "Attack", "Recover", "Damaged",
+            "Double Pause", "Anim", "Triple Pause",
+            "UNKNOWN",
+        ),
+        arena_center_x=56.0,
+        arena_half_w=11.87,
+        floor_y=33.40,
+        arena_height=10.84,
+    ),
 }
 
 

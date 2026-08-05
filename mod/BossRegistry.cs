@@ -71,6 +71,27 @@ namespace HKRLBot
                     TierIndex = 0,
                     NeedleName = null,   // no tracked projectile
                 },
+                // Measured 2026-08-05, DISCOVERED.md section 8.
+                // Attuned max HP 650, Ascended 1000 -> ceiling 700.
+                ["gorb"] = new BossSpec
+                {
+                    Id = "gorb",
+                    Scene = "GG_Ghost_Gorb",
+                    ObjectName = "Ghost Warrior Slug",
+                    FsmName = "Attacking",
+                    // Settled menu-open readings 126.22-126.25 (first-approach
+                    // outlier 134.66 excluded); the macro's +/-0.5 settle
+                    // window around 126.23 (125.73-126.73) contains all of
+                    // them (Gruz 28.0->28.6 lesson satisfied).
+                    StatueX = 126.23f,
+                    MaxAttunedHp = 700,
+                    TierIndex = 0,   // re-verify at this statue during smoke
+                    // No trackable projectile: "Shot Slug Spear(Clone)" is
+                    // logged per-shot (96 instance ids in GG_Ghost_Gorb, not
+                    // a stable find-by-name target); the "Spike Collider"
+                    // objects are arena hazards, not a boss projectile.
+                    NeedleName = null,
+                },
             };
 
         // The boss the current/next episode fights. Defaults to hornet1 so

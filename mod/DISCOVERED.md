@@ -372,3 +372,65 @@ verified there.
 `Charge Recover R` during the first live gruz run -- the discovery fights
 never saw a right-wall charge recovery. Added to the `gruz_mother`
 `fsm_states` (17 recorded states + UNKNOWN).
+
+## 8. Gorb FSM states, arena, statue, and HP
+
+Recorded 2026-08-05 with the F4 `DiscoveryLogger`, plus per-visit analysis of
+the raw ModLog, plus two user-supplied edge readings (arena has no side
+walls -- see below). Scene (Attuned): `GG_Ghost_Gorb` (Ascended:
+`GG_Ghost_Gorb_V`). Boss GameObject: `Ghost Warrior Slug`. Main FSM:
+**`Attacking`**, 9 distinct states in first-seen order, the FSM that cycles
+attack-like states (Antic/Attack/Recover) per the parser guidance:
+
+```
+Init, Wait, Antic, Attack, Recover, Damaged, Double Pause, Anim, Triple Pause
+```
+
+A `Movement` FSM on the same object (`Warp In`, `Hover`, `Attacking`,
+`Warp Check`) is warp/hover plumbing and is not transcribed (same precedent
+as Gruz's untranscribed `bouncer_control`). Other minor FSMs seen and not
+transcribed: `Distance Attack` (`Close`/`Away`), `Warp messenger` (`Wait`),
+`Broadcast Ghost Death` (`Idle`).
+
+**Arena edge-override provenance:** the arena has no side walls -- the floor
+ends in lethal drops -- so the DiscoveryLogger's knight-X extremes include
+falls past the edges (per-visit final ranges 42.44-68.78, 32.29-79.38,
+42.61-69.70), which are not usable as wall readings. Instead the user read
+the pre-drop edge X values directly off the overlay and supplied them:
+
+```
+Left edge X (overlay read):  44.14
+Right edge X (overlay read): 67.87
+Floor Y (all three Attuned visits, settled): 33.40
+Arena center X    = (44.14 + 67.87) / 2 = 56.0    (56.005)
+Arena half-width  = (67.87 - 44.14) / 2 = 11.87   (11.865)
+```
+
+**Arena top / height:** the per-visit ceiling-press tops were 38.51, 43.16,
+and 44.24; the highest across visits, 44.24, is used as the arena top
+(consistent with the Hornet/Gruz convention of taking the highest measured
+top), giving:
+
+```
+Arena top (highest across visits): 44.24
+Arena height = 44.24 - 33.40 = 10.84
+```
+
+The lower per-visit tops (38.51, 43.16) corroborate a height in the same
+ballpark (~10) rather than indicating a measurement error.
+
+**Statue:** settled menu-open readings 126.24, 126.25, 126.22, 126.23
+(first-approach outlier 134.66 excluded). `StatueX = 126.23` -- the macro's
++/-0.5 settle window (125.73-126.73) contains all settled readings (Gruz
+28.0->28.6 lesson satisfied, so no post-hoc nudge is needed here).
+
+**HP:** Max HP 650 Attuned (three visits, consistent), 1000 Ascended
+(`GG_Ghost_Gorb_V`) -> mod ceiling `MaxAttunedHp = 700` (same margin style as
+Gruz's 650/945 -> 700). `TierIndex = 0`, re-verify at this statue during
+smoke (registry comment convention).
+
+**Projectile:** `NeedleName = null`. `Shot Slug Spear(Clone)` was logged
+with 96 distinct instance ids in `GG_Ghost_Gorb` -- per-shot clones, not
+trackable by the mod's find-by-name mechanism. `Spike Collider` /
+`Spike Collider (1)` (3 and 3 instances) are arena hazards, not a boss
+projectile.
