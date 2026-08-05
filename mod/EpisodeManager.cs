@@ -703,6 +703,16 @@ namespace HKRLBot
         // from the statue takes, which is the case that has always worked.
         private static bool statueTriggerRearmed;
 
+        // Per-attempt "already teleported to the statue stand this reset"
+        // latch, mirroring the LoadBoss-style per-attempt latches above
+        // (attunedConfirmedViaLoadBoss etc.): at most one TeleportKnight()
+        // call per reset attempt, win or lose. Only meaningful for bosses
+        // with a measured BossSpec.StatueY (see StatueY below); for every
+        // other boss the teleport condition never triggers and this stays
+        // false all reset. Reset alongside the other per-attempt latches in
+        // Reset().
+        private static bool statueTeleportLatched;
+
         // Step-off stall detection. stepOffLastX is the last knightX sampled
         // while stepping off; stepOffProgressAt is the ElapsedSeconds of the
         // last tick that actually moved the knight. No movement for
@@ -812,10 +822,14 @@ namespace HKRLBot
             tierGateAttempts = 0;
             attunedConfirmedViaLoadBoss = false;
             blindConfirmFallbackLogged = false;
+            statueTeleportLatched = false;
         }
 
         // Measured per-boss; see the warning on BossSpec.StatueX (BossRegistry.cs).
         private static float StatueX => BossRegistry.Current.StatueX;
+        // NaN (the default) for every boss until a follow-up transcription
+        // task measures it; see the field comment on BossSpec.StatueY.
+        private static float StatueY => BossRegistry.Current.StatueY;
 
         // Retry-prompt confirm pulse (the boss arena scene, dead): hold Jump for
         // RetryPulseSeconds out of every RetryPulsePeriodSeconds.
@@ -1019,6 +1033,54 @@ namespace HKRLBot
                 if (k != null)
                 {
                     knightX = k.X;
+
+                    // Multi-level workshop teleport, checked first, ahead of
+                    // the position-based branch selection below. Hall of
+                    // Gods is multi-level: Gorb/Marmu/Soul Warrior's statues
+                    // are on the SECOND floor, but a knight respawning from
+                    // death or a fresh boot can land on the ground floor --
+                    // the walk-only macro then stood under Gorb's statue on
+                    // the wrong floor pressing Up until every reset budget
+                    // expired (smoke-gorb, 2026-08-05). BossSpec.StatueY
+                    // (NaN by default, set only once a boss's stand has been
+                    // measured -- see BossRegistry.cs) is the escape hatch:
+                    // when it's known, write the knight's position directly
+                    // via TeleportKnight instead of trusting a walk to reach
+                    // a floor input alone cannot climb. Gated on: a measured
+                    // StatueY, the menu not already open (a teleport mid-menu
+                    // would be pointless/disruptive), the per-attempt latch
+                    // unset (one teleport per reset attempt -- see
+                    // statueTeleportLatched, reset in Reset()), and the
+                    // knight actually away from the stand (so a knight that
+                    // already spawned at/near the stand, or that already got
+                    // teleported there, does not get moved again). On
+                    // success the position-based branch selection below
+                    // picks up naturally next tick, now finding the knight
+                    // inside the statue-menu settle window on the correct
+                    // floor; on failure (TeleportKnight returns false) the
+                    // latch still sets -- no retry this attempt -- and the
+                    // legacy walk below continues as backstop, same as a
+                    // boss with no measured StatueY at all.
+                    bool teleportEligible =
+                        !float.IsNaN(StatueY)
+                        && !mod.Reader.IsChallengeMenuOpen()
+                        && !statueTeleportLatched
+                        && (Mathf.Abs(k.X - StatueX) > 0.4f || Mathf.Abs(k.Y - StatueY) > 1.0f);
+
+                    if (teleportEligible)
+                    {
+                        statueTeleportLatched = true;
+                        bool teleported = mod.Reader.TeleportKnight(StatueX, StatueY);
+                        mod.Log(
+                            "ResetMacro: teleported to statue stand ("
+                            + StatueX + ", " + StatueY + ") result=" + teleported);
+                        branch = "statue-teleport";
+                        // Movement inputs stay suppressed for this tick: b is
+                        // a fresh all-false ActionButtons from the top of
+                        // Tick() and nothing in this branch sets it.
+                    }
+                    else
+                    {
                     // Latch onto the statue-menu branch the first time the
                     // knight is within the deadband, and never re-check
                     // position again for the rest of this reset. A live run
@@ -1156,6 +1218,7 @@ namespace HKRLBot
                             b.Jump = confirmPos >= 0f
                                      && (confirmPos % StatueMenuPeriodSeconds) < ConfirmPulseSeconds;
                         }
+                    }
                     }
                 }
                 else

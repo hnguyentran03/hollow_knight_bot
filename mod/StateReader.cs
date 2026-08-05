@@ -103,6 +103,32 @@ namespace HKRLBot
             };
         }
 
+        // Places the knight directly at (x, y), preserving its existing z,
+        // and zeroes the hero's Rigidbody2D velocity so residual momentum
+        // doesn't carry it off the target the instant control returns.
+        // Engine-state write, same precedent as LoadBoss(0)
+        // (ConfirmAttunedChallenge below): when input-driven navigation is
+        // fragile under automation -- here, walking blind on the wrong
+        // floor of a multi-level Hall of Gods workshop -- write the state
+        // directly instead of fighting the input path. Exception-safe like
+        // this file's other helpers: null HeroController.instance or any
+        // exception returns false, never throws, so a caller can fall back
+        // to the legacy walk.
+        public bool TeleportKnight(float x, float y)
+        {
+            var hc = HeroController.instance;
+            if (hc == null) return false;
+            try
+            {
+                var p = hc.transform.position;
+                hc.transform.position = new Vector3(x, y, p.z);
+                var rb = hc.GetComponent<Rigidbody2D>();
+                if (rb != null) rb.velocity = Vector2.zero;
+                return true;
+            }
+            catch { return false; }
+        }
+
         public BossState ReadBoss()
         {
             // BossRegistry.Current only changes at reset acceptance, and that

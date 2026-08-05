@@ -25,6 +25,14 @@ namespace HKRLBot
         // section 3. A wrong-but-plausible number silently corrupts the
         // reset macro; never change without re-measuring.
         public float StatueX;
+        // Knight's grounded Y standing at this boss's statue in
+        // GG_Workshop, measured like StatueX. float.NaN (the default)
+        // means "no measured stand Y; keep the legacy walk-only
+        // navigation" -- hornet1, gruz_mother, and false_knight are
+        // ground-floor and already proven working on the walk; the
+        // upper-level Hall of Gods bosses (Gorb, Marmu, Soul Warrior) get
+        // measured values in a follow-up transcription task.
+        public float StatueY = float.NaN;
         // Ceiling for backstop B (wrong-difficulty detection): safely above
         // the boss's measured Attuned max HP, below its next tier's.
         public int MaxAttunedHp;
