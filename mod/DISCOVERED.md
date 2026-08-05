@@ -562,3 +562,92 @@ as Gruz's 650/945 -> 700, Gorb's 650/1000 -> 700, and Soul Warrior's
 appeared in `GG_Ghost_Marmu` (Attuned). A `Thorn Collider` (1 instance)
 appeared only in `GG_Ghost_Marmu_V` -- an Ascended-only arena hazard,
 irrelevant to the Attuned fight and not a boss projectile.
+
+## 11. False Knight FSM states, arena, statue, and HP
+
+Recorded 2026-08-05 with the F4 `DiscoveryLogger`, plus per-visit analysis of
+the raw ModLog, including a dedicated clean measurement visit, plus the
+user's identification of which fight ran at which tier. Boss GameObject:
+`False Knight New`. Main FSM: **`FalseyControl`**, 54 distinct states in
+first-seen order:
+
+```
+Start Fall, State 1, First Idle, Jump Antic, Rise, Fall, Idle, JA Antic,
+JA Rise, JA Fall, JA Hit, JA Recoil 2, Turn R, S Attack Antic,
+S Attack Recover, Run Antic, Run, JA Recoil, JA End, S Antic, S Rise,
+S Fall, S Land, Stun In Air, Pause Short, Open Uuup, Opened, Hit, Recover,
+Idle Pause, Rage Jump Antic, Rise 2, Fall 2, State 2, R Attack Antic,
+Rage, Particle Pause, Anim End, Stun Land, Rage End, Death Open, Opened 2,
+Hit 2, Death Anim Start, Steam, Ready, Blow, Death Head Land, Cough,
+S Attack, Slam, Stun Fail, Turn L, JA Slam
+```
+
+By far the largest state list of any registered boss so far -- transcribed
+carefully against the parser output, since a single dropped or reordered
+state would silently corrupt the observation one-hot.
+
+Two secondary FSMs are present but not transcribed into the state list: a
+`Check Health` FSM (`Check`) on `False Knight New` itself, and a separate
+`Head` GameObject (hp=40, FSM `Health Check`: `Check 1`) present in every
+fight at both tiers -- the stagger-phase target that gets exposed when the
+boss's armor breaks. Win detection is the `Die` hook on `False Knight New`;
+the smoke run confirms it fires through his death sequence (same convention
+as the untranscribed secondaries on Gruz, Gorb, Soul Warrior, and Marmu).
+
+**Scene / tier (important -- differs from every other registered boss):**
+Scene is `GG_False_Knight` for BOTH Attuned and Ascended -- the user's third
+fight was Ascended and still logged `scene=GG_False_Knight`; no `_V` scene
+exists anywhere in the log. Every other boss registered so far gets an
+Ascended `_V` scene that backstop A (scene match) can use to reject a
+wrong-tier fight; False Knight has none. Consequence: for this boss, the HP
+ceiling (backstop B, `MaxAttunedHp`) is the ONLY wrong-tier guard -- scene
+matching alone cannot tell Attuned and Ascended apart. This is recorded here
+and repeated as a comment on the registry's `MaxAttunedHp` field.
+
+**Arena:** walls corroborated by two independent visits reading identically
+(min=11.19, max=45.70 in both the first fight visit and the dedicated
+measurement visit). Two intermediate fight visits read narrower --
+12.49-30.13 and 23.78-45.37 -- because the walls were never pressed during
+those visits; not used:
+
+```
+Knight X at left wall (two visits agree):  11.19
+Knight X at right wall (two visits agree): 45.70
+Arena center X    = (11.19 + 45.70) / 2 = 28.45
+Arena half-width  = (45.70 - 11.19) / 2 = 17.26
+```
+
+**Floor:** 27.40 identical in every visit -- the floor is FLAT.
+
+**Arena top / height:** the first visit's ceiling-press top read 42.81; the
+dedicated ceiling-press visit read lower, 40.71. Both are recorded; the
+maximum across visits, 42.81, is used as the arena top (consistent with the
+Hornet/Gruz/Gorb/Soul Warrior/Marmu convention of taking the highest
+measured top), giving:
+
+```
+Arena top (maximum across visits): 42.81
+Arena height = 42.81 - 27.40 = 15.41
+```
+
+**Statue:** settled menu-open readings 52.07, 52.07, 52.07 (no outliers).
+`StatueX = 52.07` -- the macro's +/-0.5 settle window (51.57-52.57) contains
+all settled readings (Gruz 28.0->28.6 lesson satisfied, so no post-hoc nudge
+is needed here).
+
+**HP:** Max HP 260 Attuned (three sightings across both sessions,
+consistent), 560 Ascended (user-identified third fight, same scene as
+Attuned -- see the scene/tier note above) -> mod ceiling
+`MaxAttunedHp = 300` (above 260, below 560). Because this boss has no
+Ascended `_V` scene, this ceiling is the load-bearing wrong-tier guard, not
+just a backstop alongside scene matching. `TierIndex = 0`, re-verify at this
+statue during smoke (registry comment convention).
+
+**Projectile:** `NeedleName = null`. All `GG_False_Knight` projectile
+candidates are per-shot clones: `Falling Barrel(Clone)` (24 instances),
+`Shockwave Spurt(Clone)` (52 instances), `Shockwave Spurt L(Clone)` (80
+instances). None is a stable single-instance object, so none is trackable by
+the mod's find-by-name mechanism (same pattern as Gorb's `Shot Slug
+Spear(Clone)` and Soul Warrior's `Hero Hurter`). The falling debris in
+particular reads as projectile-shaped but the high instance count marks it
+as per-drop clones, not a persistent object worth tracking.

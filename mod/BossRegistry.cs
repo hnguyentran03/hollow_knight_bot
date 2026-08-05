@@ -126,6 +126,27 @@ namespace HKRLBot
                     TierIndex = 0,   // re-verify at this statue during smoke
                     NeedleName = null,   // no projectile candidates; evidence in DISCOVERED.md section 10
                 },
+                // Measured 2026-08-05, DISCOVERED.md section 11.
+                // Attuned max HP 260, Ascended 560, SAME scene as Attuned
+                // (GG_False_Knight) -- unlike every other registered boss,
+                // this boss's tiers share one scene, so the scene name
+                // cannot distinguish them. MaxAttunedHp (ceiling 300) is
+                // therefore the ONLY wrong-tier guard for this boss.
+                ["false_knight"] = new BossSpec
+                {
+                    Id = "false_knight",
+                    Scene = "GG_False_Knight",
+                    ObjectName = "False Knight New",
+                    FsmName = "FalseyControl",
+                    // Settled menu-open readings 52.07, 52.07, 52.07 (no
+                    // outliers); the macro's +/-0.5 settle window
+                    // (51.57-52.57) contains all settled readings (Gruz
+                    // 28.0->28.6 lesson satisfied).
+                    StatueX = 52.07f,
+                    MaxAttunedHp = 300,
+                    TierIndex = 0,   // re-verify at this statue during smoke
+                    NeedleName = null,   // projectiles are per-shot clones; evidence in DISCOVERED.md section 11
+                },
             };
 
         // The boss the current/next episode fights. Defaults to hornet1 so

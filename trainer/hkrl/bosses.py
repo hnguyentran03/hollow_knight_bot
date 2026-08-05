@@ -114,6 +114,30 @@ BOSSES = {
         floor_y=10.40,
         arena_height=12.69,
     ),
+    # False Knight (Hall of Gods, Attuned). States and arena measured
+    # 2026-08-05, DISCOVERED.md section 11 (walls 11.19/45.70, floor 27.40,
+    # top 42.81). Main FSM "FalseyControl".
+    "false_knight": BossSpec(
+        id="false_knight",
+        fsm_states=(
+            "Start Fall", "State 1", "First Idle", "Jump Antic", "Rise",
+            "Fall", "Idle", "JA Antic", "JA Rise", "JA Fall", "JA Hit",
+            "JA Recoil 2", "Turn R", "S Attack Antic", "S Attack Recover",
+            "Run Antic", "Run", "JA Recoil", "JA End", "S Antic", "S Rise",
+            "S Fall", "S Land", "Stun In Air", "Pause Short", "Open Uuup",
+            "Opened", "Hit", "Recover", "Idle Pause", "Rage Jump Antic",
+            "Rise 2", "Fall 2", "State 2", "R Attack Antic", "Rage",
+            "Particle Pause", "Anim End", "Stun Land", "Rage End",
+            "Death Open", "Opened 2", "Hit 2", "Death Anim Start", "Steam",
+            "Ready", "Blow", "Death Head Land", "Cough", "S Attack", "Slam",
+            "Stun Fail", "Turn L", "JA Slam",
+            "UNKNOWN",
+        ),
+        arena_center_x=28.45,
+        arena_half_w=17.26,
+        floor_y=27.40,
+        arena_height=15.41,
+    ),
 }
 
 
