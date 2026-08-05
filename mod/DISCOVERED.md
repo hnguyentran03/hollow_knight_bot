@@ -651,3 +651,48 @@ the mod's find-by-name mechanism (same pattern as Gorb's `Shot Slug
 Spear(Clone)` and Soul Warrior's `Hero Hurter`). The falling debris in
 particular reads as projectile-shaped but the high instance count marks it
 as per-drop clones, not a persistent object worth tracking.
+
+---
+
+## 12. Workshop statue levels and stand Y
+
+`GG_Workshop` (the Godhome hub) is not a single flat floor -- it has two
+levels. A smoke-gorb run surfaced this the hard way: the reset macro walked
+to the ground-floor Gorb `StatueX` (x=126) and stood there pressing Up, but
+the challenge menu never opened -- every 22.5s reset budget expired with the
+Knight stuck at ground level while the actual Gorb statue sits one level up
+(2026-08-05). Investigating confirmed the workshop has a ground floor
+(Hornet, Gruz Mother, and False Knight's statues) and an upper walkway
+(Gorb, Marmu, and Soul Warrior's statues), and that walking alone cannot
+cross between them -- a fix needs a teleport, not a longer walk.
+
+A dedicated measurement session (2026-08-05, after the knightY logger
+change) read the statue-stand positions with Y:
+
+```
+Gorb:         knightX=126.21  knightY=36.41
+Marmu:        knightX=91.35   knightY=36.41
+Soul Warrior: knightX=37.19   knightY=36.41
+False Knight: knightX=55.19   knightY=6.41   (ground floor confirmed)
+```
+
+The upper walkway is flat: all three upper stands read y=36.41. False
+Knight's reading, y=6.41, matches the ground floor's measured 6.40, so he
+(along with Hornet and Gruz Mother, also ground-floor) keeps the `StatueY`
+NaN default and the proven walk-only path -- no upper-level teleport is
+needed or set for those three.
+
+**Teleport mechanism:** `BossSpec.StatueY` defaults to `float.NaN`. When a
+boss's `StatueY` is set (not NaN), the reset macro teleports the Knight to
+`(StatueX, StatueY)` once per reset attempt before approaching the statue,
+instead of relying on the walk-only navigation used by the ground-floor
+bosses. `gorb`, `marmu`, and `soul_warrior` now carry `StatueY = 36.41f`,
+using this mechanism to reach the upper walkway.
+
+**X-spread observation:** this same measurement session re-read `StatueX`
+for two bosses already registered and found the interact region spans
+several units, not a single point -- Soul Warrior's menu opened at both
+34.01 and 37.19, False Knight's at both 52.07 and 55.19. The registered
+`StatueX` values (34.01 for Soul Warrior, 52.07 for False Knight) remain
+the settled multi-reading choices from their original discovery sessions
+(sections 9 and 11) and are unchanged by this session's readings.

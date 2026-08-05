@@ -92,6 +92,8 @@ namespace HKRLBot
                     // window around 126.23 (125.73-126.73) contains all of
                     // them (Gruz 28.0->28.6 lesson satisfied).
                     StatueX = 126.23f,
+                    // upper-walkway stand, DISCOVERED.md section 12
+                    StatueY = 36.41f,
                     MaxAttunedHp = 700,
                     TierIndex = 0,   // re-verify at this statue during smoke
                     // No trackable projectile: "Shot Slug Spear(Clone)" is
@@ -113,6 +115,7 @@ namespace HKRLBot
                     // window around 34.01 (33.51-34.51) contains all settled
                     // readings (Gruz 28.0->28.6 lesson satisfied).
                     StatueX = 34.01f,
+                    StatueY = 36.41f,
                     MaxAttunedHp = 800,
                     TierIndex = 0,   // re-verify at this statue during smoke
                     NeedleName = null,   // no persistent projectile; evidence in DISCOVERED.md section 9
@@ -130,6 +133,7 @@ namespace HKRLBot
                     // window around 91.34 (90.84-91.84) contains all settled
                     // readings (Gruz 28.0->28.6 lesson satisfied).
                     StatueX = 91.34f,
+                    StatueY = 36.41f,
                     MaxAttunedHp = 450,
                     TierIndex = 0,   // re-verify at this statue during smoke
                     NeedleName = null,   // no projectile candidates; evidence in DISCOVERED.md section 10
