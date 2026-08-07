@@ -16,11 +16,24 @@ def obs(kx=20.0, khp=9, bhp=900, boss_state="Idle", **kw):
 
 
 def state(o, done=False, won=False):
+    # No scene here: FakeGame stamps a synthetic one per the reset's boss
+    # at send time (_stamp); a test that needs a specific scene puts it in
+    # the frame's info itself.
     return {"type": "state", "obs": o, "done": done,
-            "info": {"won": won, "scene": "GG_Hornet_1", "attempt": 1}}
+            "info": {"won": won, "attempt": 1}}
 
 
 class FakeGame:
+    @staticmethod
+    def _stamp(frame, boss):
+        # Synthetic Godhome-shaped scene for the boss the reset requested.
+        # Frames that script their own scene keep it -- that's how tests
+        # exercise scene-sensitive behavior deliberately.
+        info = frame.get("info")
+        if isinstance(info, dict) and "scene" not in info:
+            info["scene"] = f"GG_{boss}"
+        return frame
+
     def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, version=2, bosses=(DEFAULT_BOSS, "gruz_mother")):
         self.episodes = [list(ep) for ep in episodes]
         # port=0 (default) binds an ephemeral port, same as before; a caller
@@ -108,6 +121,7 @@ class FakeGame:
 
             send({"type": "hello", "version": self.version})
             ep = None
+            current_boss = None
             while True:
                 line = f.readline()
                 if not line:
@@ -128,10 +142,11 @@ class FakeGame:
                         self.fail_resets -= 1
                         conn.shutdown(socket.SHUT_RDWR)
                         return
+                    current_boss = boss
                     ep = self.episodes.pop(0)
-                    send(ep.pop(0))
+                    send(self._stamp(ep.pop(0), current_boss))
                 elif msg["type"] == "action":
-                    send(ep.pop(0))
+                    send(self._stamp(ep.pop(0), current_boss))
                 elif msg["type"] == "ping":
                     # Mirrors the mod's liveness ping handling: answered in
                     # the read slot, never treated as a protocol violation.
