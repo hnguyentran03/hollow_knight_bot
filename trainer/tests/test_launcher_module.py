@@ -480,7 +480,7 @@ def test_delete_requires_a_run_id(tmp_path):
 def _fake_boss(monkeypatch, boss_id="testboss"):
     from hkrl.bosses import BOSSES, BossSpec
     monkeypatch.setitem(BOSSES, boss_id, BossSpec(
-        id=boss_id, fsm_states=("Idle", "UNKNOWN"),
+        id=boss_id, display_name="Test Boss", fsm_states=("Idle", "UNKNOWN"),
         arena_center_x=0.0, arena_half_w=1.0, floor_y=0.0, arena_height=1.0))
     return boss_id
 

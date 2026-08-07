@@ -58,8 +58,13 @@ class _Handler(BaseHTTPRequestHandler):
                     "gen_every": 15_000, "batch_size": 64, "n_epochs": 5,
                 },
                 # Registry-driven, so the boss picker never drifts from what
-                # the launcher will actually accept.
-                "bosses": sorted(BOSSES),
+                # the launcher will actually accept. {id, name} pairs sorted
+                # by display name; the page renders names, submits ids.
+                "bosses": [
+                    {"id": b.id, "name": b.display_name}
+                    for b in sorted(BOSSES.values(),
+                                    key=lambda b: b.display_name)
+                ],
             })
         elif path == "/api/launcher/log":
             query = parse_qs(urlsplit(self.path).query)
