@@ -372,3 +372,367 @@ verified there.
 `Charge Recover R` during the first live gruz run -- the discovery fights
 never saw a right-wall charge recovery. Added to the `gruz_mother`
 `fsm_states` (17 recorded states + UNKNOWN).
+
+## 8. Gorb FSM states, arena, statue, and HP
+
+Recorded 2026-08-05 with the F4 `DiscoveryLogger`, plus per-visit analysis of
+the raw ModLog, plus two user-supplied edge readings (arena has no side
+walls -- see below). Scene (Attuned): `GG_Ghost_Gorb` (Ascended:
+`GG_Ghost_Gorb_V`). Boss GameObject: `Ghost Warrior Slug`. Main FSM:
+**`Attacking`**, 9 distinct states in first-seen order, the FSM that cycles
+attack-like states (Antic/Attack/Recover) per the parser guidance:
+
+```
+Init, Wait, Antic, Attack, Recover, Damaged, Double Pause, Anim, Triple Pause
+```
+
+A `Movement` FSM on the same object (`Warp In`, `Hover`, `Attacking`,
+`Warp Check`) is warp/hover plumbing and is not transcribed (same precedent
+as Gruz's untranscribed `bouncer_control`). Other minor FSMs seen and not
+transcribed: `Distance Attack` (`Close`/`Away`), `Warp messenger` (`Wait`),
+`Broadcast Ghost Death` (`Idle`).
+
+**Arena edge-override provenance:** the arena has no side walls -- the floor
+ends in lethal drops -- so the DiscoveryLogger's knight-X extremes include
+falls past the edges (per-visit final ranges 42.44-68.78, 32.29-79.38,
+42.61-69.70), which are not usable as wall readings. Instead the user read
+the pre-drop edge X values directly off the overlay and supplied them:
+
+```
+Left edge X (overlay read):  44.14
+Right edge X (overlay read): 67.87
+Floor Y (all three Attuned visits, settled): 33.40
+Arena center X    = (44.14 + 67.87) / 2 = 56.0    (56.005)
+Arena half-width  = (67.87 - 44.14) / 2 = 11.87   (11.865)
+```
+
+**Arena top / height:** the per-visit ceiling-press tops were 38.51, 43.16,
+and 44.24; the highest across visits, 44.24, is used as the arena top
+(consistent with the Hornet/Gruz convention of taking the highest measured
+top), giving:
+
+```
+Arena top (highest across visits): 44.24
+Arena height = 44.24 - 33.40 = 10.84
+```
+
+The lower per-visit tops (38.51, 43.16) corroborate a height in the same
+ballpark (~10) rather than indicating a measurement error.
+
+**Statue:** settled menu-open readings 126.24, 126.25, 126.22, 126.23
+(first-approach outlier 134.66 excluded), giving `StatueX = 126.23`. That
+value later proved to be a left-edge-only reading -- all four came from one
+standing spot at the interact region's left edge, so the settle window
+straddled the edge and the menu failed to open in smoke.
+Superseded by the section 12 smoke-gorb-2 addendum: registered value is
+`StatueX = 126.8`.
+
+**HP:** Max HP 650 Attuned (three visits, consistent), 1000 Ascended
+(`GG_Ghost_Gorb_V`) -> mod ceiling `MaxAttunedHp = 700` (same margin style as
+Gruz's 650/945 -> 700). `TierIndex = 0`, re-verify at this statue during
+smoke (registry comment convention).
+
+**Projectile:** `NeedleName = null`. `Shot Slug Spear(Clone)` was logged
+with 96 distinct instance ids in `GG_Ghost_Gorb` -- per-shot clones, not
+trackable by the mod's find-by-name mechanism. `Spike Collider` /
+`Spike Collider (1)` (3 and 3 instances) are arena hazards, not a boss
+projectile.
+
+## 9. Soul Warrior FSM states, arena, statue, and HP
+
+Recorded 2026-08-05 with the F4 `DiscoveryLogger`, plus per-visit analysis of
+the raw ModLog. Scene (Attuned): `GG_Mage_Knight` (Ascended:
+`GG_Mage_Knight_V`). Boss GameObject: `Mage Knight`. Main FSM (named after
+the object): **`Mage Knight`**, 20 distinct states in first-seen order:
+
+```
+GG Pause, Up Tele, Stomp Antic, Stomp Air, Stomp Recover, Idle, Slash Antic,
+Dash, Slash Recover, Tele Antic, Side Tele, Shoot Antic, Shoot, Shoot CD,
+Slash, Televade, Evade, Stomp Slash, Evade Antic, Evade Recover
+```
+
+In the Ascended fight only, four `Mage Balloon Spawner (N)` objects (hp 13
+each, FSM `Control`: `Spawn` / `Chase - In Sight`) appeared -- Ascended-only
+summons, not part of the Attuned fight, and not transcribed (same precedent
+as Gruz's untranscribed `bouncer_control` and Gorb's untranscribed
+`Movement`).
+
+**Arena:** two independent Attuned visits agree exactly on the walls --
+both read min=35.01, max=58.94 (wall-pressed, corroborated across visits):
+
+```
+Knight X at left wall (both visits):  35.01
+Knight X at right wall (both visits): 58.94
+Floor Y (lowest grounded reading across visits: 5.39, 5.40, 5.40): 5.39
+Arena center X    = (35.01 + 58.94) / 2 = 46.97
+Arena half-width  = (58.94 - 35.01) / 2 = 11.96
+```
+
+**Arena top / height:** visit 1's ceiling-press top was 19.09, visit 2's was
+lower at 14.03; the highest across visits, 19.09, is used as the arena top
+(consistent with the Hornet/Gruz/Gorb convention of taking the highest
+measured top -- a tall arena covering the knight's aerial reach mid-fight),
+giving:
+
+```
+Arena top (highest across visits): 19.09
+Arena height = 19.09 - 5.39 = 13.70
+```
+
+**Statue:** settled menu-open readings 34.01, 34.01 (first-approach outlier
+37.12 excluded), giving `StatueX = 34.01`. That value later proved to be a
+left-edge-only reading -- the interact region spans several units (section
+12's X-spread observation), so a settle window centered on it straddled the
+region's edge.
+Superseded by the section 12 smoke-gorb-2 addendum: registered value is
+`StatueX = 35.6`.
+
+**HP:** Max HP 750 Attuned (two visits, consistent), 1000 Ascended
+(`GG_Mage_Knight_V`) -> mod ceiling `MaxAttunedHp = 800` (same margin style
+as Gruz's 650/945 -> 700 and Gorb's 650/1000 -> 700). `TierIndex = 0`,
+re-verify at this statue during smoke (registry comment convention).
+
+**Projectile (`NeedleName` decision):** `NeedleName = null`. The only
+projectile candidate in `GG_Mage_Knight` was `Hero Hurter`, logged with 3
+distinct instance ids -- multiple instances, not a persistent single-instance
+object, so not trackable by the mod's find-by-name mechanism. No dagger-like
+single-instance candidate appeared. This is a measured absence, not a gap in
+the search: the same discovery session's fixture check confirmed the logger
+correctly catches persistent single-instance projectiles (Hornet's `Needle`,
+instances=1), so the 3-instance reading on `Hero Hurter` reflects the boss's
+actual per-shot-clone behavior. The FSM one-hot (`Shoot Antic` / `Shoot`)
+still telegraphs shots -- the spec's fallback, same as Gorb's.
+
+**Teleport discontinuities:** boss X/Y readings jump discontinuously between
+reads during `Up Tele` and `Side Tele` states -- expected (the boss is
+teleporting), not a reader bug. No trainer change needed.
+
+## 10. Marmu FSM states, arena, statue, and HP
+
+Recorded 2026-08-05 with the F4 `DiscoveryLogger`, plus per-visit analysis of
+the raw ModLog, including a dedicated clean measurement visit. Scene
+(Attuned): `GG_Ghost_Marmu` (Ascended: `GG_Ghost_Marmu_V`). Boss GameObject:
+`Ghost Warrior Marmu`. Main FSM: **`Control`**, 5 distinct states in
+first-seen order:
+
+```
+Start Pause, Antic, Chase, Unroll, Warp Out 2
+```
+
+The fifth state, `Warp Out 2`, surfaced only in the final (dedicated
+measurement) visit -- the plain fight visits never showed it. A
+`Broadcast Ghost Death` FSM (`Idle`) on the same object is death plumbing and
+is not transcribed (same precedent as Gruz's untranscribed
+`bouncer_control`).
+
+**Arena:** walls corroborated by two independent visits reading identically
+(min=51.27, max=88.73 in both the first fight visit and the dedicated
+measurement visit). An intermediate fight visit read narrower, 60.53-73.02,
+because the walls were never pressed during that visit -- not used:
+
+```
+Knight X at left wall (two visits agree):  51.27
+Knight X at right wall (two visits agree): 88.73
+Arena center X    = (51.27 + 88.73) / 2 = 70.0
+Arena half-width  = (88.73 - 51.27) / 2 = 18.73
+```
+
+**Floor:** readings 10.40/10.41 across visits -- the floor is FLAT. The
+spec's curved-floor caveat (grounded Y varying across the floor, requiring
+the lowest settled reading plus an approximate-normalization note) did not
+materialize here; `floor_y = 10.40` is exact, not an approximation.
+
+**Arena top / height:** the first visit's ceiling-press top read 23.09; the
+dedicated ceiling-press visit read lower, 22.09. Both are recorded; the
+maximum across visits, 23.09, is used as the arena top (consistent with the
+Hornet/Gruz/Gorb/Soul Warrior convention of taking the highest measured
+top), giving:
+
+```
+Arena top (maximum across visits): 23.09
+Arena height = 23.09 - 10.40 = 12.69
+```
+
+**Statue:** settled menu-open readings 91.34, 91.34 (first-approach outlier
+94.52 excluded), giving `StatueX = 91.34`. That value later proved to be a
+left-edge-only reading -- the interact region spans several units (section
+12's X-spread observation), so a settle window centered on it straddled the
+region's edge.
+Superseded by the section 12 smoke-gorb-2 addendum: registered value is
+`StatueX = 92.9`.
+
+**HP:** Max HP 416 Attuned (three visits, consistent), 600 Ascended
+(`GG_Ghost_Marmu_V`) -> mod ceiling `MaxAttunedHp = 450` (same margin style
+as Gruz's 650/945 -> 700, Gorb's 650/1000 -> 700, and Soul Warrior's
+750/1000 -> 800). `TierIndex = 0`, re-verify at this statue during smoke
+(registry comment convention).
+
+**Projectile:** `NeedleName = null`. No projectile candidates at all
+appeared in `GG_Ghost_Marmu` (Attuned). A `Thorn Collider` (1 instance)
+appeared only in `GG_Ghost_Marmu_V` -- an Ascended-only arena hazard,
+irrelevant to the Attuned fight and not a boss projectile.
+
+## 11. False Knight FSM states, arena, statue, and HP
+
+Recorded 2026-08-05 with the F4 `DiscoveryLogger`, plus per-visit analysis of
+the raw ModLog, including a dedicated clean measurement visit, plus the
+user's identification of which fight ran at which tier. Boss GameObject:
+`False Knight New`. Main FSM: **`FalseyControl`**, 54 distinct states in
+first-seen order:
+
+```
+Start Fall, State 1, First Idle, Jump Antic, Rise, Fall, Idle, JA Antic,
+JA Rise, JA Fall, JA Hit, JA Recoil 2, Turn R, S Attack Antic,
+S Attack Recover, Run Antic, Run, JA Recoil, JA End, S Antic, S Rise,
+S Fall, S Land, Stun In Air, Pause Short, Open Uuup, Opened, Hit, Recover,
+Idle Pause, Rage Jump Antic, Rise 2, Fall 2, State 2, R Attack Antic,
+Rage, Particle Pause, Anim End, Stun Land, Rage End, Death Open, Opened 2,
+Hit 2, Death Anim Start, Steam, Ready, Blow, Death Head Land, Cough,
+S Attack, Slam, Stun Fail, Turn L, JA Slam
+```
+
+By far the largest state list of any registered boss so far -- transcribed
+carefully against the parser output, since a single dropped or reordered
+state would silently corrupt the observation one-hot.
+
+Two secondary FSMs are present but not transcribed into the state list: a
+`Check Health` FSM (`Check`) on `False Knight New` itself, and a separate
+`Head` GameObject (hp=40, FSM `Health Check`: `Check 1`) present in every
+fight at both tiers -- the stagger-phase target that gets exposed when the
+boss's armor breaks. Win detection is the `Die` hook on `False Knight New`;
+the smoke run confirms it fires through his death sequence (same convention
+as the untranscribed secondaries on Gruz, Gorb, Soul Warrior, and Marmu).
+
+**Scene / tier (important -- differs from every other registered boss):**
+Scene is `GG_False_Knight` for BOTH Attuned and Ascended -- the user's third
+fight was Ascended and still logged `scene=GG_False_Knight`; no `_V` scene
+exists anywhere in the log. Every other boss registered so far gets an
+Ascended `_V` scene that backstop A (scene match) can use to reject a
+wrong-tier fight; False Knight has none. Consequence: for this boss, the HP
+ceiling (backstop B, `MaxAttunedHp`) is the ONLY wrong-tier guard -- scene
+matching alone cannot tell Attuned and Ascended apart. This is recorded here
+and repeated as a comment on the registry's `MaxAttunedHp` field.
+
+**Arena:** walls corroborated by two independent visits reading identically
+(min=11.19, max=45.70 in both the first fight visit and the dedicated
+measurement visit). Two intermediate fight visits read narrower --
+12.49-30.13 and 23.78-45.37 -- because the walls were never pressed during
+those visits; not used:
+
+```
+Knight X at left wall (two visits agree):  11.19
+Knight X at right wall (two visits agree): 45.70
+Arena center X    = (11.19 + 45.70) / 2 = 28.45
+Arena half-width  = (45.70 - 11.19) / 2 = 17.26
+```
+
+**Floor:** 27.40 identical in every visit -- the floor is FLAT.
+
+**Arena top / height:** the first visit's ceiling-press top read 42.81; the
+dedicated ceiling-press visit read lower, 40.71. Both are recorded; the
+maximum across visits, 42.81, is used as the arena top (consistent with the
+Hornet/Gruz/Gorb/Soul Warrior/Marmu convention of taking the highest
+measured top), giving:
+
+```
+Arena top (maximum across visits): 42.81
+Arena height = 42.81 - 27.40 = 15.41
+```
+
+**Statue:** settled menu-open readings 52.07, 52.07, 52.07 (no outliers),
+giving `StatueX = 52.07`. That value later proved to be a left-edge-only
+reading -- the interact region spans several units (section 12's X-spread
+observation), so a settle window centered on it straddled the region's edge.
+Superseded by the section 12 smoke-gorb-2 addendum: registered value is
+`StatueX = 53.6`.
+
+**HP:** Max HP 260 Attuned (three sightings across both sessions,
+consistent), 560 Ascended (user-identified third fight, same scene as
+Attuned -- see the scene/tier note above) -> mod ceiling
+`MaxAttunedHp = 300` (above 260, below 560). Because this boss has no
+Ascended `_V` scene, this ceiling is the load-bearing wrong-tier guard, not
+just a backstop alongside scene matching. `TierIndex = 0`, re-verify at this
+statue during smoke (registry comment convention).
+
+**Projectile:** `NeedleName = null`. All `GG_False_Knight` projectile
+candidates are per-shot clones: `Falling Barrel(Clone)` (24 instances),
+`Shockwave Spurt(Clone)` (52 instances), `Shockwave Spurt L(Clone)` (80
+instances). None is a stable single-instance object, so none is trackable by
+the mod's find-by-name mechanism (same pattern as Gorb's `Shot Slug
+Spear(Clone)` and Soul Warrior's `Hero Hurter`). The falling debris in
+particular reads as projectile-shaped but the high instance count marks it
+as per-drop clones, not a persistent object worth tracking.
+
+---
+
+## 12. Workshop statue levels and stand Y
+
+`GG_Workshop` (the Godhome hub) is not a single flat floor -- it has two
+levels. A smoke-gorb run surfaced this the hard way: the reset macro walked
+to the ground-floor Gorb `StatueX` (x=126) and stood there pressing Up, but
+the challenge menu never opened -- every 22.5s reset budget expired with the
+Knight stuck at ground level while the actual Gorb statue sits one level up
+(2026-08-05). Investigating confirmed the workshop has a ground floor
+(Hornet, Gruz Mother, and False Knight's statues) and an upper walkway
+(Gorb, Marmu, and Soul Warrior's statues), and that walking alone cannot
+cross between them -- a fix needs a teleport, not a longer walk.
+
+A dedicated measurement session (2026-08-05, after the knightY logger
+change) read the statue-stand positions with Y:
+
+```
+Gorb:         knightX=126.21  knightY=36.41
+Marmu:        knightX=91.35   knightY=36.41
+Soul Warrior: knightX=37.19   knightY=36.41
+False Knight: knightX=55.19   knightY=6.41   (ground floor confirmed)
+```
+
+The upper walkway is flat: all three upper stands read y=36.41. False
+Knight's reading, y=6.41, matches the ground floor's measured 6.40, so he
+(along with Hornet and Gruz Mother, also ground-floor) keeps the `StatueY`
+NaN default and the proven walk-only path -- no upper-level teleport is
+needed or set for those three.
+
+**Teleport mechanism:** `BossSpec.StatueY` defaults to `float.NaN`. When a
+boss's `StatueY` is set (not NaN), the reset macro teleports the Knight to
+`(StatueX, StatueY)` once per reset attempt before approaching the statue,
+instead of relying on the walk-only navigation used by the ground-floor
+bosses. `gorb`, `marmu`, and `soul_warrior` now carry `StatueY = 36.41f`,
+using this mechanism to reach the upper walkway.
+
+**X-spread observation:** this same measurement session re-read `StatueX`
+for two bosses already registered and found the interact region spans
+several units, not a single point -- Soul Warrior's menu opened at both
+34.01 and 37.19, False Knight's at both 52.07 and 55.19. The registered
+`StatueX` values (34.01 for Soul Warrior, 52.07 for False Knight) remain
+the settled multi-reading choices from their original discovery sessions
+(sections 9 and 11) and are unchanged by this session's readings.
+
+**Addendum (smoke-gorb-2, 2026-08-05):** with the teleport in place, the
+reset macro reached the upper walkway but still failed to open the
+challenge menu -- it parked the knight at 125.90-126.06 and every reset
+budget expired there. Diagnosis: every registered `StatueX` for the four
+new bosses came from menu-open readings taken at the spot where the user
+stopped walking when the prompt first appeared, i.e. the interact
+region's left edge, so the macro's +/-0.5 settle window straddled the
+edge instead of sitting inside the region -- the same failure mode Gruz
+Mother's 28.0->28.6 fix corrected (section 7). The X-spread observation
+above supplied the second, right-edge reading needed to fix two of the
+four (`soul_warrior` and `false_knight`). `marmu` got no second reading
+from that session -- its stand-measurement table entry, 91.35, is the
+left edge again -- so its right-edge reading is section 10's
+first-approach 94.52, originally excluded as an outlier for the settled
+stand and reinterpreted here as edge evidence: under the
+interact-region-spans-units finding, a first-approach menu-open reading
+is a reading at the region's far edge, and 94.52 is the only right-side
+reading available for Marmu. `gorb` had only the one left-edge reading
+and its fix is extrapolated by the same margin. New values:
+
+```
+gorb:          evidence 126.21-126.25 (left edge only) -> StatueX = 126.8  (extrapolated)
+marmu:         evidence 91.34 and 94.52                -> StatueX = 92.9   (midpoint)
+soul_warrior:  evidence 34.01 and 37.19                -> StatueX = 35.6   (midpoint)
+false_knight:  evidence 52.07 and 55.19                -> StatueX = 53.6   (midpoint)
+```
+
+`hornet1` and `gruz_mother` are unaffected -- both already proven working.

@@ -761,8 +761,6 @@ function render() {
     tsTile.appendChild(mini);
   }
   tiles.appendChild(tsTile);
-  tiles.appendChild(tile("Boss",
-    run.config && run.config.boss ? run.config.boss : "hornet1"));
   tiles.appendChild(tile("Instances",
     run.config && run.config.instances ? String(run.config.instances) : "—",
     "game clients"));

@@ -15,7 +15,11 @@ SAMPLE = """\
 [INFO]:[HKRLBot] - DISCOVERY state go='Giant Fly' fsm='Mega Fly' state='Fly'
 [INFO]:[HKRLBot] - DISCOVERY arena scene=GG_Gruz_Mother kxRange=[10.00, 20.00] floorY=5.50 maxKy=12.50
 [INFO]:[HKRLBot] - DISCOVERY arena scene=GG_Gruz_Mother kxRange=[8.00, 30.00] floorY=5.50 maxKy=14.50
-[INFO]:[HKRLBot] - DISCOVERY statue knightX=55.30 scene=GG_Workshop
+[INFO]:[HKRLBot] - DISCOVERY projectile go='Needle' id=1234 scene=GG_Hornet_1
+[INFO]:[HKRLBot] - DISCOVERY projectile go='Shot Gruz' id=-500 scene=GG_Gruz_Mother
+[INFO]:[HKRLBot] - DISCOVERY projectile go='Shot Gruz' id=-501 scene=GG_Gruz_Mother
+[INFO]:[HKRLBot] - DISCOVERY statue knightX=55.30 knightY=6.40 scene=GG_Workshop
+[INFO]:[HKRLBot] - DISCOVERY statue knightX=62.21 scene=GG_Workshop
 """.splitlines()
 
 
@@ -30,7 +34,7 @@ def test_summarize_tracks_peak_hp_and_last_arena_and_statue():
     assert s["candidates"]["Giant Fly", "GG_Gruz_Mother"] == 660
     a = s["arenas"]["GG_Gruz_Mother"]
     assert (a["min"], a["max"], a["floor"], a["top"]) == (8.0, 30.0, 5.5, 14.5)
-    assert s["statue_xs"] == [55.3]
+    assert s["statues"] == [(55.3, 6.4), (62.21, None)]
 
 
 def test_report_derives_registry_values():
@@ -39,3 +43,21 @@ def test_report_derives_registry_values():
     assert "half_w=11.00" in out        # (30-8)/2
     assert "height=9.00" in out         # 14.5-5.5
     assert "go='Giant Fly' scene=GG_Gruz_Mother peak hp=660" in out
+
+
+def test_report_lists_statue_readings_with_y_when_present():
+    out = report(summarize(SAMPLE))
+    assert "55.30 (y 6.40)" in out
+    assert "62.21 (y unknown)" in out
+
+
+def test_summarize_collects_projectile_instance_ids_per_name_and_scene():
+    s = summarize(SAMPLE)
+    assert s["projectiles"]["Needle", "GG_Hornet_1"] == {1234}
+    assert s["projectiles"]["Shot Gruz", "GG_Gruz_Mother"] == {-500, -501}
+
+
+def test_report_lists_projectile_candidates_with_instance_counts():
+    out = report(summarize(SAMPLE))
+    assert "go='Needle' scene=GG_Hornet_1 instances=1" in out
+    assert "go='Shot Gruz' scene=GG_Gruz_Mother instances=2" in out

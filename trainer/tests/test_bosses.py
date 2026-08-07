@@ -31,3 +31,31 @@ def test_gruz_mother_is_registered_with_its_own_obs_space():
     assert spec.fsm_states[-1] == "UNKNOWN"
     # Different state list -> different obs size -> boss-specific policies.
     assert spec.fsm_states != get_boss("hornet1").fsm_states
+
+
+def test_gorb_is_registered_with_its_own_obs_space():
+    spec = get_boss("gorb")
+    assert spec.id == "gorb"
+    assert spec.fsm_states[-1] == "UNKNOWN"
+    assert spec.fsm_states != get_boss("hornet1").fsm_states
+
+
+def test_soul_warrior_is_registered_with_its_own_obs_space():
+    spec = get_boss("soul_warrior")
+    assert spec.id == "soul_warrior"
+    assert spec.fsm_states[-1] == "UNKNOWN"
+    assert spec.fsm_states != get_boss("hornet1").fsm_states
+
+
+def test_marmu_is_registered_with_its_own_obs_space():
+    spec = get_boss("marmu")
+    assert spec.id == "marmu"
+    assert spec.fsm_states[-1] == "UNKNOWN"
+    assert spec.fsm_states != get_boss("hornet1").fsm_states
+
+
+def test_false_knight_is_registered_with_its_own_obs_space():
+    spec = get_boss("false_knight")
+    assert spec.id == "false_knight"
+    assert spec.fsm_states[-1] == "UNKNOWN"
+    assert spec.fsm_states != get_boss("hornet1").fsm_states

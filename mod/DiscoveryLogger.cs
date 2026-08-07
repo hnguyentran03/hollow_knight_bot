@@ -33,6 +33,8 @@ namespace HKRLBot
         private static readonly Dictionary<int, string> lastState = new Dictionary<int, string>();
         // HealthManager instance ids already reported as candidates.
         private static readonly HashSet<int> seenHm = new HashSet<int>();
+        // DamageHero instance ids already reported as projectile candidates.
+        private static readonly HashSet<int> seenDh = new HashSet<int>();
 
         private static string lastScene = "";
         private static float minKx, maxKx, floorY, maxKy;
@@ -46,6 +48,7 @@ namespace HKRLBot
             {
                 lastState.Clear();
                 seenHm.Clear();
+                seenDh.Clear();
                 lastScene = "";
                 menuWasOpen = false;
                 ResetArena();
@@ -92,6 +95,19 @@ namespace HKRLBot
                 }
             }
 
+            // Projectile candidates: objects that damage the hero but belong
+            // to no enemy (no HealthManager on themselves or any parent) --
+            // boss projectiles and arena hazards. One line per instance id:
+            // a persistent reused object (Hornet's Needle) shows one id per
+            // name across a whole fight, per-shot clones show many. The
+            // NeedleName registry field wants the persistent kind.
+            foreach (var dh in Object.FindObjectsOfType<DamageHero>())
+            {
+                if (dh.GetComponentInParent<HealthManager>() != null) continue;
+                if (seenDh.Add(dh.GetInstanceID()))
+                    mod.Log($"DISCOVERY projectile go='{dh.gameObject.name}' id={dh.GetInstanceID()} scene={scene}");
+            }
+
             var k = mod.Reader.ReadKnight();
             if (k != null)
             {
@@ -106,7 +122,7 @@ namespace HKRLBot
 
                 bool menuOpen = mod.Reader.IsChallengeMenuOpen();
                 if (menuOpen && !menuWasOpen)
-                    mod.Log($"DISCOVERY statue knightX={k.X:F2} scene={scene}");
+                    mod.Log($"DISCOVERY statue knightX={k.X:F2} knightY={k.Y:F2} scene={scene}");
                 menuWasOpen = menuOpen;
             }
         }
