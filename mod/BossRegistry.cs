@@ -27,11 +27,12 @@ namespace HKRLBot
         public float StatueX;
         // Knight's grounded Y standing at this boss's statue in
         // GG_Workshop, measured like StatueX. float.NaN (the default)
-        // means "no measured stand Y; keep the legacy walk-only
+        // means "ground-floor statue; keep the legacy walk-only
         // navigation" -- hornet1, gruz_mother, and false_knight are
-        // ground-floor and already proven working on the walk; the
-        // upper-level Hall of Gods bosses (Gorb, Marmu, Soul Warrior) get
-        // measured values in a follow-up transcription task.
+        // ground-floor and proven working on the walk. The upper-walkway
+        // bosses (gorb, marmu, soul_warrior) carry the measured stand
+        // Y 36.41 (DISCOVERED.md section 12), which the reset macro
+        // teleports to -- the walk cannot climb between floors.
         public float StatueY = float.NaN;
         // Ceiling for backstop B (wrong-difficulty detection): safely above
         // the boss's measured Attuned max HP, below its next tier's.

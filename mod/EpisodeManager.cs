@@ -827,8 +827,10 @@ namespace HKRLBot
 
         // Measured per-boss; see the warning on BossSpec.StatueX (BossRegistry.cs).
         private static float StatueX => BossRegistry.Current.StatueX;
-        // NaN (the default) for every boss until a follow-up transcription
-        // task measures it; see the field comment on BossSpec.StatueY.
+        // NaN for ground-floor bosses (legacy walk-only navigation); the
+        // measured upper-walkway stand Y (36.41, DISCOVERED.md section 12)
+        // for gorb/marmu/soul_warrior, which the teleport below targets.
+        // See the field comment on BossSpec.StatueY (BossRegistry.cs).
         private static float StatueY => BossRegistry.Current.StatueY;
 
         // Retry-prompt confirm pulse (the boss arena scene, dead): hold Jump for
@@ -1046,10 +1048,15 @@ namespace HKRLBot
                     // measured -- see BossRegistry.cs) is the escape hatch:
                     // when it's known, write the knight's position directly
                     // via TeleportKnight instead of trusting a walk to reach
-                    // a floor input alone cannot climb. Gated on: a measured
-                    // StatueY, the menu not already open (a teleport mid-menu
-                    // would be pointless/disruptive), the per-attempt latch
-                    // unset (one teleport per reset attempt -- see
+                    // a floor input alone cannot climb. Gated on: the
+                    // workshop settle window having elapsed (during the
+                    // scene load the knight's transform briefly reads a
+                    // garbage position -- see the step-off comment below --
+                    // and a transient read must not consume the one
+                    // teleport this attempt gets), a measured StatueY, the
+                    // menu not already open (a teleport mid-menu would be
+                    // pointless/disruptive), the per-attempt latch unset
+                    // (one teleport per reset attempt -- see
                     // statueTeleportLatched, reset in Reset()), and the
                     // knight actually away from the stand (so a knight that
                     // already spawned at/near the stand, or that already got
@@ -1061,8 +1068,10 @@ namespace HKRLBot
                     // latch still sets -- no retry this attempt -- and the
                     // legacy walk below continues as backstop, same as a
                     // boss with no measured StatueY at all.
+                    bool settled = elapsed - workshopEnteredAt >= WorkshopSettleSeconds;
                     bool teleportEligible =
-                        !float.IsNaN(StatueY)
+                        settled
+                        && !float.IsNaN(StatueY)
                         && !mod.Reader.IsChallengeMenuOpen()
                         && !statueTeleportLatched
                         && (Mathf.Abs(k.X - StatueX) > 0.4f || Mathf.Abs(k.Y - StatueY) > 1.0f);
@@ -1114,7 +1123,6 @@ namespace HKRLBot
                     // EpisodeManager's ResetMacroBudgetSeconds wall-clock
                     // backstop gives up and logs branch='statue-menu' as the
                     // last attempted branch.
-                    bool settled = elapsed - workshopEnteredAt >= WorkshopSettleSeconds;
                     // Only count a far-from-statue reading as a step-off once
                     // the scene has settled: during the workshop load the
                     // knight's transform briefly reads a garbage position

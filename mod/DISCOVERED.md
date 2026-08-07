@@ -420,9 +420,12 @@ The lower per-visit tops (38.51, 43.16) corroborate a height in the same
 ballpark (~10) rather than indicating a measurement error.
 
 **Statue:** settled menu-open readings 126.24, 126.25, 126.22, 126.23
-(first-approach outlier 134.66 excluded). `StatueX = 126.23` -- the macro's
-+/-0.5 settle window (125.73-126.73) contains all settled readings (Gruz
-28.0->28.6 lesson satisfied, so no post-hoc nudge is needed here).
+(first-approach outlier 134.66 excluded), giving `StatueX = 126.23`. That
+value later proved to be a left-edge-only reading -- all four came from one
+standing spot at the interact region's left edge, so the settle window
+straddled the edge and the menu failed to open in smoke.
+Superseded by the section 12 smoke-gorb-2 addendum: registered value is
+`StatueX = 126.8`.
 
 **HP:** Max HP 650 Attuned (three visits, consistent), 1000 Ascended
 (`GG_Ghost_Gorb_V`) -> mod ceiling `MaxAttunedHp = 700` (same margin style as
@@ -477,9 +480,12 @@ Arena height = 19.09 - 5.39 = 13.70
 ```
 
 **Statue:** settled menu-open readings 34.01, 34.01 (first-approach outlier
-37.12 excluded). `StatueX = 34.01` -- the macro's +/-0.5 settle window
-(33.51-34.51) contains all settled readings (Gruz 28.0->28.6 lesson
-satisfied, so no post-hoc nudge is needed here).
+37.12 excluded), giving `StatueX = 34.01`. That value later proved to be a
+left-edge-only reading -- the interact region spans several units (section
+12's X-spread observation), so a settle window centered on it straddled the
+region's edge.
+Superseded by the section 12 smoke-gorb-2 addendum: registered value is
+`StatueX = 35.6`.
 
 **HP:** Max HP 750 Attuned (two visits, consistent), 1000 Ascended
 (`GG_Mage_Knight_V`) -> mod ceiling `MaxAttunedHp = 800` (same margin style
@@ -548,9 +554,12 @@ Arena height = 23.09 - 10.40 = 12.69
 ```
 
 **Statue:** settled menu-open readings 91.34, 91.34 (first-approach outlier
-94.52 excluded). `StatueX = 91.34` -- the macro's +/-0.5 settle window
-(90.84-91.84) contains all settled readings (Gruz 28.0->28.6 lesson
-satisfied, so no post-hoc nudge is needed here).
+94.52 excluded), giving `StatueX = 91.34`. That value later proved to be a
+left-edge-only reading -- the interact region spans several units (section
+12's X-spread observation), so a settle window centered on it straddled the
+region's edge.
+Superseded by the section 12 smoke-gorb-2 addendum: registered value is
+`StatueX = 92.9`.
 
 **HP:** Max HP 416 Attuned (three visits, consistent), 600 Ascended
 (`GG_Ghost_Marmu_V`) -> mod ceiling `MaxAttunedHp = 450` (same margin style
@@ -630,10 +639,12 @@ Arena top (maximum across visits): 42.81
 Arena height = 42.81 - 27.40 = 15.41
 ```
 
-**Statue:** settled menu-open readings 52.07, 52.07, 52.07 (no outliers).
-`StatueX = 52.07` -- the macro's +/-0.5 settle window (51.57-52.57) contains
-all settled readings (Gruz 28.0->28.6 lesson satisfied, so no post-hoc nudge
-is needed here).
+**Statue:** settled menu-open readings 52.07, 52.07, 52.07 (no outliers),
+giving `StatueX = 52.07`. That value later proved to be a left-edge-only
+reading -- the interact region spans several units (section 12's X-spread
+observation), so a settle window centered on it straddled the region's edge.
+Superseded by the section 12 smoke-gorb-2 addendum: registered value is
+`StatueX = 53.6`.
 
 **HP:** Max HP 260 Attuned (three sightings across both sessions,
 consistent), 560 Ascended (user-identified third fight, same scene as
@@ -706,9 +717,16 @@ stopped walking when the prompt first appeared, i.e. the interact
 region's left edge, so the macro's +/-0.5 settle window straddled the
 edge instead of sitting inside the region -- the same failure mode Gruz
 Mother's 28.0->28.6 fix corrected (section 7). The X-spread observation
-above supplied the second, right-edge reading needed to fix three of the
-four; `gorb` had only the one left-edge reading and its fix is
-extrapolated by the same margin. New values:
+above supplied the second, right-edge reading needed to fix two of the
+four (`soul_warrior` and `false_knight`). `marmu` got no second reading
+from that session -- its stand-measurement table entry, 91.35, is the
+left edge again -- so its right-edge reading is section 10's
+first-approach 94.52, originally excluded as an outlier for the settled
+stand and reinterpreted here as edge evidence: under the
+interact-region-spans-units finding, a first-approach menu-open reading
+is a reading at the region's far edge, and 94.52 is the only right-side
+reading available for Marmu. `gorb` had only the one left-edge reading
+and its fix is extrapolated by the same margin. New values:
 
 ```
 gorb:          evidence 126.21-126.25 (left edge only) -> StatueX = 126.8  (extrapolated)
