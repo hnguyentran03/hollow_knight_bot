@@ -513,6 +513,19 @@ const midnightsBetween = (lo, hi) => {
   return out;
 };
 
+// id -> display name, filled by refreshLauncher() from /api/launcher.
+let bossNameById = {};
+
+// Proper boss name for an id. Falls back to prettifying the id
+// ("gruz_mother" -> "Gruz Mother") for ids the launcher hasn't reported:
+// a render racing the first /api/launcher poll, or a run recorded by an
+// older registry.
+function bossName(id) {
+  if (bossNameById[id]) return bossNameById[id];
+  return id.replace(/_/g, " ").replace(/(\d+)/, " $1").trim()
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
 /* ---------- generic SVG line/scatter chart with crosshair tooltip ---------- */
 function niceTicks(lo, hi, n) {
   if (hi === lo) { hi = lo + 1; }
@@ -732,10 +745,8 @@ function render() {
 
   const gens = run.generations;
   const latest = gens.length ? gens[gens.length - 1] : null;
-  // "gruz_mother" -> "Gruz Mother", "hornet1" -> "Hornet 1".
   const bossId = run.config && run.config.boss ? run.config.boss : "hornet1";
-  const bossDisplay = bossId.replace(/_/g, " ").replace(/(\d+)/, " $1").trim()
-    .replace(/\b\w/g, c => c.toUpperCase());
+  const bossDisplay = bossName(bossId);
   document.getElementById("boss-name").textContent = bossDisplay;
   const damage = latest ? Math.min(1, latest.mean_boss_damage) : 0;
   document.getElementById("boss-fill").style.width = (damage * 100).toFixed(1) + "%";
@@ -924,12 +935,13 @@ async function refreshLauncher() {
   }
   document.getElementById("launch").hidden = false;
   const bossSel = document.getElementById("f-boss");
-  const bosses = data.bosses || ["hornet1"];
-  if ([...bossSel.options].map(o => o.value).join() !== bosses.join()) {
+  const bosses = data.bosses || [];
+  bossNameById = Object.fromEntries(bosses.map(b => [b.id, b.name]));
+  if ([...bossSel.options].map(o => o.value).join() !== bosses.map(b => b.id).join()) {
     bossSel.replaceChildren();
     for (const b of bosses) {
       const opt = document.createElement("option");
-      opt.value = b; opt.textContent = b;
+      opt.value = b.id; opt.textContent = b.name;
       bossSel.appendChild(opt);
     }
     bossSel.value = "hornet1";
@@ -1085,7 +1097,7 @@ async function renderPrevRuns(activeNow) {
     const meta = document.createElement("span");
     meta.className = "prev-run-meta";
     meta.textContent =
-      (r.boss || "hornet1") + " · " +
+      bossName(r.boss || "hornet1") + " · " +
       (r.instances ? r.instances + " instance" + (r.instances === 1 ? "" : "s") + " · " : "") +
       fmtK(r.timestep) + " / " +
       (r.target_timestep ? fmtK(r.target_timestep) : "—") + " steps · " +
