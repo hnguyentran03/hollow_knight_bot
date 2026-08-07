@@ -3,6 +3,8 @@ import json
 import socket
 import threading
 
+from hkrl.bosses import DEFAULT_BOSS
+
 
 def obs(kx=20.0, khp=9, bhp=900, boss_state="Idle", **kw):
     base = {"kx": kx, "ky": 6.0, "kvx": 0.0, "kvy": 0.0, "khp": khp, "soul": 0,
@@ -19,7 +21,7 @@ def state(o, done=False, won=False):
 
 
 class FakeGame:
-    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, version=2, bosses=("hornet1", "gruz_mother")):
+    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, version=2, bosses=(DEFAULT_BOSS, "gruz_mother")):
         self.episodes = [list(ep) for ep in episodes]
         # port=0 (default) binds an ephemeral port, same as before; a caller
         # that needs to stand a fresh fake back up on a specific port (e.g.

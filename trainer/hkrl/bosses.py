@@ -150,6 +150,11 @@ BOSSES = {
     ),
 }
 
+# The boss used when nothing specifies one -- the original fight, kept as
+# the default so pre-multi-boss run configs and muscle memory keep working.
+# A plain id string, not a BossSpec: every consumer wants the id.
+DEFAULT_BOSS = "hornet1"
+
 
 def get_boss(boss_id: str) -> BossSpec:
     try:

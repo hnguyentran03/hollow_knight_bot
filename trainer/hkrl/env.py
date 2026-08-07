@@ -7,7 +7,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from hkrl.bosses import get_boss
+from hkrl.bosses import DEFAULT_BOSS, get_boss
 from hkrl.protocol import Connection, ConnectionClosed, PROTOCOL_VERSION
 from hkrl.reset_metrics import append_reset_span, reset_log_path
 
@@ -91,7 +91,7 @@ class HKEnv(gym.Env):
     # tests, and non-measurement training pay nothing.
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
                  max_steps=2700, timeout=30.0, reset_retries=8,
-                 keepalive=3.0, reset_log_dir=None, boss="hornet1"):
+                 keepalive=3.0, reset_log_dir=None, boss=DEFAULT_BOSS):
         # Resolved before any socket work so an unknown id fails instantly
         # and locally, not after a game connection is already up.
         self.boss = get_boss(boss)

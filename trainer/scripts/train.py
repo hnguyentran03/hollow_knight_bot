@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
 
-from hkrl.bosses import BOSSES, get_boss  # noqa: E402
+from hkrl.bosses import BOSSES, DEFAULT_BOSS, get_boss  # noqa: E402
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
 from hkrl.masking import MaskedRecurrentPPO  # noqa: E402
@@ -76,16 +76,16 @@ def resolve_async_resets(flag, instances: int) -> bool:
 
 
 def resolve_boss(flag: str | None, run_dir: Path | None) -> str:
-    """The boss this session fights. Fresh runs take the flag (default
-    hornet1). A resume takes the run's recorded boss -- the checkpoint's
+    """The boss this session fights. Fresh runs take the flag (default:
+    bosses.DEFAULT_BOSS). A resume takes the run's recorded boss -- the checkpoint's
     observation space is built from it, so it is not overridable: an
     explicit conflicting --boss is a hard error here, with a clear message
     instead of a shape mismatch deep inside model load. Configs from before
-    the boss field read as hornet1."""
+    the boss field read as DEFAULT_BOSS."""
     if run_dir is None:
-        return flag or "hornet1"
+        return flag or DEFAULT_BOSS
     configs = read_jsonl(run_dir / "config.jsonl")
-    recorded = (configs[-1].get("boss") if configs else None) or "hornet1"
+    recorded = (configs[-1].get("boss") if configs else None) or DEFAULT_BOSS
     # A config naming a boss this registry lacks fails here, at the guard,
     # not deep in worker env construction.
     get_boss(recorded)
@@ -363,7 +363,7 @@ def main() -> None:
                          "late-run win-rate slide (observed approx_kl "
                          "~0.15-0.25 without a cap).")
     ap.add_argument("--boss", default=None, choices=sorted(BOSSES),
-                    help="which boss to train against (default: hornet1). "
+                    help=f"which boss to train against (default: {DEFAULT_BOSS}). "
                          "Sets the observation space, so checkpoints are "
                          "boss-specific: a resume always keeps the run's "
                          "recorded boss and refuses a conflicting flag.")
