@@ -74,7 +74,7 @@ namespace HKRLBot
                     stream.WriteTimeout = 10000;
                     reader = new StreamReader(stream);
                     writer = new StreamWriter(stream) { AutoFlush = true };
-                    writer.WriteLine("{\"type\":\"hello\",\"version\":3}");
+                    writer.WriteLine("{\"type\":\"hello\",\"version\":4}");
                 }
                 HKRLBotMod.Instance.Log("Trainer connected");
             }
@@ -148,6 +148,27 @@ namespace HKRLBot
         public void SendError(string message)
         {
             var msg = new JObject { ["type"] = "error", ["message"] = message };
+            var text = msg.ToString(Formatting.None);
+            lock (gate)
+            {
+                try { writer?.WriteLine(text); }
+                catch (IOException) { DropLocked(); }
+            }
+        }
+
+        // Tell the trainer WHY a reset is being abandoned, just before the
+        // Drop() that follows. The scene is the payload that matters: a
+        // budget expiry in a non-Godhome gameplay scene is the wrong-save
+        // boot flake's signature, which the trainer cannot otherwise see
+        // (during a reset macro nothing else is ever written). Same gated,
+        // WriteTimeout-bounded, IOException-drops-cleanly path as SendState.
+        public void SendResetAbort(string reason, string scene, string branch)
+        {
+            var msg = new JObject
+            {
+                ["type"] = "reset_abort", ["reason"] = reason,
+                ["scene"] = scene, ["branch"] = branch
+            };
             var text = msg.ToString(Formatting.None);
             lock (gate)
             {

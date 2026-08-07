@@ -214,3 +214,67 @@ def test_fleet_binds_each_slot_to_its_own_app_across_relaunches(tmp_path):
                         (ports[1], apps[1])]
     finally:
         fleet.stop()
+
+
+# Tests for prepare hook on GameProcess/GameFleet
+class _FakeProc:
+    def poll(self):
+        return 0
+
+
+def _ordering_harness(events, prepare=None):
+    return GameProcess(
+        port=_free_port(), app=Path("/fake"),
+        launch=lambda port, app, visible: (events.append("launch"), _FakeProc())[1],
+        shutdown=lambda procs: events.append("shutdown"),
+        wait_for_port=lambda *a, **k: None,
+        prepare=prepare,
+    )
+
+
+def test_relaunch_runs_prepare_after_shutdown_before_launch():
+    events = []
+    g = _ordering_harness(events, prepare=lambda: events.append("prepare"))
+    g.spawn()
+    events.clear()
+    g.relaunch()
+    assert events == ["shutdown", "prepare", "launch"]
+
+
+def test_relaunch_without_prepare_is_unchanged():
+    events = []
+    g = _ordering_harness(events)
+    g.spawn()
+    events.clear()
+    g.relaunch()
+    assert events == ["shutdown", "launch"]
+
+
+def test_spawn_never_runs_prepare():
+    # Launch-time prep is prepare_instance's job; the hook exists for the
+    # relaunch path only.
+    events = []
+    g = _ordering_harness(events, prepare=lambda: events.append("prepare"))
+    g.spawn()
+    assert "prepare" not in events
+
+
+def test_fleet_threads_one_prepare_per_slot():
+    events = []
+    ports = _free_ports(2)
+    fleet = GameFleet(
+        ports, app=Path("/fake"),
+        prepares=[lambda: events.append("p0"), lambda: events.append("p1")],
+        launch=lambda port, app, visible: _FakeProc(),
+        shutdown=lambda procs: None,
+        wait_for_port=lambda *a, **k: None,
+    )
+    for g in fleet.games:
+        g.spawn()
+    fleet.relaunch(1)
+    assert events == ["p1"]
+
+
+def test_fleet_rejects_mismatched_prepares():
+    with pytest.raises(ValueError):
+        GameFleet(_free_ports(2), app=Path("/fake"), prepares=[lambda: None])

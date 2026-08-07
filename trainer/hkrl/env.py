@@ -62,6 +62,45 @@ DEFAULT_REWARD = {
     "time_penalty": -0.001,  # per decision step
 }
 
+# Boot-time reset apathy whitelist: a reset budget legitimately expires in
+# Godhome (GG_*) or anywhere in the menu/boot flow. A gameplay scene
+# outside Godhome (a fresh save's King's Pass is "Tutorial_01") means the
+# boot macro's blind save-select confirm loaded the wrong save.
+_BOOT_SCENE_PREFIXES = ("GG_", "Menu", "Pre_Menu", "Intro_Cutscene",
+                        "Cinematic", "Opening_Sequence")
+# Consecutive wrong-scene aborts before reset() escalates. 2, not 1: a
+# single weird scene read costs nothing to double-check, and a real wrong
+# save produces them indefinitely.
+WRONG_SAVE_TRIP = 2
+
+# Consecutive reset aborts of ANY scene before reset() concludes the boot
+# is stuck (an unselectable corrupt save stalls the macro at save select
+# in Menu_Title, which the wrong-save whitelist deliberately ignores). A
+# legitimate cold boot expires at most ~2 budgets (boot-to-fight is
+# ~24-26s vs the 22.5s budget), so 5 is wide margin.
+STUCK_BOOT_TRIP = 5
+
+
+def _wrong_save_scene(scene: str) -> bool:
+    return bool(scene) and not scene.startswith(_BOOT_SCENE_PREFIXES)
+
+
+class WrongSaveBoot(ConnectionClosed):
+    """Consecutive reset-budget expiries in a non-Godhome gameplay scene:
+    the boot macro is playing the wrong save. Retrying resets cannot fix
+    it -- only a relaunch with a re-seeded clone save can -- so this
+    escapes reset()'s retry loop on purpose. A ConnectionClosed subclass
+    so every layer that treats reset failures as recoverable-by-recovery
+    (the supervisor path) keeps doing so."""
+
+
+class StuckBoot(ConnectionClosed):
+    """The boot made no progress through STUCK_BOOT_TRIP consecutive reset
+    budgets, whatever the scene: the macro is stalled (an unselectable
+    corrupt save at save select is the known cause). Same escape-the-retry-
+    loop contract as WrongSaveBoot: only a relaunch with a re-seeded clone
+    save cures it."""
+
 
 class HKEnv(gym.Env):
     metadata = {"render_modes": []}
@@ -100,6 +139,7 @@ class HKEnv(gym.Env):
         self.reset_retries = reset_retries
         self._reset_log = (reset_log_path(reset_log_dir, port)
                            if reset_log_dir is not None else None)
+        self._port = port
         self.conn = Connection(host=host, port=port, timeout=timeout,
                                keepalive=keepalive)
         self.conn.connect()
@@ -110,6 +150,8 @@ class HKEnv(gym.Env):
                 f"v{PROTOCOL_VERSION} -- rebuild the mod (mod/build.sh) and "
                 f"restart the game")
         self._reset_abort = threading.Event()
+        self._wrong_scene_streak = 0
+        self._abort_streak = 0
         self._steps = 0
         self._prev = None
         self._max_bhp = None
@@ -205,12 +247,27 @@ class HKEnv(gym.Env):
                     # refusal.
                     raise RuntimeError(
                         f"mod refused reset: {msg.get('message', msg)}")
+                if msg.get("type") == "reset_abort":
+                    self._note_reset_abort(msg)
+                    # Mirror the drop that follows this message: same
+                    # reconnect-and-retry path, same retry accounting.
+                    raise ConnectionClosed(
+                        f"mod aborted the reset ({msg.get('reason')})")
                 break
+            except (WrongSaveBoot, StuckBoot):
+                raise
             except (ConnectionClosed, BrokenPipeError, ConnectionResetError):
                 if self._reset_abort.is_set():
                     raise
                 if retry == self.reset_retries:
                     raise
+                # A plain drop (recv() failing with no reset_abort message
+                # at all) never calls _note_reset_abort, so it deliberately
+                # leaves both streaks untouched here -- a lost message must
+                # not mask a real wrong-save flake or a stuck boot, so only
+                # a clean success (below) resets _abort_streak, and only a
+                # clean success or a whitelisted abort resets
+                # _wrong_scene_streak.
                 # stderr like the supervisor's lines: SB3's tables own stdout.
                 print(f"hkrl: mod dropped the connection during reset "
                       f"(retry {retry + 1}/{self.reset_retries}; a reset-budget "
@@ -224,6 +281,8 @@ class HKEnv(gym.Env):
                     # instead of blindly retrying against the fresh one.
                     self.conn.abort()
                     raise
+        self._wrong_scene_streak = 0
+        self._abort_streak = 0
         if self._reset_log is not None:
             append_reset_span(self._reset_log,
                               span_s=time.perf_counter() - started,
@@ -241,6 +300,50 @@ class HKEnv(gym.Env):
         reconnecting."""
         self._reset_abort.set()
         self.conn.abort()
+
+    def _note_reset_abort(self, msg) -> None:
+        """Track consecutive wrong-save-evidence aborts and the total
+        consecutive-abort streak (any scene); escalate at each trip
+        threshold. reason "wrong_tier" rides the same scene rule: its
+        scene is the (Godhome) boss scene, so it never counts as evidence.
+
+        Every abort is logged here, whitelisted or not -- a budget expiry
+        during a normal boot is expected, not silent, so it still shows up
+        in the trainer log."""
+        self._abort_streak += 1
+        scene = msg.get("scene") or ""
+        print(f"hkrl: mod aborted the reset (reason={msg.get('reason')!r}, "
+              f"scene={scene!r}, branch={msg.get('branch')!r})",
+              file=sys.stderr, flush=True)
+        if not _wrong_save_scene(scene):
+            # Whitelisted (Godhome/menu/boot) scene: expected apathy, not
+            # evidence -- and it resets the wrong-save streak, same as a
+            # clean success. _abort_streak (above) is untouched: a stall
+            # in a whitelisted scene (an unselectable corrupt save at save
+            # select) is exactly what STUCK_BOOT_TRIP below exists to catch.
+            self._wrong_scene_streak = 0
+        else:
+            self._wrong_scene_streak += 1
+            print(f"hkrl: reset aborted in non-Godhome gameplay scene "
+                  f"{scene!r} (branch={msg.get('branch')!r}, "
+                  f"{self._wrong_scene_streak}/{WRONG_SAVE_TRIP} toward "
+                  f"wrong-save escalation)", file=sys.stderr, flush=True)
+            if self._wrong_scene_streak >= WRONG_SAVE_TRIP:
+                raise WrongSaveBoot(
+                    f"port {self._port}: {self._wrong_scene_streak} "
+                    f"consecutive reset aborts in {scene!r} -- the boot "
+                    f"macro is playing the wrong save. A relaunch with a "
+                    f"re-seeded clone save is the cure; retrying resets is "
+                    f"not (assumes the master save is parked in Godhome "
+                    f"and darwin's per-port clone isolation; off-darwin "
+                    f"there is no clone to re-seed).")
+        if self._abort_streak >= STUCK_BOOT_TRIP:
+            raise StuckBoot(
+                f"port {self._port}: {self._abort_streak} consecutive reset "
+                f"aborts without a completed reset (last scene={scene!r}, "
+                f"branch={msg.get('branch')!r}) -- the boot macro is stuck; "
+                f"a relaunch with a re-seeded clone save is the cure (an "
+                f"unselectable corrupt save is the known cause)")
 
     def step(self, action):
         self.conn.send({"type": "action", "buttons": ACTIONS[int(action)]})

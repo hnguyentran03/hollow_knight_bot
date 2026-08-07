@@ -113,7 +113,7 @@ def _serve_then_disconnect():
             f.write(json.dumps(msg).encode() + b"\n")
             f.flush()
 
-        send({"type": "hello", "version": 3})
+        send({"type": "hello", "version": 4})
         f.readline()  # reset
         send(state(obs()))
         f.readline()  # action -- disconnect instead of replying
@@ -151,7 +151,7 @@ def _slow_action_server(delay):
             f.write(json.dumps(msg).encode() + b"\n")
             f.flush()
 
-        send({"type": "hello", "version": 3})
+        send({"type": "hello", "version": 4})
         f.readline()  # reset
         send(state(obs(bhp=900)))
         f.readline()  # action
@@ -208,7 +208,7 @@ def _serve_one_episode_then_disconnect(episode_messages):
             f.write(json.dumps(msg).encode() + b"\n")
             f.flush()
 
-        send({"type": "hello", "version": 3})
+        send({"type": "hello", "version": 4})
         remaining = list(episode_messages)
         f.readline()  # reset
         send(remaining.pop(0))

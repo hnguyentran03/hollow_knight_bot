@@ -4,6 +4,7 @@ import socket
 import threading
 
 from hkrl.bosses import DEFAULT_BOSS
+from hkrl.protocol import PROTOCOL_VERSION
 
 
 def obs(kx=20.0, khp=9, bhp=900, boss_state="Idle", **kw):
@@ -34,7 +35,7 @@ class FakeGame:
             info["scene"] = f"GG_{boss}"
         return frame
 
-    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, version=3, bosses=(DEFAULT_BOSS, "gruz_mother")):
+    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, abort_scenes=(), version=PROTOCOL_VERSION, bosses=(DEFAULT_BOSS, "gruz_mother")):
         self.episodes = [list(ep) for ep in episodes]
         # port=0 (default) binds an ephemeral port, same as before; a caller
         # that needs to stand a fresh fake back up on a specific port (e.g.
@@ -51,6 +52,11 @@ class FakeGame:
         # The client's reset parks in its blocking recv; abort tests
         # release it from another thread.
         self.hang_resets = hang_resets
+        # The first len(abort_scenes) reset requests are answered with a
+        # reset_abort naming that scene, then dropped -- the real mod's
+        # budget-expiry path. The listener stays up, so the reconnecting
+        # client's next reset consumes the next entry (or proceeds).
+        self.abort_scenes = list(abort_scenes)
         # Protocol version greeted on connect; tests pass 1 to simulate a
         # stale mod build.
         self.version = version
@@ -133,6 +139,12 @@ class FakeGame:
                     if boss not in self.bosses:
                         send({"type": "error",
                               "message": f"unknown boss {boss!r}"})
+                        conn.shutdown(socket.SHUT_RDWR)
+                        return
+                    if self.abort_scenes:
+                        send({"type": "reset_abort", "reason": "budget",
+                              "scene": self.abort_scenes.pop(0),
+                              "branch": "boot-confirm-pulse"})
                         conn.shutdown(socket.SHUT_RDWR)
                         return
                     if self.hang_resets > 0:

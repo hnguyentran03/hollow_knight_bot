@@ -527,6 +527,7 @@ namespace HKRLBot
                         + $"({BossRegistry.Current.MaxAttunedHp}) -- wrong difficulty "
                         + "tier. Clearing input and dropping the connection.");
                     HKRLBotMod.Instance.Input.Clear();
+                    server.SendResetAbort("wrong_tier", Scene, ResetMacro.LastBranch);
                     server.Drop();
                     awaitingReset = false;
                     episodeActive = false;
@@ -602,6 +603,7 @@ namespace HKRLBot
                     + $"knightX={(k != null ? k.X.ToString("F2") : "?")}. Clearing input and "
                     + "dropping the connection.");
                 HKRLBotMod.Instance.Input.Clear();
+                server.SendResetAbort("budget", Scene, ResetMacro.LastBranch);
                 server.Drop();
                 awaitingReset = false;
                 episodeActive = false;

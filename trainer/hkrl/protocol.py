@@ -1,4 +1,4 @@
-"""Line-delimited JSON protocol to the HKRLBot mod (protocol v3)."""
+"""Line-delimited JSON protocol to the HKRLBot mod (protocol v4)."""
 import json
 import socket
 import threading
@@ -11,8 +11,11 @@ import time
 # check exists to catch. Bumped 2 -> 3 when the needle-era obs fields were
 # renamed (needle_active/nx/ny -> projectile_active/px/py): a v2 mod would
 # send fields the trainer no longer reads, and _flatten would KeyError on
-# the renamed keys. The consumer-side check lives in HKEnv.__init__.
-PROTOCOL_VERSION = 3
+# the renamed keys. Bumped 3 -> 4 when the mod started sending "reset_abort" before its
+# fail-and-drop points: a v3 trainer would read reset_abort as the reset's
+# state frame and crash on the missing "obs".
+# The consumer-side check lives in HKEnv.__init__.
+PROTOCOL_VERSION = 4
 
 
 class ConnectionClosed(Exception):

@@ -40,13 +40,20 @@ class GameProcess:
     def __init__(self, port: int = DEFAULT_PORT, app: Path = DEFAULT_APP,
                  launch: Callable = launch, shutdown: Callable = shutdown,
                  wait_for_port: Callable = wait_for_port,
-                 launch_timeout: float = 120.0):
+                 launch_timeout: float = 120.0,
+                 # Run between terminating the old holder and launching the
+                 # replacement -- the relaunch path's chance to fix what a
+                 # plain re-exec cannot (train.py wires the clone-save
+                 # re-seed here: the wrong-save boot flake means the SAVE
+                 # can be the broken part, and rebooting into it re-flakes).
+                 prepare: Callable | None = None):
         self.port = port
         self.app = Path(app)
         self.launch_timeout = launch_timeout
         self._launch = launch
         self._shutdown = shutdown
         self._wait_for_port = wait_for_port
+        self._prepare = prepare
         self._proc: subprocess.Popen | None = None
 
     def start(self) -> None:
@@ -100,6 +107,8 @@ class GameProcess:
         """
         if self._proc is not None:
             self._shutdown([self._proc])
+        if self._prepare is not None:
+            self._prepare()
         self._proc = self._launch(self.port, self.app, False)
 
     def stop(self) -> None:
@@ -126,17 +135,22 @@ class GameFleet:
     replacement game at the master save directory.
     """
 
-    def __init__(self, ports, app: Path = None, apps=None, **process_kwargs):
+    def __init__(self, ports, app: Path = None, apps=None, prepares=None, **process_kwargs):
         ports = list(ports)
         if apps is not None and len(apps) != len(ports):
             raise ValueError("apps must match ports one to one")
         if apps is None:
             apps = [app] * len(ports)
+        if prepares is not None and len(prepares) != len(ports):
+            raise ValueError("prepares must match ports one to one")
+        if prepares is None:
+            prepares = [None] * len(ports)
         self.games = []
-        for p, a in zip(ports, apps):
+        for p, a, pr in zip(ports, apps, prepares):
             kwargs = dict(process_kwargs)
             if a is not None:
                 kwargs["app"] = a
+            kwargs["prepare"] = pr
             self.games.append(GameProcess(port=p, **kwargs))
 
     @property

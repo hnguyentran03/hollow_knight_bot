@@ -4,7 +4,7 @@ import time
 import numpy as np
 import pytest
 
-from hkrl.env import ACTIONS, DEFAULT_REWARD, HKEnv
+from hkrl.env import ACTIONS, DEFAULT_REWARD, HKEnv, StuckBoot, WrongSaveBoot
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.protocol import ConnectionClosed
 from hkrl.reset_metrics import read_reset_spans, reset_log_path
@@ -358,3 +358,53 @@ def test_fake_scene_follows_the_requested_boss():
         env = HKEnv(port=fg.port, boss="gruz_mother")
         _, info = env.reset()
     assert info["scene"] == "GG_gruz_mother"
+
+
+def test_two_consecutive_wrong_scene_aborts_raise_wrong_save_boot():
+    ep = [state(obs())]
+    with FakeGame([ep], abort_scenes=["Tutorial_01", "Tutorial_01"]) as fg:
+        env = HKEnv(port=fg.port)
+        with pytest.raises(WrongSaveBoot, match="Tutorial_01"):
+            env.reset()
+
+
+def test_menu_and_godhome_aborts_never_trip_and_reset_the_streak():
+    # Wrong, then Godhome (streak back to 0), then wrong again, then menu
+    # (streak back to 0 again): never reaches 2 consecutive, and the 5th
+    # attempt's clean reset succeeds. Exercises both whitelist families
+    # (GG_* and Menu_*), not just one.
+    ep = [state(obs())]
+    scenes = ["Tutorial_01", "GG_Workshop", "Tutorial_01", "Menu_Title"]
+    with FakeGame([ep], abort_scenes=scenes) as fg:
+        env = HKEnv(port=fg.port)
+        o, info = env.reset()
+    assert info["scene"].startswith("GG_")
+
+
+def test_wrong_save_boot_is_recoverable_for_the_supervisor():
+    # The supervisor's RECOVERABLE handling keys off ConnectionClosed-shaped
+    # failures; WrongSaveBoot must stay inside that family.
+    assert issubclass(WrongSaveBoot, ConnectionClosed)
+
+
+def test_five_consecutive_aborts_anywhere_raise_stuck_boot():
+    # A corrupt (not missing) save renders the slot unselectable: the boot
+    # macro stalls at save select in Menu_Title, which the wrong-save
+    # whitelist ignores. The total-abort streak catches the stall.
+    ep = [state(obs())]
+    with FakeGame([ep], abort_scenes=["Menu_Title"] * 5) as fg:
+        env = HKEnv(port=fg.port)
+        with pytest.raises(StuckBoot, match="Menu_Title"):
+            env.reset()
+
+
+def test_four_aborts_then_success_never_trip_stuck_boot():
+    ep = [state(obs())]
+    with FakeGame([ep], abort_scenes=["Menu_Title"] * 4) as fg:
+        env = HKEnv(port=fg.port)
+        o, info = env.reset()
+    assert info["scene"].startswith("GG_")
+
+
+def test_stuck_boot_is_recoverable_for_the_supervisor():
+    assert issubclass(StuckBoot, ConnectionClosed)
