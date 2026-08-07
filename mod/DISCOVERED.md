@@ -736,3 +736,19 @@ false_knight:  evidence 52.07 and 55.19                -> StatueX = 53.6   (midp
 ```
 
 `hornet1` and `gruz_mother` are unaffected -- both already proven working.
+
+## 13. Legacy Font assets available to IMGUI (HUD restyle)
+
+Measured 2026-08-07 via OverlayUI's one-shot font census
+(`Resources.FindObjectsOfTypeAll<Font>()` at Awake, logged to ModLog):
+
+```
+OverlayUI font census: TrajanPro-Bold; TrajanPro-Regular; NotoSerifCJKsc-Regular; Perpetua;
+OverlayUI fonts: title=TrajanPro-Bold body=Perpetua
+```
+
+The game ships legacy (non-TMP) Font assets usable by IMGUI, and they are
+already loaded at Awake in the first scene -- the scene-change retry never
+had to fire. The resolver's picks: `TrajanPro-Bold` for title/header,
+`Perpetua` for body/dim/stateName/chip. The census guard keeps this a
+one-line-per-boot cost.
