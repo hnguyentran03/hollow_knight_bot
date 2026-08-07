@@ -44,7 +44,6 @@ namespace HKRLBot
         // frame, so OnGUI allocates no textures.
         private Texture2D tex;
 
-        private GUIStyle title;      // panel title
         private GUIStyle header;     // section headers (KNIGHT / BOSS / CONTROLS)
         private GUIStyle body;       // normal rows
         private GUIStyle dim;        // muted labels / units / empty states
@@ -94,7 +93,6 @@ namespace HKRLBot
         private const float W        = 344f; // panel width
         private const float Margin   = 12f;  // gap from screen edge
         private const float Pad      = 10f;  // inner panel padding
-        private const float TitleH   = 26f;
         private const float HeaderH  = 22f;
         private const float RowH     = 18f;
         private const float BarRowH  = 20f;
@@ -115,9 +113,6 @@ namespace HKRLBot
             tex.SetPixel(0, 0, Color.white);
             tex.Apply();
             tex.hideFlags = HideFlags.HideAndDontSave; // don't let it leak into the scene
-
-            title = new GUIStyle { fontSize = 15, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-            title.normal.textColor = Bone;
 
             header = new GUIStyle { fontSize = 12, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
             header.normal.textColor = Bone;
@@ -185,7 +180,7 @@ namespace HKRLBot
             fontsResolved = true;
             // Resolved: no more retries needed, so stop paying the per-scene scan cost.
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged -= OnSceneChanged;
-            title.font = serifTitle; header.font = serifTitle;
+            header.font = serifTitle;
             body.font = serifBody; dim.font = serifBody;
             stateName.font = serifBody; chip.font = serifBody;
             HKRLBotMod.Instance.Log(
@@ -283,8 +278,7 @@ namespace HKRLBot
             //     draw the background panel behind everything. ---
             float knightH = k == null ? RowH : (BarRowH * 2 + RowH * 2 + ChipRowH);
             float bossH   = !b.Present ? RowH : (BarRowH + RowH * 3 + (BossRegistry.Current.ProjectileName != null ? RowH : 0));
-            float total   = Pad + TitleH
-                          + Gap + HeaderH + knightH
+            float total   = Pad + HeaderH + knightH
                           + Gap + HeaderH + bossH
                           + Gap + HeaderH + RowH
                           + Pad;
@@ -305,8 +299,6 @@ namespace HKRLBot
             DrawRect(new Rect(x + W - 1f, top, 1f, total), Accent);       // right
 
             float cy = top + Pad;
-            GUI.Label(new Rect(left, cy, cw, TitleH), "HKRL", title);
-            cy += TitleH + Gap;
 
             // ---------------- KNIGHT ----------------
             cy = SectionHeader(left, cy, cw, "KNIGHT");
