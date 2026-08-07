@@ -74,7 +74,7 @@ namespace HKRLBot
                     stream.WriteTimeout = 10000;
                     reader = new StreamReader(stream);
                     writer = new StreamWriter(stream) { AutoFlush = true };
-                    writer.WriteLine("{\"type\":\"hello\",\"version\":2}");
+                    writer.WriteLine("{\"type\":\"hello\",\"version\":3}");
                 }
                 HKRLBotMod.Instance.Log("Trainer connected");
             }
@@ -94,7 +94,7 @@ namespace HKRLBot
                     ["invuln"] = k?.Invuln ?? false, ["facing_right"] = k?.FacingRight ?? true,
                     ["bx"] = b.X, ["by"] = b.Y, ["bvx"] = b.Vx, ["bvy"] = b.Vy,
                     ["bhp"] = b.Hp, ["boss_state"] = b.FsmState,
-                    ["needle_active"] = b.NeedleActive, ["nx"] = b.NeedleX, ["ny"] = b.NeedleY
+                    ["projectile_active"] = b.ProjectileActive, ["px"] = b.ProjectileX, ["py"] = b.ProjectileY
                 },
                 ["done"] = done,
                 ["info"] = new JObject { ["won"] = won, ["scene"] = scene, ["attempt"] = attempt }

@@ -94,7 +94,7 @@ def report(s):
                + (readings if statues else "none")
                + "  (use the one from standing settled at the target statue)")
     out.append("")
-    out.append("projectile candidates (DamageHero objects owned by no enemy; NeedleName"
+    out.append("projectile candidates (DamageHero objects owned by no enemy; ProjectileName"
                " wants a persistent single-instance object -- many ids means per-shot"
                " clones, use null instead):")
     if s["projectiles"]:

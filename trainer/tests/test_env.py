@@ -347,3 +347,14 @@ def test_mod_error_reply_fails_the_reset_loudly():
         with pytest.raises(RuntimeError, match="hornet1"):
             env.reset()
         env.close()
+
+
+def test_fake_scene_follows_the_requested_boss():
+    # The fake's synthetic scene is derived from the reset's boss id, so
+    # scripted episodes stay boss-agnostic (and GG_-prefixed, which the
+    # wrong-save classifier treats as Godhome-normal).
+    ep = [state(obs())]
+    with FakeGame([ep], bosses=("gruz_mother",)) as fg:
+        env = HKEnv(port=fg.port, boss="gruz_mother")
+        _, info = env.reset()
+    assert info["scene"] == "GG_gruz_mother"

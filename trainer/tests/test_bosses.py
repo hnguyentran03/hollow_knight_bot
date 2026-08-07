@@ -1,6 +1,6 @@
 import pytest
 
-from hkrl.bosses import BOSSES, get_boss
+from hkrl.bosses import BOSSES, DEFAULT_BOSS, get_boss
 
 
 def test_hornet1_spec_matches_the_measured_constants():
@@ -75,3 +75,7 @@ def test_display_names_use_the_hall_of_gods_statue_names():
     assert get_boss("hornet1").display_name == "Hornet Protector"
     assert get_boss("soul_warrior").display_name == "Soul Warrior"
     assert get_boss("false_knight").display_name == "False Knight"
+
+
+def test_default_boss_is_a_registered_id():
+    assert DEFAULT_BOSS in BOSSES

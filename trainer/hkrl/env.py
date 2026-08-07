@@ -7,7 +7,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from hkrl.bosses import get_boss
+from hkrl.bosses import DEFAULT_BOSS, get_boss
 from hkrl.protocol import Connection, ConnectionClosed, PROTOCOL_VERSION
 from hkrl.reset_metrics import append_reset_span, reset_log_path
 
@@ -17,7 +17,7 @@ OBS_KEYS = [  # scalar block order (before the boss-state one-hot)
     "kx", "ky", "kvx", "kvy", "khp", "soul",
     "on_ground", "dashing", "invuln", "facing_right",
     "bx", "by", "bvx", "bvy", "bhp",
-    "needle_active", "nx", "ny",
+    "projectile_active", "px", "py",
 ]
 
 _BUTTONS = ["left", "right", "up", "down", "jump", "attack", "dash",
@@ -91,7 +91,7 @@ class HKEnv(gym.Env):
     # tests, and non-measurement training pay nothing.
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
                  max_steps=2700, timeout=30.0, reset_retries=8,
-                 keepalive=3.0, reset_log_dir=None, boss="hornet1"):
+                 keepalive=3.0, reset_log_dir=None, boss=DEFAULT_BOSS):
         # Resolved before any socket work so an unknown id fails instantly
         # and locally, not after a game connection is already up.
         self.boss = get_boss(boss)
@@ -135,9 +135,9 @@ class HKEnv(gym.Env):
             (obs["by"] - obs["ky"]) / b.arena_height,
             obs["bvx"] / VEL_SCALE, obs["bvy"] / VEL_SCALE,
             obs["bhp"] / self._max_bhp,
-            float(obs["needle_active"]),
-            (obs["nx"] - obs["kx"]) / b.arena_half_w if obs["needle_active"] else 0.0,
-            (obs["ny"] - obs["ky"]) / b.arena_height if obs["needle_active"] else 0.0,
+            float(obs["projectile_active"]),
+            (obs["px"] - obs["kx"]) / b.arena_half_w if obs["projectile_active"] else 0.0,
+            (obs["py"] - obs["ky"]) / b.arena_height if obs["projectile_active"] else 0.0,
         ]
         onehot = [0.0] * len(b.fsm_states)
         try:

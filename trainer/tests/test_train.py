@@ -284,14 +284,14 @@ def test_resume_continues_timesteps_norm_stats_and_generation_numbering(tmp_path
 def test_confirm_ready_auto_skips_the_prompt(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input",
                         lambda *a: pytest.fail("input() called in auto mode"))
-    train.confirm_ready(auto=True)
+    train.confirm_ready(auto=True, boss_display="Hornet")
     assert "skipping the ready prompt" in capsys.readouterr().out
 
 
 def test_confirm_ready_interactive_waits_on_input(monkeypatch):
     prompts = []
     monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt))
-    train.confirm_ready(auto=False)
+    train.confirm_ready(auto=False, boss_display="Hornet")
     assert prompts and "Hall of Gods" in prompts[0]
 
 
@@ -511,3 +511,11 @@ def test_resolve_boss_rejects_a_recorded_boss_this_registry_lacks(tmp_path):
         json.dumps({"boss": "no_such_boss"}) + "\n")
     with pytest.raises(ValueError, match="no_such_boss"):
         train.resolve_boss(None, tmp_path)
+
+
+def test_confirm_ready_prompt_names_the_boss(monkeypatch):
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda text: prompts.append(text))
+    train.confirm_ready(False, "Gruz Mother")
+    assert "Gruz Mother statue" in prompts[0]
+    assert "Hornet" not in prompts[0]

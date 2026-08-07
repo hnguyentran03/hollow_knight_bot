@@ -64,7 +64,7 @@ class WedgedGame:
             if self._hello:
                 try:
                     conn.sendall(
-                        json.dumps({"type": "hello", "version": 2}).encode() + b"\n"
+                        json.dumps({"type": "hello", "version": 3}).encode() + b"\n"
                     )
                 except OSError:
                     return
@@ -80,7 +80,7 @@ def _episode(steps=50, **first_frame):
     return frames
 
 
-# Index of khp/9.0 in HornetEnv._flatten's vector. Tests script a distinct khp
+# Index of khp/9.0 in HKEnv._flatten's vector. Tests script a distinct khp
 # per instance and read this column back to identify which reset produced an
 # observation.
 KHP = 4
@@ -565,7 +565,7 @@ class BootingGame:
                 f.write(json.dumps(msg).encode() + b"\n")
                 f.flush()
 
-            send({"type": "hello", "version": 2})
+            send({"type": "hello", "version": 3})
             ep = None
             while True:
                 line = f.readline()
@@ -724,7 +724,7 @@ class SuspendedGame:
         except OSError:
             return
         f = conn.makefile("rwb")
-        f.write(json.dumps({"type": "hello", "version": 2}).encode() + b"\n")
+        f.write(json.dumps({"type": "hello", "version": 3}).encode() + b"\n")
         f.flush()
         f.readline()  # the reset
         f.write(json.dumps(state(obs())).encode() + b"\n")

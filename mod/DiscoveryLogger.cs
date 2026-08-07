@@ -100,7 +100,7 @@ namespace HKRLBot
             // boss projectiles and arena hazards. One line per instance id:
             // a persistent reused object (Hornet's Needle) shows one id per
             // name across a whole fight, per-shot clones show many. The
-            // NeedleName registry field wants the persistent kind.
+            // ProjectileName registry field wants the persistent kind.
             foreach (var dh in Object.FindObjectsOfType<DamageHero>())
             {
                 if (dh.GetComponentInParent<HealthManager>() != null) continue;
