@@ -151,7 +151,11 @@ def test_api_launcher_reports_the_active_run(base_url, monkeypatch):
 
 def test_api_launcher_lists_the_known_bosses(base_url):
     data = json.loads(_get(base_url + "/api/launcher")[2])
-    assert data["bosses"] == sorted(hkrl.bosses.BOSSES)
+    bosses = data["bosses"]
+    assert {b["id"] for b in bosses} == set(hkrl.bosses.BOSSES)
+    assert [b["name"] for b in bosses] == sorted(b["name"] for b in bosses)
+    by_id = {b["id"]: b["name"] for b in bosses}
+    assert by_id["hornet1"] == "Hornet Protector"
 
 
 def test_post_launch_delegates_and_returns_the_run_id(base_url, monkeypatch):
