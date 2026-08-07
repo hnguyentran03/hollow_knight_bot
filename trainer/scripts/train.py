@@ -278,7 +278,7 @@ class StopOnFlag(BaseCallback):
         return not any(self.locals["dones"])
 
 
-def confirm_ready(auto: bool) -> None:
+def confirm_ready(auto: bool, boss_display: str) -> None:
     """Gate between "games are up" and "training begins".
 
     Interactive runs wait for a human to confirm the Hall of Gods.
@@ -290,9 +290,10 @@ def confirm_ready(auto: bool) -> None:
         print("--auto: skipping the ready prompt; the boot macro will "
               "drive the game(s) into the Hall of Gods", flush=True)
         return
-    input("Bring the game(s) to the Hall of Gods near the Hornet statue, "
-          "then press Enter. (A freshly booted game can also challenge "
-          "itself in via the boot macro; expect a few reset retries.) ")
+    input(f"Bring the game(s) to the Hall of Gods near the {boss_display} "
+          "statue, then press Enter. (A freshly booted game can also "
+          "challenge itself in via the boot macro; expect a few reset "
+          "retries.) ")
 
 
 def build_apps(ports, app, instances_root):
@@ -469,7 +470,7 @@ def main() -> None:
                   "relaunch-and-reboot recovery. Suppress display sleep for "
                   "the run: caffeinate -d (in another terminal).",
                   flush=True)
-        confirm_ready(args.auto)
+        confirm_ready(args.auto, get_boss(args.boss).display_name)
 
         stop = threading.Event()
 
