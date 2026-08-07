@@ -12,6 +12,10 @@ namespace HKRLBot
     public class BossSpec
     {
         public string Id;
+        // Proper in-game name (the Hall of Gods statue name), mirroring the
+        // trainer registry's display_name. Consumed by the HUD's BOSS header;
+        // everything protocol-facing keeps using Id.
+        public string DisplayName;
         // The Godhome arena scene this boss's fight runs in.
         public string Scene;
         // The boss's root GameObject name, for StateReader's scene scan.
@@ -54,6 +58,7 @@ namespace HKRLBot
                 ["hornet1"] = new BossSpec
                 {
                     Id = "hornet1",
+                    DisplayName = "Hornet Protector",
                     Scene = "GG_Hornet_1",
                     ObjectName = "Hornet Boss 1",
                     FsmName = "Control",
@@ -67,6 +72,7 @@ namespace HKRLBot
                 ["gruz_mother"] = new BossSpec
                 {
                     Id = "gruz_mother",
+                    DisplayName = "Gruz Mother",
                     Scene = "GG_Gruz_Mother",
                     ObjectName = "Giant Fly",
                     FsmName = "Big Fly Control",
@@ -85,6 +91,7 @@ namespace HKRLBot
                 ["gorb"] = new BossSpec
                 {
                     Id = "gorb",
+                    DisplayName = "Gorb",
                     Scene = "GG_Ghost_Gorb",
                     ObjectName = "Ghost Warrior Slug",
                     FsmName = "Attacking",
@@ -114,6 +121,7 @@ namespace HKRLBot
                 ["soul_warrior"] = new BossSpec
                 {
                     Id = "soul_warrior",
+                    DisplayName = "Soul Warrior",
                     Scene = "GG_Mage_Knight",
                     ObjectName = "Mage Knight",
                     FsmName = "Mage Knight",
@@ -133,6 +141,7 @@ namespace HKRLBot
                 ["marmu"] = new BossSpec
                 {
                     Id = "marmu",
+                    DisplayName = "Marmu",
                     Scene = "GG_Ghost_Marmu",
                     ObjectName = "Ghost Warrior Marmu",
                     FsmName = "Control",
@@ -156,6 +165,7 @@ namespace HKRLBot
                 ["false_knight"] = new BossSpec
                 {
                     Id = "false_knight",
+                    DisplayName = "False Knight",
                     Scene = "GG_False_Knight",
                     ObjectName = "False Knight New",
                     FsmName = "FalseyControl",
