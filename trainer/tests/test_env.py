@@ -369,10 +369,12 @@ def test_two_consecutive_wrong_scene_aborts_raise_wrong_save_boot():
 
 
 def test_menu_and_godhome_aborts_never_trip_and_reset_the_streak():
-    # Wrong, then menu (streak back to 0), then wrong again: never reaches
-    # 2 consecutive, and the 4th attempt's clean reset succeeds.
+    # Wrong, then Godhome (streak back to 0), then wrong again, then menu
+    # (streak back to 0 again): never reaches 2 consecutive, and the 5th
+    # attempt's clean reset succeeds. Exercises both whitelist families
+    # (GG_* and Menu_*), not just one.
     ep = [state(obs())]
-    scenes = ["Tutorial_01", "Menu_Title", "Tutorial_01"]
+    scenes = ["Tutorial_01", "GG_Workshop", "Tutorial_01", "Menu_Title"]
     with FakeGame([ep], abort_scenes=scenes) as fg:
         env = HKEnv(port=fg.port)
         o, info = env.reset()

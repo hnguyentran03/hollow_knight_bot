@@ -245,6 +245,11 @@ class HKEnv(gym.Env):
                     raise
                 if retry == self.reset_retries:
                     raise
+                # A plain drop (recv() failing with no reset_abort message
+                # at all) never calls _note_reset_abort, so it deliberately
+                # leaves _wrong_scene_streak untouched here -- a lost
+                # message must not mask a real wrong-save flake, so only a
+                # clean success (below) or a whitelisted abort resets it.
                 # stderr like the supervisor's lines: SB3's tables own stdout.
                 print(f"hkrl: mod dropped the connection during reset "
                       f"(retry {retry + 1}/{self.reset_retries}; a reset-budget "
@@ -280,9 +285,18 @@ class HKEnv(gym.Env):
     def _note_reset_abort(self, msg) -> None:
         """Track consecutive wrong-save-evidence aborts; escalate at the
         trip threshold. reason "wrong_tier" rides the same scene rule: its
-        scene is the (Godhome) boss scene, so it never counts as evidence."""
+        scene is the (Godhome) boss scene, so it never counts as evidence.
+
+        Every abort is logged here, whitelisted or not -- a budget expiry
+        during a normal boot is expected, not silent, so it still shows up
+        in the trainer log."""
         scene = msg.get("scene") or ""
+        print(f"hkrl: mod aborted the reset (reason={msg.get('reason')!r}, "
+              f"scene={scene!r}, branch={msg.get('branch')!r})",
+              file=sys.stderr, flush=True)
         if not _wrong_save_scene(scene):
+            # Whitelisted (Godhome/menu/boot) scene: expected apathy, not
+            # evidence -- and it resets the streak, same as a clean success.
             self._wrong_scene_streak = 0
             return
         self._wrong_scene_streak += 1
@@ -295,7 +309,9 @@ class HKEnv(gym.Env):
                 f"port {self._port}: {self._wrong_scene_streak} consecutive "
                 f"reset aborts in {scene!r} -- the boot macro is playing "
                 f"the wrong save. A relaunch with a re-seeded clone save "
-                f"is the cure; retrying resets is not.")
+                f"is the cure; retrying resets is not (assumes the master "
+                f"save is parked in Godhome and darwin's per-port clone "
+                f"isolation; off-darwin there is no clone to re-seed).")
 
     def step(self, action):
         self.conn.send({"type": "action", "buttons": ACTIONS[int(action)]})
