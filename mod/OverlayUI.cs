@@ -25,6 +25,14 @@ namespace HKRLBot
         private string projectileLabel;
         private string projectileLabelSource;
 
+        // BOSS section header carries the current boss's proper name
+        // ("BOSS · HORNET PROTECTOR"). Cached like projectileLabel: OnGUI
+        // runs several times a frame and concat/ToUpper allocate. Pre-reset
+        // this shows the registry's deliberate hornet1 default -- the boss a
+        // reset would fight.
+        private string bossHeaderLabel = "BOSS";
+        private string bossHeaderSource;
+
         // 1x1 white texture reused for every filled rectangle (panel bg, bar tracks,
         // bar fills, chips). Standard IMGUI trick: tint it per-draw with GUI.color and
         // stretch it to any Rect via GUI.DrawTexture -- created ONCE here, never per
@@ -333,7 +341,13 @@ namespace HKRLBot
             cy += Gap;
 
             // ---------------- BOSS ----------------
-            cy = SectionHeader(left, cy, cw, "BOSS");
+            string bossName = BossRegistry.Current.DisplayName;
+            if (!ReferenceEquals(bossName, bossHeaderSource))
+            {
+                bossHeaderSource = bossName;
+                bossHeaderLabel = "BOSS · " + bossName.ToUpperInvariant();
+            }
+            cy = SectionHeader(left, cy, cw, bossHeaderLabel);
             if (!b.Present)
             {
                 GUI.Label(new Rect(left, cy, cw, RowH), "(none present)", dim);
