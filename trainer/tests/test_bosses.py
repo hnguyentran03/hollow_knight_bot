@@ -59,3 +59,18 @@ def test_false_knight_is_registered_with_its_own_obs_space():
     assert spec.id == "false_knight"
     assert spec.fsm_states[-1] == "UNKNOWN"
     assert spec.fsm_states != get_boss("hornet1").fsm_states
+
+
+def test_every_boss_has_a_display_name():
+    # display_name is required and human-facing: non-empty, no underscores,
+    # not just the id echoed back.
+    for spec in BOSSES.values():
+        assert spec.display_name.strip()
+        assert "_" not in spec.display_name
+
+
+def test_display_names_use_the_hall_of_gods_statue_names():
+    # The two ids a prettify regex could never get right.
+    assert get_boss("hornet1").display_name == "Hornet Protector"
+    assert get_boss("soul_warrior").display_name == "Soul Warrior"
+    assert get_boss("false_knight").display_name == "False Knight"

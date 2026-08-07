@@ -17,6 +17,10 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class BossSpec:
     id: str
+    # Proper name shown to humans (dashboard dropdown, nameplate, prompts):
+    # the Hall of Gods statue name, which a prettify regex cannot derive
+    # from the id ("hornet1" is "Hornet Protector", not "Hornet 1").
+    display_name: str
     # FSM state names recorded from live play, ending with the "UNKNOWN"
     # fallback slot every unseen state maps to.
     fsm_states: tuple[str, ...]
@@ -34,6 +38,7 @@ BOSSES = {
     # arena: section 2 (walls 15.27/37.73, floor 28.41, top 38).
     "hornet1": BossSpec(
         id="hornet1",
+        display_name="Hornet Protector",
         fsm_states=(
             "Flourish", "Run", "A Dash", "Hard Land", "Idle", "Throw Antic",
             "Thrown", "Throw Recover", "In Air", "ADash Antic", "Run Antic",
@@ -53,6 +58,7 @@ BOSSES = {
     # floor 15.40, top 24.66). Main FSM "Big Fly Control".
     "gruz_mother": BossSpec(
         id="gruz_mother",
+        display_name="Gruz Mother",
         fsm_states=(
             "Wake", "GG Extra Pause", "Buzz", "Charge Antic", "Charge",
             "Charge Recover D", "Super End", "Slam Antic", "Flying",
@@ -72,6 +78,7 @@ BOSSES = {
     # DISCOVERED.md section 8. Main FSM "Attacking".
     "gorb": BossSpec(
         id="gorb",
+        display_name="Gorb",
         fsm_states=(
             "Init", "Wait", "Antic", "Attack", "Recover", "Damaged",
             "Double Pause", "Anim", "Triple Pause",
@@ -87,6 +94,7 @@ BOSSES = {
     # top 19.09). Main FSM "Mage Knight".
     "soul_warrior": BossSpec(
         id="soul_warrior",
+        display_name="Soul Warrior",
         fsm_states=(
             "GG Pause", "Up Tele", "Stomp Antic", "Stomp Air",
             "Stomp Recover", "Idle", "Slash Antic", "Dash", "Slash Recover",
@@ -105,6 +113,7 @@ BOSSES = {
     # Main FSM "Control".
     "marmu": BossSpec(
         id="marmu",
+        display_name="Marmu",
         fsm_states=(
             "Start Pause", "Antic", "Chase", "Unroll", "Warp Out 2",
             "UNKNOWN",
@@ -119,6 +128,7 @@ BOSSES = {
     # top 42.81). Main FSM "FalseyControl".
     "false_knight": BossSpec(
         id="false_knight",
+        display_name="False Knight",
         fsm_states=(
             "Start Fall", "State 1", "First Idle", "Jump Antic", "Rise",
             "Fall", "Idle", "JA Antic", "JA Rise", "JA Fall", "JA Hit",
