@@ -5,7 +5,7 @@ import pytest
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from hkrl.async_reset import AsyncResetWrapper
-from hkrl.env import HKEnv
+from hkrl.env import HKEnv, WrongSaveBoot
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.fake_slow_env import SlowResetEnv, make_async_timed
 from hkrl.protocol import ConnectionClosed
@@ -204,6 +204,28 @@ def test_one_envs_reset_does_not_stall_the_lockstep_batch():
         started = time.monotonic()
         vec.close()
         assert time.monotonic() - started < 5.0  # close never waits out a reset
+
+
+def test_wrong_save_boot_surfaces_through_the_async_reset_boundary():
+    """The wrong-save flake's natural habitat is a multi-instance boot,
+    where async resets are default-ON: WrongSaveBoot raised deep inside the
+    background reset thread (HKEnv.reset()'s retry loop, escalating past two
+    consecutive non-Godhome aborts) must escape and surface from step() on
+    the worker's next call, exactly like any other exhausted reset failure
+    (mirrors test_a_background_reset_that_raises_kills_the_next_step)."""
+    episode = [state(obs()), state(obs(), done=True)]
+    with FakeGame([episode]) as fg:
+        env = AsyncResetWrapper(HKEnv(port=fg.port), placeholder_tick_s=0.0)
+        env.reset()                       # initial, synchronous, succeeds
+        fg.abort_scenes = ["Tutorial_01", "Tutorial_01"]
+        _, _, terminated, _, _ = env.step(0)   # scripted death
+        assert terminated
+        env.reset()                       # background reset hits the aborts
+        with pytest.raises(WrongSaveBoot, match="Tutorial_01"):
+            for _ in range(200):
+                env.step(0)
+                time.sleep(0.01)
+        env.close()
 
 
 def test_wrapper_close_aborts_a_pending_hkenv_reset_quickly():

@@ -4,7 +4,7 @@ import time
 import numpy as np
 import pytest
 
-from hkrl.env import ACTIONS, DEFAULT_REWARD, HKEnv
+from hkrl.env import ACTIONS, DEFAULT_REWARD, HKEnv, WrongSaveBoot
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.protocol import ConnectionClosed
 from hkrl.reset_metrics import read_reset_spans, reset_log_path
@@ -358,3 +358,28 @@ def test_fake_scene_follows_the_requested_boss():
         env = HKEnv(port=fg.port, boss="gruz_mother")
         _, info = env.reset()
     assert info["scene"] == "GG_gruz_mother"
+
+
+def test_two_consecutive_wrong_scene_aborts_raise_wrong_save_boot():
+    ep = [state(obs())]
+    with FakeGame([ep], abort_scenes=["Tutorial_01", "Tutorial_01"]) as fg:
+        env = HKEnv(port=fg.port)
+        with pytest.raises(WrongSaveBoot, match="Tutorial_01"):
+            env.reset()
+
+
+def test_menu_and_godhome_aborts_never_trip_and_reset_the_streak():
+    # Wrong, then menu (streak back to 0), then wrong again: never reaches
+    # 2 consecutive, and the 4th attempt's clean reset succeeds.
+    ep = [state(obs())]
+    scenes = ["Tutorial_01", "Menu_Title", "Tutorial_01"]
+    with FakeGame([ep], abort_scenes=scenes) as fg:
+        env = HKEnv(port=fg.port)
+        o, info = env.reset()
+    assert info["scene"].startswith("GG_")
+
+
+def test_wrong_save_boot_is_recoverable_for_the_supervisor():
+    # The supervisor's RECOVERABLE handling keys off ConnectionClosed-shaped
+    # failures; WrongSaveBoot must stay inside that family.
+    assert issubclass(WrongSaveBoot, ConnectionClosed)
