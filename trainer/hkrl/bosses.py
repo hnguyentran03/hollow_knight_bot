@@ -46,6 +46,13 @@ BOSSES = {
             "GDash Recover2", "Evade", "Evade Antic", "Evade Land", "Wall L",
             "Sphere A", "Sphere Antic A", "Sphere Recover A", "Wall R",
             "Stun Air", "Stun Land",
+            # Surfaced by the trainer's unseen-state warning during a live
+            # run 2026-08-07 (mechanism postdates hornet1's original list;
+            # these were silently UNKNOWN through all earlier training):
+            # the Godhome statue-entrance trio plus seven fight states.
+            "GG Intro 1", "GG Fall", "GG Land",
+            "GDash Antic", "Jump", "Dmg Idle", "Throw",
+            "Sphere Antic G", "Sphere", "Sphere Recover",
             "UNKNOWN",
         ),
         arena_center_x=26.5,

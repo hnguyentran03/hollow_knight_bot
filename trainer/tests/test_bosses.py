@@ -8,7 +8,7 @@ def test_hornet1_spec_matches_the_measured_constants():
     # the registry must not change them.
     spec = get_boss("hornet1")
     assert spec.id == "hornet1"
-    assert len(spec.fsm_states) == 28          # 27 recorded states + UNKNOWN
+    assert len(spec.fsm_states) == 38          # 37 recorded states + UNKNOWN (10 surfaced 2026-08-07 by the unseen-state warning)
     assert spec.fsm_states[-1] == "UNKNOWN"
     assert spec.arena_center_x == 26.5
     assert spec.arena_half_w == 11.23
