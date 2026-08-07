@@ -40,10 +40,10 @@ namespace HKRLBot
         // BossChallengeUI.LoadBoss(index) tier index for Attuned. 0 on the
         // Hornet statue (DISCOVERED.md section 5); re-verify per statue.
         public int TierIndex;
-        // GameObject name of a boss-owned projectile worth tracking in the
+        // GameObject name of the boss's single tracked projectile in the
         // observation (Hornet's thrown needle), or null when the boss has
-        // none -- the needle obs fields then always read inactive.
-        public string NeedleName;
+        // none -- the projectile obs fields then always read inactive.
+        public string ProjectileName;
     }
 
     public static class BossRegistry
@@ -60,7 +60,7 @@ namespace HKRLBot
                     StatueX = 62.21f,
                     MaxAttunedHp = 1000,
                     TierIndex = 0,
-                    NeedleName = "Needle",
+                    ProjectileName = "Needle",
                 },
                 // Measured 2026-08-03, DISCOVERED.md sections 6 and 7.
                 // Attuned max HP 650, Ascended 945 -> ceiling 700.
@@ -78,7 +78,7 @@ namespace HKRLBot
                     StatueX = 28.6f,
                     MaxAttunedHp = 700,
                     TierIndex = 0,
-                    NeedleName = null,   // no tracked projectile
+                    ProjectileName = null,   // no tracked projectile
                 },
                 // Measured 2026-08-05, DISCOVERED.md section 8.
                 // Attuned max HP 650, Ascended 1000 -> ceiling 700.
@@ -107,7 +107,7 @@ namespace HKRLBot
                     // logged per-shot (96 instance ids in GG_Ghost_Gorb, not
                     // a stable find-by-name target); the "Spike Collider"
                     // objects are arena hazards, not a boss projectile.
-                    NeedleName = null,
+                    ProjectileName = null,
                 },
                 // Measured 2026-08-05, DISCOVERED.md section 9.
                 // Attuned max HP 750, Ascended 1000 -> ceiling 800.
@@ -126,7 +126,7 @@ namespace HKRLBot
                     StatueY = 36.41f,
                     MaxAttunedHp = 800,
                     TierIndex = 0,   // re-verify at this statue during smoke
-                    NeedleName = null,   // no persistent projectile; evidence in DISCOVERED.md section 9
+                    ProjectileName = null,   // no persistent projectile; evidence in DISCOVERED.md section 9
                 },
                 // Measured 2026-08-05, DISCOVERED.md section 10.
                 // Attuned max HP 416, Ascended 600 -> ceiling 450.
@@ -145,7 +145,7 @@ namespace HKRLBot
                     StatueY = 36.41f,
                     MaxAttunedHp = 450,
                     TierIndex = 0,   // re-verify at this statue during smoke
-                    NeedleName = null,   // no projectile candidates; evidence in DISCOVERED.md section 10
+                    ProjectileName = null,   // no projectile candidates; evidence in DISCOVERED.md section 10
                 },
                 // Measured 2026-08-05, DISCOVERED.md section 11.
                 // Attuned max HP 260, Ascended 560, SAME scene as Attuned
@@ -167,7 +167,7 @@ namespace HKRLBot
                     StatueX = 53.6f,
                     MaxAttunedHp = 300,
                     TierIndex = 0,   // re-verify at this statue during smoke
-                    NeedleName = null,   // projectiles are per-shot clones; evidence in DISCOVERED.md section 11
+                    ProjectileName = null,   // projectiles are per-shot clones; evidence in DISCOVERED.md section 11
                 },
             };
 

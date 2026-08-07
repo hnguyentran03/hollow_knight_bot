@@ -248,10 +248,10 @@ namespace HKRLBot
 
                 // Needle: lit chip when active, coords (or "(inactive)") beside it.
                 float ny = cy + (RowH - ChipH) / 2f;
-                DrawChip(new Rect(left, ny, 68f, ChipH), "NEEDLE", b.NeedleActive, InvulnOn);
+                DrawChip(new Rect(left, ny, 68f, ChipH), "NEEDLE", b.ProjectileActive, InvulnOn);
                 GUI.Label(new Rect(left + 74f, cy, cw - 74f, RowH),
-                          b.NeedleActive ? $"x {b.NeedleX,7:F2}   y {b.NeedleY,7:F2}" : "(inactive)",
-                          b.NeedleActive ? body : dim);
+                          b.ProjectileActive ? $"x {b.ProjectileX,7:F2}   y {b.ProjectileY,7:F2}" : "(inactive)",
+                          b.ProjectileActive ? body : dim);
                 cy += RowH;
             }
 

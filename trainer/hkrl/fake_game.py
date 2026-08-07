@@ -10,7 +10,7 @@ def obs(kx=20.0, khp=9, bhp=900, boss_state="Idle", **kw):
     base = {"kx": kx, "ky": 6.0, "kvx": 0.0, "kvy": 0.0, "khp": khp, "soul": 0,
             "on_ground": True, "dashing": False, "invuln": False, "facing_right": True,
             "bx": 30.0, "by": 6.0, "bvx": 0.0, "bvy": 0.0, "bhp": bhp,
-            "boss_state": boss_state, "needle_active": False, "nx": 0.0, "ny": 0.0}
+            "boss_state": boss_state, "projectile_active": False, "px": 0.0, "py": 0.0}
     base.update(kw)
     return base
 
@@ -34,7 +34,7 @@ class FakeGame:
             info["scene"] = f"GG_{boss}"
         return frame
 
-    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, version=2, bosses=(DEFAULT_BOSS, "gruz_mother")):
+    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, version=3, bosses=(DEFAULT_BOSS, "gruz_mother")):
         self.episodes = [list(ep) for ep in episodes]
         # port=0 (default) binds an ephemeral port, same as before; a caller
         # that needs to stand a fresh fake back up on a specific port (e.g.

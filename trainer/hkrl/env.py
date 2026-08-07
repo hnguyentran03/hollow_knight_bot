@@ -17,7 +17,7 @@ OBS_KEYS = [  # scalar block order (before the boss-state one-hot)
     "kx", "ky", "kvx", "kvy", "khp", "soul",
     "on_ground", "dashing", "invuln", "facing_right",
     "bx", "by", "bvx", "bvy", "bhp",
-    "needle_active", "nx", "ny",
+    "projectile_active", "px", "py",
 ]
 
 _BUTTONS = ["left", "right", "up", "down", "jump", "attack", "dash",
@@ -135,9 +135,9 @@ class HKEnv(gym.Env):
             (obs["by"] - obs["ky"]) / b.arena_height,
             obs["bvx"] / VEL_SCALE, obs["bvy"] / VEL_SCALE,
             obs["bhp"] / self._max_bhp,
-            float(obs["needle_active"]),
-            (obs["nx"] - obs["kx"]) / b.arena_half_w if obs["needle_active"] else 0.0,
-            (obs["ny"] - obs["ky"]) / b.arena_height if obs["needle_active"] else 0.0,
+            float(obs["projectile_active"]),
+            (obs["px"] - obs["kx"]) / b.arena_half_w if obs["projectile_active"] else 0.0,
+            (obs["py"] - obs["ky"]) / b.arena_height if obs["projectile_active"] else 0.0,
         ]
         onehot = [0.0] * len(b.fsm_states)
         try:

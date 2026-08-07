@@ -24,8 +24,8 @@ namespace HKRLBot
         public float X, Y, Vx, Vy;
         public int Hp;
         public string FsmState = "";
-        public float NeedleX, NeedleY;
-        public bool NeedleActive;
+        public float ProjectileX, ProjectileY;
+        public bool ProjectileActive;
     }
 
     public class StateReader
@@ -34,7 +34,7 @@ namespace HKRLBot
         private HealthManager bossHm;
         private PlayMakerFSM bossFsm;
         private Rigidbody2D bossRb;
-        private GameObject needleGo;
+        private GameObject projectileGo;
         // ReadBoss() is a hot path: EpisodeManager calls it every decision step.
         // GameObject.Find is a full scene-hierarchy scan, so once the boss has
         // been found in the current scene there is no need to re-scan on every
@@ -60,7 +60,7 @@ namespace HKRLBot
 
         public void OnSceneChange()
         {
-            bossGo = null; bossHm = null; bossFsm = null; bossRb = null; needleGo = null;
+            bossGo = null; bossHm = null; bossFsm = null; bossRb = null; projectileGo = null;
             bossSearchDone = false;
             bossDied = false;
         }
@@ -151,9 +151,9 @@ namespace HKRLBot
             }
             if (bossGo == null) return new BossState { Present = false, Died = bossDied };
 
-            string needleName = BossRegistry.Current.NeedleName;
-            if (needleName != null && needleGo == null)
-                needleGo = GameObject.Find(needleName);
+            string projectileName = BossRegistry.Current.ProjectileName;
+            if (projectileName != null && projectileGo == null)
+                projectileGo = GameObject.Find(projectileName);
             var bp = bossGo.transform.position;
             var s = new BossState
             {
@@ -166,11 +166,11 @@ namespace HKRLBot
                 Hp = bossHm != null ? ReflectionHelper.GetField<HealthManager, int>(bossHm, "hp") : 0,
                 FsmState = bossFsm != null ? bossFsm.ActiveStateName : ""
             };
-            if (needleGo != null && needleGo.activeInHierarchy)
+            if (projectileGo != null && projectileGo.activeInHierarchy)
             {
-                s.NeedleActive = true;
-                s.NeedleX = needleGo.transform.position.x;
-                s.NeedleY = needleGo.transform.position.y;
+                s.ProjectileActive = true;
+                s.ProjectileX = projectileGo.transform.position.x;
+                s.ProjectileY = projectileGo.transform.position.y;
             }
             return s;
         }

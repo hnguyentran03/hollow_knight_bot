@@ -1,4 +1,4 @@
-"""Line-delimited JSON protocol to the HKRLBot mod (protocol v2)."""
+"""Line-delimited JSON protocol to the HKRLBot mod (protocol v3)."""
 import json
 import socket
 import threading
@@ -8,8 +8,11 @@ import time
 # Bumped 1 -> 2 when the reset request gained a required "boss" id: a v1 mod
 # would ignore the field and silently fight Hornet while the trainer builds
 # a different boss's observation space -- exactly the mismatch a version
-# check exists to catch. The consumer-side check lives in HKEnv.__init__.
-PROTOCOL_VERSION = 2
+# check exists to catch. Bumped 2 -> 3 when the needle-era obs fields were
+# renamed (needle_active/nx/ny -> projectile_active/px/py): a v2 mod would
+# send fields the trainer no longer reads, and _flatten would KeyError on
+# the renamed keys. The consumer-side check lives in HKEnv.__init__.
+PROTOCOL_VERSION = 3
 
 
 class ConnectionClosed(Exception):
