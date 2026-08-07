@@ -19,6 +19,12 @@ namespace HKRLBot
         // fight re-establishes its own max from full.
         private int bossMaxHp;
 
+        // Chip label for the boss's tracked projectile, uppercased from the
+        // registry's object name ("Needle" -> "NEEDLE"). Cached because
+        // OnGUI runs several times a frame and ToUpperInvariant allocates.
+        private string projectileLabel;
+        private string projectileLabelSource;
+
         // 1x1 white texture reused for every filled rectangle (panel bg, bar tracks,
         // bar fills, chips). Standard IMGUI trick: tint it per-draw with GUI.color and
         // stretch it to any Rect via GUI.DrawTexture -- created ONCE here, never per
@@ -164,7 +170,7 @@ namespace HKRLBot
             // --- Height depends on which states are readable, so measure first, then
             //     draw the background panel behind everything. ---
             float knightH = k == null ? RowH : (BarRowH * 2 + RowH * 2 + ChipRowH);
-            float bossH   = !b.Present ? RowH : (BarRowH + RowH * 4);
+            float bossH   = !b.Present ? RowH : (BarRowH + RowH * 3 + (BossRegistry.Current.ProjectileName != null ? RowH : 0));
             float total   = Pad + TitleH
                           + Gap + HeaderH + knightH
                           + Gap + HeaderH + bossH
@@ -246,13 +252,23 @@ namespace HKRLBot
                 GUI.Label(new Rect(left, cy, cw, RowH), $"vel   x {b.Vx,8:F2}   y {b.Vy,8:F2}", body);
                 cy += RowH;
 
-                // Needle: lit chip when active, coords (or "(inactive)") beside it.
-                float ny = cy + (RowH - ChipH) / 2f;
-                DrawChip(new Rect(left, ny, 68f, ChipH), "NEEDLE", b.ProjectileActive, InvulnOn);
-                GUI.Label(new Rect(left + 74f, cy, cw - 74f, RowH),
-                          b.ProjectileActive ? $"x {b.ProjectileX,7:F2}   y {b.ProjectileY,7:F2}" : "(inactive)",
-                          b.ProjectileActive ? body : dim);
-                cy += RowH;
+                // Projectile: only bosses that define a tracked projectile
+                // (BossRegistry ProjectileName) get the row at all.
+                string projName = BossRegistry.Current.ProjectileName;
+                if (projName != null)
+                {
+                    if (!ReferenceEquals(projName, projectileLabelSource))
+                    {
+                        projectileLabelSource = projName;
+                        projectileLabel = projName.ToUpperInvariant();
+                    }
+                    float ny = cy + (RowH - ChipH) / 2f;
+                    DrawChip(new Rect(left, ny, 68f, ChipH), projectileLabel, b.ProjectileActive, InvulnOn);
+                    GUI.Label(new Rect(left + 74f, cy, cw - 74f, RowH),
+                              b.ProjectileActive ? $"x {b.ProjectileX,7:F2}   y {b.ProjectileY,7:F2}" : "(inactive)",
+                              b.ProjectileActive ? body : dim);
+                    cy += RowH;
+                }
             }
 
             cy += Gap;
