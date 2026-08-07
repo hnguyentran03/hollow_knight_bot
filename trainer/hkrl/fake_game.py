@@ -4,6 +4,7 @@ import socket
 import threading
 
 from hkrl.bosses import DEFAULT_BOSS
+from hkrl.protocol import PROTOCOL_VERSION
 
 
 def obs(kx=20.0, khp=9, bhp=900, boss_state="Idle", **kw):
@@ -34,7 +35,7 @@ class FakeGame:
             info["scene"] = f"GG_{boss}"
         return frame
 
-    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, version=3, bosses=(DEFAULT_BOSS, "gruz_mother")):
+    def __init__(self, episodes, port=0, fail_resets=0, hang_resets=0, version=PROTOCOL_VERSION, bosses=(DEFAULT_BOSS, "gruz_mother")):
         self.episodes = [list(ep) for ep in episodes]
         # port=0 (default) binds an ephemeral port, same as before; a caller
         # that needs to stand a fresh fake back up on a specific port (e.g.
