@@ -513,7 +513,7 @@ const midnightsBetween = (lo, hi) => {
   return out;
 };
 
-// id -> display name, filled by refreshLauncher() from /api/launcher.
+// id -> display name, filled by fetchBossNames() from /api/launcher.
 let bossNameById = {};
 
 // Proper boss name for an id. Falls back to prettifying the id
@@ -926,18 +926,31 @@ function formParams() {
   return params;
 }
 
-async function refreshLauncher() {
+// Fetches /api/launcher and refreshes bossNameById from it, swallowing
+// fetch errors the same way refreshLauncher does. Standalone on the
+// dashboard page (the registry can't change without a server restart, so
+// a single call at load suffices there) and reused by refreshLauncher(),
+// which needs the same response for the launch panel.
+async function fetchBossNames() {
   let data;
   try {
     data = await (await fetch("/api/launcher")).json();
   } catch (err) {
-    return; // the banner already reports a lost server
+    return null;
   }
+  bossNameById = Object.fromEntries((data.bosses || []).map(b => [b.id, b.name]));
+  return data;
+}
+
+async function refreshLauncher() {
+  const data = await fetchBossNames();
+  if (!data) return; // the banner already reports a lost server
   document.getElementById("launch").hidden = false;
   const bossSel = document.getElementById("f-boss");
   const bosses = data.bosses || [];
-  bossNameById = Object.fromEntries(bosses.map(b => [b.id, b.name]));
-  if ([...bossSel.options].map(o => o.value).join() !== bosses.map(b => b.id).join()) {
+  const curSig = [...bossSel.options].map(o => o.value + ":" + o.textContent).join();
+  const newSig = bosses.map(b => b.id + ":" + b.name).join();
+  if (curSig !== newSig) {
     bossSel.replaceChildren();
     for (const b of bosses) {
       const opt = document.createElement("option");
@@ -1358,7 +1371,10 @@ if (SUMMON) {
   setInterval(refreshLauncher, LAUNCH_POLL_MS);
 } else {
   // Dashboard-only page: the launch panel stays hidden (its poll never
-  // runs); the Summon button is the only launch surface here.
+  // runs); the Summon button is the only launch surface here. Still need
+  // proper boss names for the nameplates, so fetch them once -- the
+  // registry can't change without a server restart, so no polling needed.
+  fetchBossNames();
   refresh();
   setInterval(refresh, POLL_MS);
 }

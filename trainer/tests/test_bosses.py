@@ -70,7 +70,8 @@ def test_every_boss_has_a_display_name():
 
 
 def test_display_names_use_the_hall_of_gods_statue_names():
-    # The two ids a prettify regex could never get right.
+    # hornet1 is the id the regex can never get right; the others pin the
+    # statue names.
     assert get_boss("hornet1").display_name == "Hornet Protector"
     assert get_boss("soul_warrior").display_name == "Soul Warrior"
     assert get_boss("false_knight").display_name == "False Knight"
