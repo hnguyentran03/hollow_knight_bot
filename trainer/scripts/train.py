@@ -32,9 +32,10 @@ from hkrl.vec import RealEpisodeVecMonitor, RealEpisodeVecNormalize  # noqa: E40
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from launch_instances import (  # noqa: E402
-    DEFAULT_APP, DEFAULT_PORT, SAVE_ISOLATION_SUPPORTED, backup_saves,
-    prepare_instance,
+    DEFAULT_APP, DEFAULT_PORT, MASTER_BUNDLE_ID, SAVE_ISOLATION_SUPPORTED,
+    backup_saves, prepare_instance, seed_save_dir,
 )
+from hkrl.cloneprep import prepare_clone_save  # noqa: E402
 
 GAMMA = 0.995
 
@@ -317,6 +318,27 @@ def build_apps(ports, app, instances_root):
             for i, p in enumerate(ports)]
 
 
+def build_prepares(ports):
+    """Per-port relaunch callbacks that re-seed the clone save from master.
+
+    A relaunch re-execs the same clone app, but the clone's SAVE can be
+    the broken part: the wrong-save boot flake starts a new game when
+    user1.dat reads empty/corrupt, and rebooting into that same save
+    re-flakes until the recovery ceiling kills the run. Re-seeding on
+    every relaunch makes the supervisor's existing relaunch path an
+    actual cure. Returns None where clones don't exist (no save
+    isolation); relaunch then behaves exactly as before.
+    """
+    if not SAVE_ISOLATION_SUPPORTED:
+        return None
+
+    def make(port):
+        bundle_id = f"{MASTER_BUNDLE_ID}.hkrl{port}"
+        return lambda: prepare_clone_save(seed_save_dir(bundle_id))
+
+    return [make(p) for p in ports]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--timesteps", type=int, default=500_000,
@@ -448,7 +470,8 @@ def main() -> None:
     # clone with a per-port bundle id (own save dir, own ModLog), refreshed
     # from the master app and save at every start -- see build_apps.
     apps = build_apps(ports, args.app, args.root / "instances")
-    game = GameFleet(ports, app=args.app, apps=apps)
+    game = GameFleet(ports, app=args.app, apps=apps,
+                     prepares=build_prepares(ports))
     env = None
     exit_code = 0
     try:

@@ -519,3 +519,25 @@ def test_confirm_ready_prompt_names_the_boss(monkeypatch):
     train.confirm_ready(False, "Gruz Mother")
     assert "Gruz Mother statue" in prompts[0]
     assert "Hornet" not in prompts[0]
+
+
+def test_build_prepares_reseeds_that_ports_clone_save(monkeypatch):
+    calls = []
+    monkeypatch.setattr(train, "SAVE_ISOLATION_SUPPORTED", True)
+    monkeypatch.setattr(train, "seed_save_dir",
+                        lambda bundle_id: calls.append(("seed", bundle_id))
+                        or pathlib.Path("/sandbox/saves.hkrl9021"))
+    monkeypatch.setattr(train, "prepare_clone_save",
+                        lambda save_dir: calls.append(("prep", save_dir)))
+    prepares = train.build_prepares([9020, 9021])
+    assert len(prepares) == 2 and calls == []   # lazy: nothing runs at build
+    prepares[1]()
+    assert calls == [
+        ("seed", f"{train.MASTER_BUNDLE_ID}.hkrl9021"),
+        ("prep", pathlib.Path("/sandbox/saves.hkrl9021")),
+    ]
+
+
+def test_build_prepares_is_none_without_save_isolation(monkeypatch):
+    monkeypatch.setattr(train, "SAVE_ISOLATION_SUPPORTED", False)
+    assert train.build_prepares([9020]) is None
