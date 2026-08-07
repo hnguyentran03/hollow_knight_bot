@@ -49,21 +49,24 @@ namespace HKRLBot
 
         // Precomputed colors -- Color is a struct, so these live in the type's field
         // storage and cost no per-frame GC. Nothing below allocates a Color in a loop.
-        private static readonly Color PanelBg   = new Color(0.05f, 0.06f, 0.09f, 0.86f);
-        private static readonly Color Accent    = new Color(1.00f, 0.75f, 0.35f, 1.00f);
-        private static readonly Color HeaderBg  = new Color(1.00f, 1.00f, 1.00f, 0.06f);
-        private static readonly Color TrackCol  = new Color(1.00f, 1.00f, 1.00f, 0.12f);
-        private static readonly Color HpGreen   = new Color(0.30f, 0.85f, 0.35f, 0.95f);
-        private static readonly Color HpRed     = new Color(0.90f, 0.25f, 0.20f, 0.95f);
-        private static readonly Color SoulBlue  = new Color(0.35f, 0.65f, 1.00f, 0.95f);
-        private static readonly Color BossHp    = new Color(0.88f, 0.28f, 0.52f, 0.95f);
+        private static readonly Color PanelBg   = new Color(0.02f, 0.02f, 0.04f, 0.90f);
+        private static readonly Color Bone      = new Color(0.91f, 0.89f, 0.84f, 1.00f); // HK parchment white
+        private static readonly Color BoneDim   = new Color(0.62f, 0.61f, 0.57f, 1.00f);
+        private static readonly Color Accent    = new Color(0.91f, 0.89f, 0.84f, 0.90f); // was orange; HK UI is bone-on-black
+        private static readonly Color HeaderBg  = new Color(1.00f, 1.00f, 1.00f, 0.05f);
+        private static readonly Color TrackCol  = new Color(1.00f, 1.00f, 1.00f, 0.10f);
+        private static readonly Color BarEdge   = new Color(0.00f, 0.00f, 0.00f, 0.55f); // inner bar border
+        private static readonly Color HpGreen   = new Color(0.55f, 0.75f, 0.55f, 0.95f);
+        private static readonly Color HpRed     = new Color(0.75f, 0.30f, 0.28f, 0.95f);
+        private static readonly Color SoulBlue  = new Color(0.70f, 0.80f, 0.95f, 0.95f); // SOUL is white-blue in game
+        private static readonly Color BossHp    = new Color(0.80f, 0.75f, 0.65f, 0.95f); // boss bar reads bone, not pink
         private static readonly Color ChipOff   = new Color(1.00f, 1.00f, 1.00f, 0.05f);
         private static readonly Color ChipDim   = new Color(1.00f, 1.00f, 1.00f, 0.30f);
-        private static readonly Color GroundOn  = new Color(0.30f, 0.80f, 0.40f, 0.90f);
-        private static readonly Color DashOn    = new Color(0.30f, 0.75f, 0.95f, 0.90f);
-        private static readonly Color InvulnOn  = new Color(0.95f, 0.80f, 0.25f, 0.90f);
-        private static readonly Color FaceCol   = new Color(0.45f, 0.55f, 0.85f, 0.90f);
-        private static readonly Color DeadOn    = new Color(0.90f, 0.25f, 0.25f, 0.95f);
+        private static readonly Color GroundOn  = new Color(0.42f, 0.62f, 0.46f, 0.90f);
+        private static readonly Color DashOn    = new Color(0.42f, 0.60f, 0.72f, 0.90f);
+        private static readonly Color InvulnOn  = new Color(0.75f, 0.68f, 0.40f, 0.90f);
+        private static readonly Color FaceCol   = new Color(0.48f, 0.52f, 0.66f, 0.90f);
+        private static readonly Color DeadOn    = new Color(0.72f, 0.30f, 0.28f, 0.95f);
 
         // Layout constants (pixels). Kept fixed so numeric columns don't reflow.
         private const float W        = 344f; // panel width
@@ -92,19 +95,19 @@ namespace HKRLBot
             tex.hideFlags = HideFlags.HideAndDontSave; // don't let it leak into the scene
 
             title = new GUIStyle { fontSize = 15, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-            title.normal.textColor = new Color(0.96f, 0.92f, 0.82f);
+            title.normal.textColor = Bone;
 
             header = new GUIStyle { fontSize = 12, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-            header.normal.textColor = Accent;
+            header.normal.textColor = Bone;
 
             body = new GUIStyle { fontSize = 12, alignment = TextAnchor.MiddleLeft };
-            body.normal.textColor = new Color(0.85f, 0.90f, 0.88f);
+            body.normal.textColor = new Color(Bone.r, Bone.g, Bone.b, 0.92f);
 
             dim = new GUIStyle { fontSize = 12, alignment = TextAnchor.MiddleLeft };
-            dim.normal.textColor = new Color(0.60f, 0.66f, 0.68f);
+            dim.normal.textColor = BoneDim;
 
             stateName = new GUIStyle { fontSize = 12, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-            stateName.normal.textColor = Accent;
+            stateName.normal.textColor = Bone;
 
             chip = new GUIStyle { fontSize = 10, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
             chip.normal.textColor = Color.white;
@@ -196,6 +199,8 @@ namespace HKRLBot
             frac = Mathf.Clamp01(frac);
             if (frac > 0f)
                 DrawRect(new Rect(rect.x, rect.y, rect.width * frac, rect.height), fill);
+            DrawRect(new Rect(rect.x, rect.y, rect.width, 1f), BarEdge);
+            DrawRect(new Rect(rect.x, rect.y + rect.height - 1f, rect.width, 1f), BarEdge);
         }
 
         // A lit/dim status chip: filled with onColor when active, near-invisible when
@@ -246,10 +251,13 @@ namespace HKRLBot
             float cw = W - Pad * 2;
 
             DrawRect(new Rect(x, top, W, total), PanelBg);
-            DrawRect(new Rect(x, top, 3f, total), Accent); // left accent stripe
+            DrawRect(new Rect(x, top, W, 1f), Accent);                    // top
+            DrawRect(new Rect(x, top + total - 1f, W, 1f), Accent);       // bottom
+            DrawRect(new Rect(x, top, 1f, total), Accent);                // left
+            DrawRect(new Rect(x + W - 1f, top, 1f, total), Accent);       // right
 
             float cy = top + Pad;
-            GUI.Label(new Rect(left, cy, cw, TitleH), "HKRLBOT · DEBUG HUD", title);
+            GUI.Label(new Rect(left, cy, cw, TitleH), "HKRL", title);
             cy += TitleH + Gap;
 
             // ---------------- KNIGHT ----------------
@@ -344,6 +352,9 @@ namespace HKRLBot
         {
             DrawRect(new Rect(left, cy, cw, HeaderH), HeaderBg);
             GUI.Label(new Rect(left + 6f, cy, cw - 6f, HeaderH), label, header);
+            float ly = cy + HeaderH - 1f;
+            DrawRect(new Rect(left, ly, cw, 1f), Accent);                  // divider
+            GUI.Label(new Rect(left + cw / 2f - 8f, cy + HeaderH - 9f, 16f, 16f), "◆", header);
             return cy + HeaderH;
         }
 
