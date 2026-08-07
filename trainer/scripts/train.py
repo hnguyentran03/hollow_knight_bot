@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train a recurrent PPO against Hornet 1 on N supervised game instances.
+"""Train a recurrent PPO against a registered boss on N supervised game instances.
 
 Owns the game processes end to end: launches them (one per port, counting
 up from --port), supervises them through crashes, wedges, and App Nap
@@ -146,7 +146,7 @@ def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs
     won/boss_damage_frac from the raw infos instead.
 
     No frame stacking: one observation is an instant, and the FSM one-hot
-    does not encode how long Hornet has been in a state -- but the recurrent
+    does not encode how long the boss has been in a state -- but the recurrent
     ("MlpLstmPolicy") policy carries its own hidden state across steps, so
     the LSTM supplies exactly the temporal memory a VecFrameStack used to
     fake. Stacking on top would only feed the LSTM redundant, delayed copies
@@ -260,7 +260,7 @@ class StopOnFlag(BaseCallback):
 
     The episode boundary, not the next step: cutting the fight off mid-swing
     leaves the game mid-fight, where the next session's first reset has to
-    unwind a live Hornet through the truncation path -- the slowest,
+    unwind a live boss through the truncation path -- the slowest,
     budget-hungriest branch of the reset macro. Waiting for done costs at
     most one episode (~3 minutes at the env's max_steps ceiling, usually far
     less), and a second Ctrl-C still forces an immediate abort via

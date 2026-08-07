@@ -80,7 +80,7 @@ def _episode(steps=50, **first_frame):
     return frames
 
 
-# Index of khp/9.0 in HornetEnv._flatten's vector. Tests script a distinct khp
+# Index of khp/9.0 in HKEnv._flatten's vector. Tests script a distinct khp
 # per instance and read this column back to identify which reset produced an
 # observation.
 KHP = 4

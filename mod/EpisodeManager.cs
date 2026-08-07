@@ -471,11 +471,11 @@ namespace HKRLBot
         //     reading is trustworthy -- this is the gap that used to let a
         //     mid-fight HP reading masquerade as a fresh max.
         //   - Win: the boss is already dead (or the scene has already started
-        //     leaving GG_Hornet_1) the instant the reset arrives, so
+        //     leaving the boss scene) the instant the reset arrives, so
         //     sawNotLiveSinceReset is set on the first tick; the subsequent
         //     walk-to-statue and menu confirm both take well over a tick, and
-        //     confirming the challenge itself triggers a GG_Hornet_1 scene
-        //     load, setting sawSceneReentrySinceReset before the fight is
+        //     confirming the challenge itself triggers a boss-scene load,
+        //     setting sawSceneReentrySinceReset before the fight is
         //     live again -- unaffected in practice.
         //   - Truncation while the fight is genuinely still live: neither
         //     flag is set yet, so fightLive stays false even though the raw
@@ -483,9 +483,9 @@ namespace HKRLBot
         //     cycle (below) and -- because this method already called
         //     Input.Clear() when the "reset" was accepted -- the knight is no
         //     longer being played and only receives the scene's retry-confirm
-        //     Jump pulse (ResetMacro's GG_Hornet_1 branch does not
+        //     Jump pulse (ResetMacro's boss-scene branch does not
         //     conditionalize on k.Dead, so it runs unconditionally). Against
-        //     an aggressive, un-dodged Hornet this reliably lets the fight
+        //     an aggressive, un-dodged boss this reliably lets the fight
         //     actually end (a real death), which sets sawNotLiveSinceReset and
         //     lets the existing death-retry macro (including its own scene
         //     reload) carry the rest of the way to a genuine fresh fight,
@@ -553,10 +553,11 @@ namespace HKRLBot
                 // reset (sawNotLiveSinceReset / sawSceneReentrySinceReset
                 // above), this is a fresh (re)spawn's HP, not a stale
                 // mid-fight reading, so b.Hp here IS the fight's max HP,
-                // before any damage has been dealt. Hornet 1 Attuned has a
-                // known/expected HP pool; an Ascended or Radiant tier being
-                // accepted by mistake would show up here as an unexpectedly
-                // large number, which is otherwise invisible (the trainer's
+                // before any damage has been dealt. Each boss's Attuned tier
+                // has a known HP pool (BossRegistry MaxAttunedHp); an
+                // Ascended or Radiant tier being accepted by mistake would
+                // show up here as an unexpectedly large number, which is
+                // otherwise invisible (the trainer's
                 // _max_bhp normalizes it away). The reset macro's GateConfirm
                 // governs every confirm while the challenge menu is open (tier
                 // read, one highlight-correction attempt, then LoadBoss(0) by
@@ -749,7 +750,7 @@ namespace HKRLBot
         // Latches true once StateReader.ConfirmAttunedChallenge() (LoadBoss(0)
         // invoked reflectively -- see StateReader.cs) has successfully
         // requested Attuned directly for the current menu-open visit. The
-        // scene change into GG_Hornet_1 follows on its own once LoadBoss(0)
+        // scene change into the boss scene follows on its own once LoadBoss(0)
         // runs; without this latch the gate would call it again every
         // Tick() while the menu object briefly remains, which is at best
         // redundant and at worst re-enters LoadBoss mid-transition. Reset
@@ -875,7 +876,7 @@ namespace HKRLBot
         // that state, step-off-statue's own step-off-menu-recover stall-clear
         // pulsed a BLIND Jump confirm (no tier read at all) into the leftover
         // menu, bypassing the tier gate entirely: observed twice as a scene
-        // change straight into GG_Hornet_1 during step-off-statue, the
+        // change straight into the boss scene during step-off-statue, the
         // statue-menu branch never reached at all that reset.
         //
         // Fix: the tier gate's decision table -- read the selected tier, make
@@ -919,7 +920,7 @@ namespace HKRLBot
             if (attunedConfirmedViaLoadBoss)
             {
                 // ConfirmAttunedChallenge() (LoadBoss(0)) already succeeded
-                // this visit -- the scene change into GG_Hornet_1 follows on
+                // this visit -- the scene change into the boss scene follows on
                 // its own. Don't re-invoke LoadBoss every cycle while the
                 // menu object briefly lingers, and don't fire the manual
                 // confirm pulse either.
