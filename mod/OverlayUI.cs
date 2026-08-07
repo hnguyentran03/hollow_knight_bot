@@ -47,6 +47,15 @@ namespace HKRLBot
         private bool fontsResolved;
         private bool censusLogged;
 
+        // Bounded retry: a future game update could rename/remove these fonts
+        // entirely, which would otherwise make the scene-change handler rescan
+        // (one full FindObjectsOfTypeAll<Font>) forever -- once per scene load,
+        // i.e. once per training episode. Give up after MaxResolveAttempts and
+        // unsubscribe so the steady-state cost is zero.
+        private const int MaxResolveAttempts = 8;
+        private int resolveAttempts;
+        private bool resolveGaveUp;
+
         // Precomputed colors -- Color is a struct, so these live in the type's field
         // storage and cost no per-frame GC. Nothing below allocates a Color in a loop.
         private static readonly Color PanelBg   = new Color(0.02f, 0.02f, 0.04f, 0.90f);
@@ -122,6 +131,7 @@ namespace HKRLBot
         // succeeds (see OnEnable/OnDisable) -- never per frame.
         private void TryResolveFonts()
         {
+            resolveAttempts++;
             var fonts = Resources.FindObjectsOfTypeAll<Font>();
             if (!censusLogged)
             {
@@ -130,16 +140,38 @@ namespace HKRLBot
                 HKRLBotMod.Instance.Log(names.ToString());
                 censusLogged = true;
             }
+            // Multiple trajan variants can be loaded at once (Bold, Regular, ...);
+            // FindObjectsOfTypeAll's enumeration order is not guaranteed stable
+            // across boots, so picking "first trajan match" would make the title
+            // font flip nondeterministically. Prefer a bold trajan outright; only
+            // settle for a non-bold one if no bold match has been seen yet.
+            bool titleIsBold = false;
             foreach (var f in fonts)
             {
                 var n = f.name.ToLowerInvariant();
-                if (serifTitle == null && n.Contains("trajan")) serifTitle = f;
+                if (n.Contains("trajan") && (serifTitle == null || (!titleIsBold && n.Contains("bold"))))
+                {
+                    serifTitle = f;
+                    titleIsBold = n.Contains("bold");
+                }
                 if (serifBody == null && n.Contains("perpetua")) serifBody = f;
             }
             if (serifTitle == null) serifTitle = serifBody;
             if (serifBody == null) serifBody = serifTitle;
-            if (serifTitle == null) return; // nothing usable yet; retry on next scene
+            if (serifTitle == null)
+            {
+                if (!resolveGaveUp && resolveAttempts >= MaxResolveAttempts)
+                {
+                    resolveGaveUp = true;
+                    HKRLBotMod.Instance.Log(
+                        $"OverlayUI: giving up on font resolution after {MaxResolveAttempts} attempts; HUD stays on the IMGUI default font");
+                    UnityEngine.SceneManagement.SceneManager.activeSceneChanged -= OnSceneChanged;
+                }
+                return; // nothing usable yet; retry on next scene (unless we just gave up)
+            }
             fontsResolved = true;
+            // Resolved: no more retries needed, so stop paying the per-scene scan cost.
+            UnityEngine.SceneManagement.SceneManager.activeSceneChanged -= OnSceneChanged;
             title.font = serifTitle; header.font = serifTitle;
             body.font = serifBody; dim.font = serifBody;
             stateName.font = serifBody; chip.font = serifBody;
@@ -160,7 +192,10 @@ namespace HKRLBot
         private void OnSceneChanged(UnityEngine.SceneManagement.Scene from,
                                     UnityEngine.SceneManagement.Scene to)
         {
-            if (!fontsResolved) TryResolveFonts();
+            // TryResolveFonts unsubscribes this handler once resolved or once it
+            // gives up; the flag checks here are just defense against OnEnable
+            // re-subscribing it across a disable/enable cycle in either state.
+            if (!fontsResolved && !resolveGaveUp) TryResolveFonts();
         }
 
         private void Update()
