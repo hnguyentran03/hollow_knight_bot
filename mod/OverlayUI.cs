@@ -32,6 +32,11 @@ namespace HKRLBot
         // reset would fight.
         private string bossHeaderLabel = "BOSS";
         private string bossHeaderSource;
+        // Whether the diamond glyph is safe to draw in the BOSS header.
+        // Long boss names (e.g. "HORNET PROTECTOR") reach past the band's
+        // center; skip the glyph when it would collide with the text.
+        // Divider line always draws regardless.
+        private bool bossHeaderDiamond = true;
 
         // 1x1 white texture reused for every filled rectangle (panel bg, bar tracks,
         // bar fills, chips). Standard IMGUI trick: tint it per-draw with GUI.color and
@@ -346,8 +351,13 @@ namespace HKRLBot
             {
                 bossHeaderSource = bossName;
                 bossHeaderLabel = "BOSS · " + bossName.ToUpperInvariant();
+                // Measure the header width once to decide whether the diamond
+                // glyph can safely draw without colliding with the text.
+                var headerContent = new GUIContent(bossHeaderLabel);
+                float labelWidth = header.CalcSize(headerContent).x;
+                bossHeaderDiamond = labelWidth + 12f < cw / 2f - 8f;
             }
-            cy = SectionHeader(left, cy, cw, bossHeaderLabel);
+            cy = SectionHeader(left, cy, cw, bossHeaderLabel, bossHeaderDiamond);
             if (!b.Present)
             {
                 GUI.Label(new Rect(left, cy, cw, RowH), "(none present)", dim);
@@ -397,13 +407,13 @@ namespace HKRLBot
         }
 
         // Draws a section header band and returns the y below it.
-        private float SectionHeader(float left, float cy, float cw, string label)
+        private float SectionHeader(float left, float cy, float cw, string label, bool diamond = true)
         {
             DrawRect(new Rect(left, cy, cw, HeaderH), HeaderBg);
             GUI.Label(new Rect(left + 6f, cy, cw - 6f, HeaderH), label, header);
             float ly = cy + HeaderH - 1f;
             DrawRect(new Rect(left, ly, cw, 1f), Accent);                  // divider
-            GUI.Label(new Rect(left + cw / 2f - 8f, cy + HeaderH - 9f, 16f, 16f), "◆", header);
+            if (diamond) GUI.Label(new Rect(left + cw / 2f - 8f, cy + HeaderH - 9f, 16f, 16f), "◆", header);
             return cy + HeaderH;
         }
 
