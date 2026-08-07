@@ -38,6 +38,15 @@ namespace HKRLBot
         private GUIStyle stateName;  // highlighted boss FSM state name
         private GUIStyle chip;       // centered text inside the boolean-flag chips
 
+        // The game's own legacy Font assets, hunted by name at runtime.
+        // IMGUI cannot use TextMeshPro fonts, so only legacy Font assets
+        // qualify; whether any exist is measured (census log below), never
+        // assumed. Null until found; styles fall back to the IMGUI default.
+        private Font serifTitle;   // Trajan-ish: title + section headers
+        private Font serifBody;    // Perpetua-ish: body rows, dims, chips
+        private bool fontsResolved;
+        private bool censusLogged;
+
         // Precomputed colors -- Color is a struct, so these live in the type's field
         // storage and cost no per-frame GC. Nothing below allocates a Color in a loop.
         private static readonly Color PanelBg   = new Color(0.05f, 0.06f, 0.09f, 0.86f);
@@ -99,6 +108,56 @@ namespace HKRLBot
 
             chip = new GUIStyle { fontSize = 10, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
             chip.normal.textColor = Color.white;
+
+            TryResolveFonts();
+        }
+
+        // One census log line (every loaded legacy Font by name), then pick
+        // by case-insensitive substring: "trajan" for titles, "perpetua"
+        // for body; if only one family matches it serves both. Fonts load
+        // with scenes, so this is retried on every scene change until it
+        // succeeds (see OnEnable/OnDisable) -- never per frame.
+        private void TryResolveFonts()
+        {
+            var fonts = Resources.FindObjectsOfTypeAll<Font>();
+            if (!censusLogged)
+            {
+                var names = new System.Text.StringBuilder("OverlayUI font census:");
+                foreach (var f in fonts) names.Append(' ').Append(f.name).Append(';');
+                HKRLBotMod.Instance.Log(names.ToString());
+                censusLogged = true;
+            }
+            foreach (var f in fonts)
+            {
+                var n = f.name.ToLowerInvariant();
+                if (serifTitle == null && n.Contains("trajan")) serifTitle = f;
+                if (serifBody == null && n.Contains("perpetua")) serifBody = f;
+            }
+            if (serifTitle == null) serifTitle = serifBody;
+            if (serifBody == null) serifBody = serifTitle;
+            if (serifTitle == null) return; // nothing usable yet; retry on next scene
+            fontsResolved = true;
+            title.font = serifTitle; header.font = serifTitle;
+            body.font = serifBody; dim.font = serifBody;
+            stateName.font = serifBody; chip.font = serifBody;
+            HKRLBotMod.Instance.Log(
+                $"OverlayUI fonts: title={serifTitle.name} body={serifBody.name}");
+        }
+
+        private void OnEnable()
+        {
+            UnityEngine.SceneManagement.SceneManager.activeSceneChanged += OnSceneChanged;
+        }
+
+        private void OnDisable()
+        {
+            UnityEngine.SceneManagement.SceneManager.activeSceneChanged -= OnSceneChanged;
+        }
+
+        private void OnSceneChanged(UnityEngine.SceneManagement.Scene from,
+                                    UnityEngine.SceneManagement.Scene to)
+        {
+            if (!fontsResolved) TryResolveFonts();
         }
 
         private void Update()
