@@ -522,7 +522,7 @@ def build_prepares(ports):
     return [make(p) for p in ports]
 
 
-def prepare_session(argv=None):
+def prepare_session(argv=None) -> tuple[argparse.Namespace, Path, tuple | None, int, bool]:
     """Everything before any game process exists: parse and layer args,
     locate or create the run dir, resolve boss and step budget, and append
     this session's config record. Returns (args, run_dir, resume, budget,

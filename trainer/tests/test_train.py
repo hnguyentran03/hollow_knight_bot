@@ -763,3 +763,22 @@ def test_prepare_session_fresh_run_writes_the_target(tmp_path):
     rec = json.loads((run_dir / "config.jsonl").read_text())
     assert rec["target_timestep"] == 1000
     assert rec["gamma"] == train.GAMMA and rec["instances"] == 1
+
+
+def test_prepare_session_allows_typed_target_kl_on_resume(tmp_path):
+    # The one mutable exception: unlike the baked hyperparameter flags,
+    # typing --target-kl on resume is allowed and overrides the record.
+    run_dir = _seed_resumable_run(tmp_path, {
+        "boss": "hornet1", "target_kl": 0.05,
+        "timesteps": 100_000, "target_timestep": 100_000})
+    args, _, _, _, _ = train.prepare_session(
+        ["--resume", str(run_dir), "--target-kl", "0.1"])
+    assert args.target_kl == 0.1
+
+
+def test_prepare_session_refuses_an_existing_run_dir_for_a_fresh_run(tmp_path):
+    (tmp_path / "runs" / "taken").mkdir(parents=True)
+    with pytest.raises(SystemExit, match="--resume"):
+        train.prepare_session(
+            ["--root", str(tmp_path), "--run-id", "taken",
+             "--timesteps", "1000"])
