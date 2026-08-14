@@ -541,3 +541,25 @@ def test_build_prepares_reseeds_that_ports_clone_save(monkeypatch):
 def test_build_prepares_is_none_without_save_isolation(monkeypatch):
     monkeypatch.setattr(train, "SAVE_ISOLATION_SUPPORTED", False)
     assert train.build_prepares([9020]) is None
+
+
+def test_parse_session_args_tracks_which_flags_were_typed():
+    args, explicit = train.parse_session_args([])
+    assert explicit == set()
+    assert args.instances == 1 and args.timesteps == 500_000
+
+    args, explicit = train.parse_session_args(
+        ["--instances", "2", "--timesteps", "40000"])
+    assert explicit == {"instances", "timesteps"}
+    assert args.instances == 2 and args.timesteps == 40_000
+
+
+def test_parse_session_args_sees_boolean_and_store_true_flags():
+    # BooleanOptionalAction (both spellings) and store_true must register
+    # as typed, or inheritance could silently override an explicit choice.
+    _, explicit = train.parse_session_args(["--no-async-resets"])
+    assert "async_resets" in explicit
+    _, explicit = train.parse_session_args(["--async-resets"])
+    assert "async_resets" in explicit
+    _, explicit = train.parse_session_args(["--auto"])
+    assert "auto" in explicit

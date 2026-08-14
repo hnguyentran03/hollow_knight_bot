@@ -130,6 +130,102 @@ def session_banner(timesteps: int, start_timestep: int = 0,
             f"(target timestep {target:,})")
 
 
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--timesteps", type=int, default=500_000,
+                    help="env steps to collect this session (~54k/hour at "
+                         "15 Hz; adds onto a resumed run's count)")
+    ap.add_argument("--run-id", default=None,
+                    help="name for a NEW run under <root>/runs/ "
+                         "(default: timestamp)")
+    ap.add_argument("--resume", type=Path, default=None, metavar="RUN_DIR",
+                    help="continue an existing run from its latest generation")
+    ap.add_argument("--root", type=Path, default=Path("~/hkrl").expanduser())
+    ap.add_argument("--app", type=Path, default=DEFAULT_APP)
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
+                    help="first bridge port; instance i listens on port+i")
+    ap.add_argument("--instances", type=int, default=1,
+                    help="game instances to run in parallel. Every instance "
+                         "is a full game client -- 2-3 is realistic on one "
+                         "machine, and every window must stay visible")
+    ap.add_argument("--gen-every", type=int, default=15_000)
+    ap.add_argument("--n-steps", type=int, default=None,
+                    help="PPO rollout length PER INSTANCE (default: "
+                         "2048 // instances, inflated ~23%% when async "
+                         "resets are on so the update still sees ~2048 REAL "
+                         "samples after the placeholder mask). The default "
+                         "divides so the total batch -- and with it the "
+                         "update's wall-clock time -- stays roughly constant "
+                         "as --instances grows: the games run on in real "
+                         "time while the update computes, every Knight "
+                         "standing in a live fight")
+    ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--n-epochs", type=int, default=5,
+                    help="PPO epochs per update. Kept at 5 so the recurrent "
+                         "256x256+LSTM update stays short (~6.7s on CPU): "
+                         "the keepalive pinger keeps connections alive "
+                         "through longer updates, but the Knights stand in "
+                         "their live fights for the whole update. Raise "
+                         "only if the net moves off CPU.")
+    ap.add_argument("--target-kl", type=float, default=None,
+                    help="early-stop an update's remaining epochs once "
+                         "approx_kl exceeds ~1.5x this (SB3 semantics). "
+                         "Unset: no cap, and a resumed checkpoint keeps "
+                         "whatever it trained with. When set it also "
+                         "overrides the checkpoint on resume, unlike the "
+                         "other hyperparameters. Try 0.05 against the "
+                         "late-run win-rate slide (observed approx_kl "
+                         "~0.15-0.25 without a cap).")
+    ap.add_argument("--boss", default=None, choices=sorted(BOSSES),
+                    help=f"which boss to train against (default: {DEFAULT_BOSS}). "
+                         "Sets the observation space, so checkpoints are "
+                         "boss-specific: a resume always keeps the run's "
+                         "recorded boss and refuses a conflicting flag.")
+    ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--auto", action="store_true",
+                    help="skip the interactive ready prompt (unattended/"
+                         "dashboard launches); the boot macro drives the "
+                         "game into the Hall of Gods")
+    ap.add_argument("--measure-resets", action="store_true",
+                    help="Phase 0 async-resets measurement: log every reset's "
+                         "wall-clock span to resets_<port>.jsonl under the run "
+                         "dir. Analyze with scripts/measure_reset_freeze.py. "
+                         "Off by default; a normal run pays nothing.")
+    ap.add_argument("--async-resets", action=argparse.BooleanOptionalAction,
+                    default=None,
+                    help="background-thread resets with placeholder steps so "
+                         "one instance's reset never freezes its siblings. "
+                         "Default: on at --instances >= 2 (Phase 2 gate "
+                         "passed 2026-07-22 -- see the async-resets design doc), off at "
+                         "1. --no-async-resets forces the old synchronous "
+                         "behavior.")
+    ap.add_argument("--async-reset-mode", choices=("prefix", "isolated"),
+                    default="isolated",
+                    help="what the pending window is to PPO: a prefix of the "
+                         "next episode (LSTM state carries across the splice) "
+                         "or an isolated throwaway episode (LSTM state resets "
+                         "at the fight's first real frame)")
+    return ap
+
+
+def parse_session_args(argv=None):
+    """Parse argv and learn which flags the user actually typed.
+
+    Returns (args, explicit): the parsed namespace plus the set of dests
+    that appeared on the command line, learned from a second parse of the
+    same argv with every default suppressed -- a dest surviving into that
+    namespace can only have come from an actual flag. Resume inheritance
+    (apply_recorded_config) needs exactly that typed-vs-default
+    distinction.
+    """
+    args = build_parser().parse_args(argv)
+    probe = build_parser()
+    for action in probe._actions:
+        action.default = argparse.SUPPRESS
+    explicit = set(vars(probe.parse_args(argv)))
+    return args, explicit
+
+
 def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs):
     """SupervisedVecEnv -> RealEpisodeVecMonitor -> RealEpisodeVecNormalize.
 
@@ -340,81 +436,7 @@ def build_prepares(ports):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--timesteps", type=int, default=500_000,
-                    help="env steps to collect this session (~54k/hour at "
-                         "15 Hz; adds onto a resumed run's count)")
-    ap.add_argument("--run-id", default=None,
-                    help="name for a NEW run under <root>/runs/ "
-                         "(default: timestamp)")
-    ap.add_argument("--resume", type=Path, default=None, metavar="RUN_DIR",
-                    help="continue an existing run from its latest generation")
-    ap.add_argument("--root", type=Path, default=Path("~/hkrl").expanduser())
-    ap.add_argument("--app", type=Path, default=DEFAULT_APP)
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
-                    help="first bridge port; instance i listens on port+i")
-    ap.add_argument("--instances", type=int, default=1,
-                    help="game instances to run in parallel. Every instance "
-                         "is a full game client -- 2-3 is realistic on one "
-                         "machine, and every window must stay visible")
-    ap.add_argument("--gen-every", type=int, default=15_000)
-    ap.add_argument("--n-steps", type=int, default=None,
-                    help="PPO rollout length PER INSTANCE (default: "
-                         "2048 // instances, inflated ~23%% when async "
-                         "resets are on so the update still sees ~2048 REAL "
-                         "samples after the placeholder mask). The default "
-                         "divides so the total batch -- and with it the "
-                         "update's wall-clock time -- stays roughly constant "
-                         "as --instances grows: the games run on in real "
-                         "time while the update computes, every Knight "
-                         "standing in a live fight")
-    ap.add_argument("--batch-size", type=int, default=64)
-    ap.add_argument("--n-epochs", type=int, default=5,
-                    help="PPO epochs per update. Kept at 5 so the recurrent "
-                         "256x256+LSTM update stays short (~6.7s on CPU): "
-                         "the keepalive pinger keeps connections alive "
-                         "through longer updates, but the Knights stand in "
-                         "their live fights for the whole update. Raise "
-                         "only if the net moves off CPU.")
-    ap.add_argument("--target-kl", type=float, default=None,
-                    help="early-stop an update's remaining epochs once "
-                         "approx_kl exceeds ~1.5x this (SB3 semantics). "
-                         "Unset: no cap, and a resumed checkpoint keeps "
-                         "whatever it trained with. When set it also "
-                         "overrides the checkpoint on resume, unlike the "
-                         "other hyperparameters. Try 0.05 against the "
-                         "late-run win-rate slide (observed approx_kl "
-                         "~0.15-0.25 without a cap).")
-    ap.add_argument("--boss", default=None, choices=sorted(BOSSES),
-                    help=f"which boss to train against (default: {DEFAULT_BOSS}). "
-                         "Sets the observation space, so checkpoints are "
-                         "boss-specific: a resume always keeps the run's "
-                         "recorded boss and refuses a conflicting flag.")
-    ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument("--auto", action="store_true",
-                    help="skip the interactive ready prompt (unattended/"
-                         "dashboard launches); the boot macro drives the "
-                         "game into the Hall of Gods")
-    ap.add_argument("--measure-resets", action="store_true",
-                    help="Phase 0 async-resets measurement: log every reset's "
-                         "wall-clock span to resets_<port>.jsonl under the run "
-                         "dir. Analyze with scripts/measure_reset_freeze.py. "
-                         "Off by default; a normal run pays nothing.")
-    ap.add_argument("--async-resets", action=argparse.BooleanOptionalAction,
-                    default=None,
-                    help="background-thread resets with placeholder steps so "
-                         "one instance's reset never freezes its siblings. "
-                         "Default: on at --instances >= 2 (Phase 2 gate "
-                         "passed 2026-07-22 -- see the async-resets design doc), off at "
-                         "1. --no-async-resets forces the old synchronous "
-                         "behavior.")
-    ap.add_argument("--async-reset-mode", choices=("prefix", "isolated"),
-                    default="isolated",
-                    help="what the pending window is to PPO: a prefix of the "
-                         "next episode (LSTM state carries across the splice) "
-                         "or an isolated throwaway episode (LSTM state resets "
-                         "at the fight's first real frame)")
-    args = ap.parse_args()
+    args, explicit = parse_session_args()
     if args.instances < 1:
         sys.exit("--instances must be at least 1")
     # Note: only warn about explicit --async-resets at N=1; default (None) is handled by resolve_async_resets
