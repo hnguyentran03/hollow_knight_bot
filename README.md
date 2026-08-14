@@ -1,10 +1,10 @@
 # Hollow Knight RL Bot
 
-A reinforcement-learning bot that learns to fight **Hornet (Hall of Gods, Attuned)** in Hollow Knight, trained with PPO against the real game running in lockstep.
+A reinforcement-learning bot that learns to fight **Hall of Gods bosses (Attuned tier)** in Hollow Knight — six registered so far, from Hornet Protector to False Knight — trained with PPO against the real game running in lockstep.
 
 The project has two halves:
 
-- **`mod/`** — a C# game mod (HKRLBot) that runs inside Hollow Knight. It exposes a TCP bridge that accepts button actions, holds them for one 67&nbsp;ms tick, samples the game state (Knight + Hornet positions, velocities, HP, SOUL, Hornet's FSM state), and sends it back. It also drives all episode resets itself: from a fresh boot it can walk through the title menu, stand up from the Hall of Gods bench, run to the Hornet statue, and start the fight — no human input needed.
+- **`mod/`** — a C# game mod (HKRLBot) that runs inside Hollow Knight. It exposes a TCP bridge that accepts button actions, holds them for one 67&nbsp;ms tick, samples the game state (Knight + boss positions, velocities, HP, SOUL, the boss's FSM state), and sends it back. It also drives all episode resets itself: from a fresh boot it can walk through the title menu, stand up from the Hall of Gods bench, get to the chosen boss's statue, and start the fight — no human input needed. An in-game HUD styled after the game's own UI (F1) shows what the mod sees: HP/SOUL bars, boss name and HP, FSM state, projectile tracking.
 - **`trainer/`** — a Python package (`hkrl`) exposing the mod as a Gymnasium environment, plus scripts for training (RecurrentPPO from sb3-contrib), replaying checkpoints, and smoke-testing with a random agent.
 
 ## How it works
@@ -17,9 +17,9 @@ The project has two halves:
 └────────────────────────┘   {"type":"state","obs":{...},...}    └───────────────────────────┘
 ```
 
-One decision every 67&nbsp;ms (15&nbsp;Hz). The agent picks one of **21 discrete moves** (walk, jump, slash, dash, pogo, spells via Quick Cast, Focus — including directional combinations); buttons stay held across consecutive steps that repeat them, so jump height, healing, and nail-art charging are emergent. Observations are 18 normalized scalars plus a one-hot of the boss's FSM state, sized per boss (46 floats against Hornet&nbsp;1, 36 against Gruz Mother, ranging down to 24 for Marmu and up to 73 for False Knight); the policy is a recurrent LSTM, so it carries its own memory instead of frame stacking. Reward is dominated by boss damage dealt (+0.03/HP), hits taken (−1/mask), win (+10), death (−5), and a small per-step time penalty.
+One decision every 67&nbsp;ms (15&nbsp;Hz). The agent picks one of **21 discrete moves** (walk, jump, slash, dash, pogo, spells via Quick Cast, Focus — including directional combinations); buttons stay held across consecutive steps that repeat them, so jump height, healing, and nail-art charging are emergent. Observations are 18 normalized scalars plus a one-hot of the boss's FSM state, sized per boss (56 floats against Hornet Protector, 36 against Gruz Mother, ranging down to 24 for Marmu and up to 73 for False Knight); the policy is a recurrent LSTM, so it carries its own memory instead of frame stacking. Reward is dominated by boss damage dealt (+0.03/HP), hits taken (−1/mask), win (+10), death (−5), and a small per-step time penalty.
 
-Training is fault-tolerant end to end: the trainer launches and owns the game process, reconnects through the mod's normal reset-budget drops, and if the game wedges or crashes it relaunches it and keeps training. Checkpoints ("generations") are saved every 15k steps, so a crash or Ctrl-C never loses more than ~17 minutes.
+Training is fault-tolerant end to end: the trainer launches and owns the game process, reconnects through the mod's normal reset-budget drops, and if the game wedges or crashes it relaunches it and keeps training — every relaunch re-seeds that instance's save from the master (macOS), so even a corrupted or wrong save self-heals; the trainer detects those boots by their reset-abort pattern and fails fast into that recovery instead of burning its retry ceiling. Checkpoints ("generations") are saved every 15k steps, so a crash or Ctrl-C never loses more than ~17 minutes.
 
 ## Repository layout
 
@@ -27,7 +27,7 @@ Training is fault-tolerant end to end: the trainer launches and owns the game pr
 mod/                    C# mod source
   BridgeServer.cs         TCP server, one JSON message per line
   EpisodeManager.cs       lockstep action/state cycle + reset macro (boot → bench → statue → fight)
-  StateReader.cs          reads Knight/Hornet state from the live game
+  StateReader.cs          reads Knight/boss state from the live game
   VirtualInput.cs         virtual controller the agent's buttons drive
   DISCOVERED.md           measured game facts (FSM state names, arena bounds, ...)
   build.sh                builds and installs the mod into the game (macOS)
@@ -82,9 +82,9 @@ For a non-default Steam library, pass `-HKManaged <path>` to run.ps1 or edit
 `HK_APP` at the top of run.sh.
 
 **One-time game prep** (the only step no script can do for you): the training
-save file should be parked in Godhome with Hornet 1 unlocked in the Hall of
-Gods, ideally resting at the Hall of Gods bench. The mod's boot macro handles
-everything from the title screen onward.
+save file should be parked in Godhome with the bosses you plan to train
+unlocked in the Hall of Gods, ideally resting at the Hall of Gods bench. The
+mod's boot macro handles everything from the title screen onward.
 
 ## Smoke test: the random agent
 
@@ -152,12 +152,13 @@ What to know before trying it:
   sharing one save directory autosave the same slot concurrently, which
   corrupted the master save in live testing (both games saved in the same
   second; the next boot read the slot as empty and started a new game — the
-  game's own `user1.dat.bakNNN` rotation recovered it). At `--instances` >
-  1 the trainer clones the whole `.app` per port under
+  game's own `user1.dat.bakNNN` rotation recovered it). The trainer clones
+  the whole `.app` per port — every instance, N=1 included — under
   `<root>/instances/port-<port>/` (APFS copy-on-write: instant, near-zero
   disk) with a per-port bundle identifier, which moves that instance's
   Unity save directory and `ModLog.txt` wholesale; each clone's save dir is
-  seeded from the master save at every start. Training never opens the
+  seeded from the master save at every start and re-seeded on every
+  relaunch. Training never opens the
   master save or app, in-run save churn is disposable, and a mod rebuild on
   the master propagates to the clones on the next start. Keep the master
   save parked at the Hall of Gods bench; it is copied, not played. (`HOME`
@@ -177,7 +178,7 @@ What to know before trying it:
 
 Useful flags: `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (PPO rollout/update shape), `--target-kl` (early-stop an update's remaining epochs once approx KL exceeds ~1.5× this; off by default — try 0.05 if a long run peaks then slides), `--boss` (which boss to train against, default `hornet1`; picks from the registry in `hkrl/bosses.py` — currently `hornet1`, `gruz_mother`, `marmu`, `false_knight`, and `soul_warrior`, all trained to a winning policy, plus `gorb`, trained to a 43% win rate), `--seed`, `--root` (default `~/hkrl`).
 
-A boss sets the observation space, so checkpoints are boss-specific — a resume always keeps the run's recorded boss (read from `config.jsonl`, even for runs from before `--boss` existed, which default to `hornet1`) and refuses a conflicting `--boss` flag up front, rather than failing on a shape mismatch deep inside model load.
+A boss sets the observation space, so checkpoints are boss-specific — a resume always keeps the run's recorded boss (read from `config.jsonl`, even for runs from before `--boss` existed, which default to `hornet1`) and refuses a conflicting `--boss` flag up front, rather than failing on a shape mismatch deep inside model load. Growing a boss's registered FSM state list changes its observation size the same way, so runs from before such an addition can't resume either (hornet1's list grew in 2026-08 when the trainer's unseen-state warning surfaced ten states missing from the original measurement).
 
 Adding a boss is a measurement job, not a coding one: press F4 in a normal (human-played) game session and the mod's discovery logger records boss candidates with HP, every FSM's state transitions, the knight's arena extremes, and the statue-stand X to ModLog while you fight the new boss a few times; `scripts/parse_discovery.py <ModLog path>` then reduces that to registry-ready values, which get transcribed into `hkrl/bosses.py` (trainer side) and `mod/BossRegistry.cs` (mod side) following `mod/DISCOVERED.md`. The logger also records enemy-projectile candidates (hero-damaging objects owned by no enemy, instance counts distinguishing a persistent trackable object from per-shot clones) so `ProjectileName` comes from measurement. Statue lines record X and Y: the Hall of Gods workshop is two-level, and for a boss whose statue sits on the upper walkway the reset macro teleports the knight to the measured stand (`StatueX`/`StatueY`) instead of walking blind on the wrong floor. Gruz Mother went through exactly this pipeline and trained to a sustained 100% win rate inside a single 500k-step run (~90% by 120k steps, a solid 1.0 from ~250k on); `gorb`, `marmu`, `false_knight`, and `soul_warrior` followed the same pipeline and each got a 500k-step run with no unseen states. Three trained to winning policies — False Knight 100% win rate (his win-dominated reward converged even though armor hits never move his tracked HP pool), Marmu ~96%, Soul Warrior 90% — while Gorb reached 43% with ~91% mean boss damage, learning strongly without converging in the budget.
 
