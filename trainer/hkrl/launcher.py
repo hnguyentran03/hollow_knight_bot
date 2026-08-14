@@ -142,7 +142,11 @@ def status(root) -> dict | None:
 
 # Flags that shape a fresh model only: on resume, PPO hyperparameters come
 # from the checkpoint zip (see train.py), so forwarding them would be
-# misleading noise. The runtime topology flags are forwarded always.
+# misleading noise -- train.py now refuses them outright on resume. The
+# _ALWAYS set is forwardable in both modes, but only when the request
+# actually sets a value: on resume train.py inherits instances/gen_every
+# from the run's config.jsonl and finishes to its recorded target when
+# timesteps is absent, so an unset field must stay unset.
 _NEW_ONLY = ("n_steps", "batch_size", "n_epochs", "seed")
 _ALWAYS = ("instances", "timesteps", "gen_every")
 _INT_PARAMS = _ALWAYS + _NEW_ONLY
