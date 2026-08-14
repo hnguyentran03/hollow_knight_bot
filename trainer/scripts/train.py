@@ -172,21 +172,32 @@ def resolve_session_budget(timesteps: int, timesteps_typed: bool,
     return target - current_timestep, target
 
 
-def build_config_dict(args, async_resets, resume=None, started_at=None):
+def build_config_dict(args, async_resets, resume=None, started_at=None,
+                      target_timestep=None, previous=None):
     """Build the config dict to be written to config.jsonl, recording the
-    resolved async_resets value (not the raw tri-state flag)."""
+    resolved async_resets value (not the raw tri-state flag) and the run's
+    absolute step target. On resume, `previous` (the run's last record)
+    supplies the checkpoint-baked values -- n_steps, batch_size, n_epochs,
+    seed, gamma, ent_coef -- so the appended record states what the model
+    actually trains with instead of this process's defaults."""
     if started_at is None:
         started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-    return {
+    config = {
         **{k: str(v) if isinstance(v, Path) else v
            for k, v in vars(args).items()},
         # No "n_stack": the recurrent policy replaced frame stacking, so
         # there is no stack depth to record.
         "async_resets": async_resets,  # Override with resolved boolean
         "gamma": GAMMA, "ent_coef": 0.01,
+        "target_timestep": target_timestep,
         "resumed_from_gen": resume[0] if resume else None,
         "started_at": started_at,
     }
+    if resume and previous:
+        for key in RESUME_BAKED + ("gamma", "ent_coef"):
+            if key in previous:
+                config[key] = previous[key]
+    return config
 
 
 def session_banner(timesteps: int, start_timestep: int = 0,

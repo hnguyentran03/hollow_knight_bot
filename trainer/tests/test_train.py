@@ -641,3 +641,43 @@ def test_resolve_session_budget_without_any_target_falls_back_additive(capsys):
     budget, target = train.resolve_session_budget(500_000, False, {}, 60_000, [])
     assert (budget, target) == (500_000, 560_000)
     assert "no recorded step target" in capsys.readouterr().err
+
+
+def test_build_config_dict_records_the_target_timestep():
+    args, _ = train.parse_session_args([])
+    config = train.build_config_dict(args, async_resets=False,
+                                     started_at="2026-08-14T12:00:00",
+                                     target_timestep=500_000)
+    assert config["target_timestep"] == 500_000
+    # Fresh records keep the current source constants.
+    assert config["gamma"] == train.GAMMA
+    assert config["ent_coef"] == 0.01
+
+
+def test_build_config_dict_resume_record_states_the_checkpoints_shape():
+    """A resume record must describe what the model actually trains with:
+    the checkpoint-baked values from the previous record, not this
+    process's CLI defaults or current source constants."""
+    args, _ = train.parse_session_args([])
+    previous = {"n_steps": 512, "batch_size": 32, "n_epochs": 7, "seed": 9,
+                "gamma": 0.99, "ent_coef": 0.02}
+    config = train.build_config_dict(
+        args, async_resets=False, resume=(3, None, None),
+        started_at="2026-08-14T12:00:00", target_timestep=500_000,
+        previous=previous)
+    for key, value in previous.items():
+        assert config[key] == value
+    assert config["resumed_from_gen"] == 3
+
+
+def test_build_config_dict_resume_from_a_sparse_old_record_keeps_defaults():
+    # An ancient record without the baked keys: fall back to this
+    # process's values (the record write precedes model load, so the
+    # checkpoint itself cannot be consulted -- accepted in the spec).
+    args, _ = train.parse_session_args([])
+    config = train.build_config_dict(
+        args, async_resets=False, resume=(3, None, None),
+        started_at="2026-08-14T12:00:00", target_timestep=500_000,
+        previous={"boss": "hornet1"})
+    assert config["batch_size"] == 64
+    assert config["gamma"] == train.GAMMA
