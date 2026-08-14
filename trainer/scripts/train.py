@@ -99,6 +99,42 @@ def resolve_boss(flag: str | None, run_dir: Path | None) -> str:
     return recorded
 
 
+# On resume these inherit from the run's last config record unless the
+# flag was typed: they are the settings still live on a resume (fleet
+# shape, checkpoint cadence, update cap), where falling back to a CLI
+# default silently reshapes the run -- the bug that dropped marmu-1 from
+# 2 instances to 1. Session-specific flags (auto, measure_resets, root,
+# app, run_id) and the checkpoint-baked model shape stay out.
+RESUME_INHERITED = ("instances", "gen_every", "target_kl", "async_resets",
+                    "async_reset_mode", "port")
+
+# Baked into the checkpoint zip: build_model ignores these on resume, so
+# a typed flag would be a silent no-op -- refused instead, like a
+# conflicting --boss.
+RESUME_BAKED = ("n_steps", "batch_size", "n_epochs", "seed")
+
+
+def apply_recorded_config(args, explicit: set, config: dict) -> None:
+    """Layer a resume's settings: typed flag > recorded value > default.
+
+    Mutates args in place. config is the run's last config.jsonl record
+    ({} when the file is missing or empty); keys an old record lacks keep
+    their CLI defaults. The recorded async_resets is the resolved boolean,
+    which feeds resolve_async_resets exactly like an explicit flag would.
+    """
+    typed_baked = [k for k in RESUME_BAKED if k in explicit]
+    if typed_baked:
+        flags = ", ".join("--" + k.replace("_", "-") for k in typed_baked)
+        raise ValueError(
+            f"{flags}: PPO hyperparameters are baked into the checkpoint, "
+            "so a resume keeps the recorded value and the flag would be "
+            "silently ignored; remove it (only --target-kl can change a "
+            "resumed run's update dynamics)")
+    for key in RESUME_INHERITED:
+        if key not in explicit and key in config:
+            setattr(args, key, config[key])
+
+
 def build_config_dict(args, async_resets, resume=None, started_at=None):
     """Build the config dict to be written to config.jsonl, recording the
     resolved async_resets value (not the raw tri-state flag)."""

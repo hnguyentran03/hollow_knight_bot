@@ -563,3 +563,42 @@ def test_parse_session_args_sees_boolean_and_store_true_flags():
     assert "async_resets" in explicit
     _, explicit = train.parse_session_args(["--auto"])
     assert "auto" in explicit
+
+
+def test_apply_recorded_config_inherits_untyped_flags():
+    args, explicit = train.parse_session_args([])
+    train.apply_recorded_config(args, explicit, {
+        "instances": 2, "gen_every": 8000, "target_kl": 0.05,
+        "async_resets": True, "async_reset_mode": "prefix", "port": 9040})
+    assert args.instances == 2
+    assert args.gen_every == 8000
+    assert args.target_kl == 0.05
+    assert args.async_resets is True
+    assert args.async_reset_mode == "prefix"
+    assert args.port == 9040
+
+
+def test_apply_recorded_config_typed_flags_win():
+    args, explicit = train.parse_session_args(["--instances", "1"])
+    train.apply_recorded_config(args, explicit,
+                                {"instances": 2, "gen_every": 8000})
+    assert args.instances == 1     # typed: the user's choice stands
+    assert args.gen_every == 8000  # untyped: inherited
+
+
+def test_apply_recorded_config_missing_keys_keep_defaults():
+    # A record from before a flag existed simply has no opinion.
+    args, explicit = train.parse_session_args([])
+    train.apply_recorded_config(args, explicit, {"boss": "gorb"})
+    assert args.instances == 1
+    assert args.gen_every == 15_000
+
+
+def test_apply_recorded_config_refuses_baked_flags():
+    for argv, flag in [(["--n-steps", "64"], "n-steps"),
+                       (["--batch-size", "8"], "batch-size"),
+                       (["--n-epochs", "3"], "n-epochs"),
+                       (["--seed", "7"], "seed")]:
+        args, explicit = train.parse_session_args(argv)
+        with pytest.raises(ValueError, match=flag):
+            train.apply_recorded_config(args, explicit, {})
