@@ -135,6 +135,43 @@ def apply_recorded_config(args, explicit: set, config: dict) -> None:
             setattr(args, key, config[key])
 
 
+def resolve_session_budget(timesteps: int, timesteps_typed: bool,
+                           config: dict | None, current_timestep: int,
+                           generations: list[dict]) -> tuple[int, int]:
+    """This session's (learn budget, run target), in absolute timesteps.
+
+    Fresh runs (config None): the budget is --timesteps and the target the
+    same number. On resume an explicit --timesteps stays additive (collect
+    N more); omitted, the session runs to the run's recorded
+    target_timestep -- reconstructed additively from the last record for
+    runs predating the key -- and a run already at its target refuses to
+    start rather than silently extending by the flag's default.
+    """
+    if config is None:
+        return timesteps, timesteps
+    if timesteps_typed:
+        return timesteps, current_timestep + timesteps
+    target = config.get("target_timestep")
+    if target is None and "timesteps" in config:
+        # Pre-target_timestep record: rebuild the additive target its
+        # session was launched with (rundata._target_timestep's walk).
+        base = next((g["timestep"] for g in generations
+                     if g["gen"] == config.get("resumed_from_gen")), 0)
+        target = base + int(config["timesteps"])
+    if target is None:
+        print(f"hkrl: no recorded step target in this run's config; "
+              f"collecting {timesteps:,} more steps (additive default)",
+              file=sys.stderr, flush=True)
+        return timesteps, current_timestep + timesteps
+    target = int(target)
+    if current_timestep >= target:
+        raise ValueError(
+            f"this run already reached its recorded target "
+            f"({current_timestep:,} of {target:,} steps); pass "
+            f"--timesteps N to extend it by N more steps")
+    return target - current_timestep, target
+
+
 def build_config_dict(args, async_resets, resume=None, started_at=None):
     """Build the config dict to be written to config.jsonl, recording the
     resolved async_resets value (not the raw tri-state flag)."""

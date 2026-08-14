@@ -602,3 +602,42 @@ def test_apply_recorded_config_refuses_baked_flags():
         args, explicit = train.parse_session_args(argv)
         with pytest.raises(ValueError, match=flag):
             train.apply_recorded_config(args, explicit, {})
+
+
+def test_resolve_session_budget_fresh_run():
+    assert train.resolve_session_budget(500_000, False, None, 0, []) == \
+        (500_000, 500_000)
+
+
+def test_resolve_session_budget_explicit_timesteps_stays_additive():
+    cfg = {"target_timestep": 500_000}
+    assert train.resolve_session_budget(40_000, True, cfg, 120_000, []) == \
+        (40_000, 160_000)
+
+
+def test_resolve_session_budget_defaults_to_finishing_the_recorded_target():
+    cfg = {"target_timestep": 500_000, "timesteps": 500_000}
+    assert train.resolve_session_budget(500_000, False, cfg, 120_000, []) == \
+        (380_000, 500_000)
+
+
+def test_resolve_session_budget_refuses_a_finished_run():
+    cfg = {"target_timestep": 500_000}
+    with pytest.raises(ValueError, match="--timesteps"):
+        train.resolve_session_budget(500_000, False, cfg, 500_000, [])
+
+
+def test_resolve_session_budget_reconstructs_pre_key_records():
+    # A record from before target_timestep existed: that session was
+    # launched with --timesteps 100k resuming from gen 3 (timestep 30k),
+    # so its additive target was 130k -- same walk rundata does today.
+    cfg = {"timesteps": 100_000, "resumed_from_gen": 3}
+    gens = [{"gen": 3, "timestep": 30_000}]
+    assert train.resolve_session_budget(500_000, False, cfg, 60_000, gens) == \
+        (70_000, 130_000)
+
+
+def test_resolve_session_budget_without_any_target_falls_back_additive(capsys):
+    budget, target = train.resolve_session_budget(500_000, False, {}, 60_000, [])
+    assert (budget, target) == (500_000, 560_000)
+    assert "no recorded step target" in capsys.readouterr().err
