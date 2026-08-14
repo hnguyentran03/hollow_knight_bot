@@ -203,8 +203,8 @@ def build_config_dict(args, async_resets, resume=None, started_at=None,
 def session_banner(timesteps: int, start_timestep: int = 0,
                    resumed_gen: int | None = None) -> str:
     """One line stating this session's budget in the dashboard's language:
-    current timestep and the target it runs to (--timesteps is additive
-    on resume, so the target is start + budget)."""
+    current timestep and the target it runs to (the budget is this
+    session's resolved step count, so the target is start + budget)."""
     target = start_timestep + timesteps
     if resumed_gen is None:
         return (f"this session: collecting {timesteps:,} steps "
@@ -218,7 +218,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--timesteps", type=int, default=500_000,
                     help="env steps to collect this session (~54k/hour at "
-                         "15 Hz; adds onto a resumed run's count)")
+                         "15 Hz). On resume the flag stays additive -- "
+                         "collect N MORE steps -- but omitting it now "
+                         "finishes to the run's recorded target instead of "
+                         "adding the default")
     ap.add_argument("--run-id", default=None,
                     help="name for a NEW run under <root>/runs/ "
                          "(default: timestamp)")
@@ -519,12 +522,35 @@ def build_prepares(ports):
     return [make(p) for p in ports]
 
 
-def main() -> None:
-    args, explicit = parse_session_args()
+def prepare_session(argv=None):
+    """Everything before any game process exists: parse and layer args,
+    locate or create the run dir, resolve boss and step budget, and append
+    this session's config record. Returns (args, run_dir, resume, budget,
+    async_resets). Split from main() so the whole pre-flight -- including
+    resume inheritance -- is testable without launching a game."""
+    args, explicit = parse_session_args(argv)
+
+    if args.resume is not None:
+        run_dir = args.resume.expanduser()
+        resume = latest_checkpoint(run_dir)  # (gen, weights, vecnorm)
+        configs = read_jsonl(run_dir / "config.jsonl")
+        previous = configs[-1] if configs else {}
+        try:
+            apply_recorded_config(args, explicit, previous)
+        except ValueError as exc:
+            sys.exit(str(exc))
+    else:
+        resume = None
+        previous = None
+        run_dir = args.root / "runs" / (args.run_id
+                                        or time.strftime("%Y%m%d_%H%M%S"))
+
     if args.instances < 1:
         sys.exit("--instances must be at least 1")
-    # Note: only warn about explicit --async-resets at N=1; default (None) is handled by resolve_async_resets
-    if args.async_resets is True and args.instances < 2:
+    # Warn only for a TYPED --async-resets at N=1: an inherited True is
+    # silently forced off by resolve_async_resets below, as designed.
+    if (args.async_resets is True and "async_resets" in explicit
+            and args.instances < 2):
         print("hkrl: --async-resets is a no-op at --instances 1 (no sibling "
               "to freeze); running synchronously", file=sys.stderr, flush=True)
     # Resolved before the config dump below so config.jsonl records the
@@ -534,12 +560,33 @@ def main() -> None:
     if args.n_steps is None:
         args.n_steps = default_n_steps(args.instances, async_resets)
 
-    if args.resume is not None:
-        run_dir = args.resume.expanduser()
-        resume = latest_checkpoint(run_dir)  # (gen, weights, vecnorm)
-    else:
-        resume = None
-        run_dir = args.root / "runs" / (args.run_id or time.strftime("%Y%m%d_%H%M%S"))
+    try:
+        args.boss = resolve_boss(args.boss,
+                                 run_dir if args.resume is not None else None)
+    except ValueError as exc:
+        sys.exit(str(exc))
+
+    generations = read_jsonl(run_dir / "generations.jsonl")
+    current = (next((g["timestep"] for g in generations
+                     if g["gen"] == resume[0]), 0) if resume else 0)
+    try:
+        budget, target = resolve_session_budget(
+            args.timesteps, "timesteps" in explicit, previous, current,
+            generations)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    # The record must state what this session actually collects: on an
+    # untyped finish-to-target resume args.timesteps still holds the
+    # argparse default, which would misstate the session. Fresh runs and
+    # explicit resumes are no-ops (budget == the flag there). An inherited
+    # target_kl is also re-applied to the loaded model via build_model --
+    # idempotent, the checkpoint trained under that same recorded value.
+    args.timesteps = budget
+
+    # The dir is created only after every validation above passed, so bad
+    # args never leave a junk run dir behind (same guarantee main() gave
+    # by validating before its mkdir).
+    if resume is None:
         try:
             run_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
@@ -547,17 +594,17 @@ def main() -> None:
                      f"run is never implicit: pass --resume {run_dir} to "
                      f"continue it, or a different --run-id to start fresh.")
 
-    try:
-        args.boss = resolve_boss(args.boss,
-                                 run_dir if args.resume is not None else None)
-    except ValueError as exc:
-        sys.exit(str(exc))
-
     # One JSON object per session, appended, so a resumed run's full history
     # stays inspectable next to its checkpoints.
     with (run_dir / "config.jsonl").open("a") as f:
-        config = build_config_dict(args, async_resets, resume=resume)
+        config = build_config_dict(args, async_resets, resume=resume,
+                                   target_timestep=target, previous=previous)
         f.write(json.dumps(config) + "\n")
+    return args, run_dir, resume, budget, async_resets
+
+
+def main() -> None:
+    args, run_dir, resume, budget, async_resets = prepare_session()
 
     # Unconditional: every clone is seeded FROM the master save (N=1 on
     # save-isolation platforms, the master itself on others), so a quietly
@@ -567,7 +614,7 @@ def main() -> None:
     if backup is not None:
         print(f"master save backed up to {backup}", flush=True)
     if resume is None:
-        print(session_banner(args.timesteps), flush=True)
+        print(session_banner(budget), flush=True)
 
     ports = [args.port + i for i in range(args.instances)]
     # Instances must not share the game's save directory: they all autosave
@@ -637,13 +684,13 @@ def main() -> None:
                             target_kl=args.target_kl)
         if resume:
             print(f"{run_dir}: " + session_banner(
-                args.timesteps, start_timestep=model.num_timesteps,
+                budget, start_timestep=model.num_timesteps,
                 resumed_gen=resume[0]), flush=True)
         callback = GenerationCallback(run_dir, vecnorm=env,
                                       every_steps=args.gen_every,
                                       supervisor=supervisor)
         try:
-            model.learn(total_timesteps=args.timesteps,
+            model.learn(total_timesteps=budget,
                         callback=[callback, StopOnFlag(stop)],
                         reset_num_timesteps=resume is None)
         except InstanceDown as exc:

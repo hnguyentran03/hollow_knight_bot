@@ -681,3 +681,85 @@ def test_build_config_dict_resume_from_a_sparse_old_record_keeps_defaults():
         previous={"boss": "hornet1"})
     assert config["batch_size"] == 64
     assert config["gamma"] == train.GAMMA
+
+
+def _seed_resumable_run(tmp_path, config: dict, gen=2, timestep=16):
+    """A run dir latest_checkpoint accepts: manifest line + touched
+    checkpoint pair + one config.jsonl record."""
+    run_dir = tmp_path / "run1"
+    (run_dir / "checkpoints").mkdir(parents=True)
+    (run_dir / "checkpoints" / f"gen_{gen:04d}.zip").touch()
+    (run_dir / "checkpoints" / f"gen_{gen:04d}_vecnorm.pkl").touch()
+    (run_dir / "generations.jsonl").write_text(
+        json.dumps({"gen": gen, "timestep": timestep}) + "\n")
+    (run_dir / "config.jsonl").write_text(json.dumps(config) + "\n")
+    return run_dir
+
+
+def test_prepare_session_resume_inherits_and_appends_a_truthful_record(tmp_path):
+    run_dir = _seed_resumable_run(tmp_path, {
+        "boss": "hornet1", "instances": 2, "gen_every": 8000,
+        "target_kl": 0.05, "async_resets": True, "async_reset_mode": "prefix",
+        "port": 9040, "n_steps": 512, "batch_size": 32, "n_epochs": 7,
+        "seed": 9, "gamma": 0.99, "ent_coef": 0.02,
+        "timesteps": 100_000, "target_timestep": 100_000})
+    args, out_dir, resume, budget, async_resets = train.prepare_session(
+        ["--resume", str(run_dir)])
+    assert out_dir == run_dir and resume[0] == 2
+    assert args.instances == 2 and args.gen_every == 8000
+    assert args.target_kl == 0.05 and args.port == 9040
+    assert async_resets is True and args.async_reset_mode == "prefix"
+    assert args.boss == "hornet1"
+    assert budget == 100_000 - 16  # finish-to-target, not +500k
+    configs = [json.loads(line) for line in
+               (run_dir / "config.jsonl").read_text().splitlines()]
+    assert len(configs) == 2  # append-only, one record per session
+    rec = configs[-1]
+    assert rec["instances"] == 2 and rec["target_timestep"] == 100_000
+    # The record states what this session actually collects, not the
+    # argparse default the user never typed.
+    assert rec["timesteps"] == 100_000 - 16
+    assert rec["resumed_from_gen"] == 2
+    # Baked values inherited, so the record states the model's real shape.
+    assert rec["n_steps"] == 512 and rec["batch_size"] == 32
+    assert rec["n_epochs"] == 7 and rec["seed"] == 9
+    assert rec["gamma"] == 0.99 and rec["ent_coef"] == 0.02
+
+
+def test_prepare_session_typed_flags_override_the_record(tmp_path):
+    run_dir = _seed_resumable_run(tmp_path, {
+        "boss": "hornet1", "instances": 2,
+        "timesteps": 100_000, "target_timestep": 100_000})
+    args, _, _, budget, _ = train.prepare_session(
+        ["--resume", str(run_dir), "--instances", "1",
+         "--timesteps", "40000"])
+    assert args.instances == 1  # typed beats recorded
+    assert budget == 40_000     # explicit --timesteps stays additive
+
+
+def test_prepare_session_refuses_resuming_past_the_target(tmp_path):
+    run_dir = _seed_resumable_run(
+        tmp_path, {"boss": "hornet1", "target_timestep": 16},
+        gen=2, timestep=16)
+    with pytest.raises(SystemExit, match="--timesteps"):
+        train.prepare_session(["--resume", str(run_dir)])
+    # The refusal happens before the config append: no second record.
+    assert len((run_dir / "config.jsonl").read_text().splitlines()) == 1
+
+
+def test_prepare_session_refuses_baked_flags_on_resume(tmp_path):
+    run_dir = _seed_resumable_run(
+        tmp_path, {"boss": "hornet1", "target_timestep": 100_000})
+    with pytest.raises(SystemExit, match="batch-size"):
+        train.prepare_session(
+            ["--resume", str(run_dir), "--batch-size", "128"])
+
+
+def test_prepare_session_fresh_run_writes_the_target(tmp_path):
+    args, run_dir, resume, budget, _ = train.prepare_session(
+        ["--root", str(tmp_path), "--run-id", "fresh1",
+         "--timesteps", "1000"])
+    assert resume is None and budget == 1000
+    rec = json.loads((run_dir / "config.jsonl").read_text())
+    assert rec["target_timestep"] == 1000
+    assert rec["gamma"] == train.GAMMA and rec["instances"] == 1
