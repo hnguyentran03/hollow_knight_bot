@@ -837,9 +837,9 @@ function render() {
   const config = document.getElementById("config");
   config.replaceChildren();
   if (run.config) {
-    const keys = ["started_at", "boss", "instances", "timesteps", "resumed_from_gen",
-                  "gen_every", "n_steps", "batch_size", "n_epochs", "gamma", "ent_coef",
-                  "n_stack", "seed", "port"];
+    const keys = ["started_at", "boss", "instances", "timesteps", "target_timestep",
+                  "resumed_from_gen", "gen_every", "n_steps", "batch_size", "n_epochs",
+                  "gamma", "ent_coef", "n_stack", "seed", "port"];
     for (const k of keys) {
       if (!(k in run.config)) continue;
       const tr = document.createElement("tr");
@@ -1151,9 +1151,11 @@ async function renderPrevRuns(activeNow) {
   }
 }
 
-/* The resume dialog: --timesteps is additive on resume, so "just finish
-   the run" needs the remainder computed for the user. Finishing the
-   original target is the default; adding more is the explicit choice. */
+/* The resume dialog: train.py now inherits a resume's settings from the
+   run's own config.jsonl and, with no --timesteps at all, finishes to the
+   recorded target -- so "finish the run" sends nothing but the run id,
+   and the remainder shown in the label is display-only. Adding more steps
+   is the explicit choice and the only case that sends timesteps. */
 const resumeDialog = document.getElementById("resume-dialog");
 let resumeRun = null;  // the /api/runs summary row the open dialog is for
 
@@ -1199,7 +1201,7 @@ function openResumeDialog(r) {
     return;
   }
 
-  // Normal resume: --timesteps is additive on a real resume.
+  // Normal resume: "finish" sends no timesteps (train.py runs to the recorded target); the remainder here is label text only.
   finish.parentElement.hidden = false;
   addLabel.textContent = "Add more steps:";
   const remaining = (r.target_timestep || 0) - r.timestep;
@@ -1276,18 +1278,20 @@ resumeDialog.addEventListener("close", async () => {
       return;
     }
     body = { mode: "resume", run_id: r.id, timesteps: timesteps };
+  } else if (finish) {
+    // Finish the recorded target: send nothing but the id. train.py
+    // inherits instances/gen_every from the run's config and computes
+    // the remaining budget itself -- forwarding values here would turn
+    // them into explicit CLI flags and defeat that inheritance.
+    body = { mode: "resume", run_id: r.id };
   } else {
-    const timesteps = finish ? (r.target_timestep || 0) - r.timestep : extra;
-    if (!timesteps || timesteps < 1) {
+    if (!extra || extra < 1) {
       launchError("no steps to collect — enter how many to add");
       return;
     }
-    // The run's own instance count, not the new-run form's: resuming a
-    // 2-instance run as 1 instance is a choice train.py supports, but it
-    // should never happen by accident of what the form held.
-    body = { mode: "resume", run_id: r.id, timesteps: timesteps,
-             instances: r.instances || formParams().instances,
-             gen_every: formParams().gen_every };
+    // Adding steps is the one explicit override: --timesteps stays
+    // additive when typed.
+    body = { mode: "resume", run_id: r.id, timesteps: extra };
   }
   launchError("");
   startBtn.disabled = true;
