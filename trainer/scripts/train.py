@@ -99,28 +99,112 @@ def resolve_boss(flag: str | None, run_dir: Path | None) -> str:
     return recorded
 
 
-def build_config_dict(args, async_resets, resume=None, started_at=None):
+# On resume these inherit from the run's last config record unless the
+# flag was typed: they are the settings still live on a resume (fleet
+# shape, checkpoint cadence, update cap), where falling back to a CLI
+# default silently reshapes the run -- the bug that dropped marmu-1 from
+# 2 instances to 1. Session-specific flags (auto, measure_resets, root,
+# app, run_id) and the checkpoint-baked model shape stay out.
+RESUME_INHERITED = ("instances", "gen_every", "target_kl", "async_resets",
+                    "async_reset_mode", "port")
+
+# Baked into the checkpoint zip: build_model ignores these on resume, so
+# a typed flag would be a silent no-op -- refused instead, like a
+# conflicting --boss.
+RESUME_BAKED = ("n_steps", "batch_size", "n_epochs", "seed")
+
+
+def apply_recorded_config(args, explicit: set, config: dict) -> None:
+    """Layer a resume's settings: typed flag > recorded value > default.
+
+    Mutates args in place. config is the run's last config.jsonl record
+    ({} when the file is missing or empty); keys an old record lacks keep
+    their CLI defaults. The recorded async_resets is the resolved boolean,
+    which feeds resolve_async_resets exactly like an explicit flag would.
+    """
+    typed_baked = [k for k in RESUME_BAKED if k in explicit]
+    if typed_baked:
+        flags = ", ".join("--" + k.replace("_", "-") for k in typed_baked)
+        raise ValueError(
+            f"{flags}: PPO hyperparameters are baked into the checkpoint, "
+            "so a resume keeps the recorded value and the flag would be "
+            "silently ignored; remove it (only --target-kl can change a "
+            "resumed run's update dynamics)")
+    for key in RESUME_INHERITED:
+        if key not in explicit and key in config:
+            setattr(args, key, config[key])
+
+
+def resolve_session_budget(timesteps: int, timesteps_typed: bool,
+                           config: dict | None, current_timestep: int,
+                           generations: list[dict]) -> tuple[int, int]:
+    """This session's (learn budget, run target), in absolute timesteps.
+
+    Fresh runs (config None): the budget is --timesteps and the target the
+    same number. On resume an explicit --timesteps stays additive (collect
+    N more); omitted, the session runs to the run's recorded
+    target_timestep -- reconstructed additively from the last record for
+    runs predating the key -- and a run already at its target refuses to
+    start rather than silently extending by the flag's default.
+    """
+    if config is None:
+        return timesteps, timesteps
+    if timesteps_typed:
+        return timesteps, current_timestep + timesteps
+    target = config.get("target_timestep")
+    if target is None and "timesteps" in config:
+        # Pre-target_timestep record: rebuild the additive target its
+        # session was launched with (rundata._target_timestep's walk).
+        base = next((g["timestep"] for g in generations
+                     if g["gen"] == config.get("resumed_from_gen")), 0)
+        target = base + int(config["timesteps"])
+    if target is None:
+        print(f"hkrl: no recorded step target in this run's config; "
+              f"collecting {timesteps:,} more steps (additive default)",
+              file=sys.stderr, flush=True)
+        return timesteps, current_timestep + timesteps
+    target = int(target)
+    if current_timestep >= target:
+        raise ValueError(
+            f"this run already reached its recorded target "
+            f"({current_timestep:,} of {target:,} steps); pass "
+            f"--timesteps N to extend it by N more steps")
+    return target - current_timestep, target
+
+
+def build_config_dict(args, async_resets, resume=None, started_at=None,
+                      target_timestep=None, previous=None):
     """Build the config dict to be written to config.jsonl, recording the
-    resolved async_resets value (not the raw tri-state flag)."""
+    resolved async_resets value (not the raw tri-state flag) and the run's
+    absolute step target. On resume, `previous` (the run's last record)
+    supplies the checkpoint-baked values -- n_steps, batch_size, n_epochs,
+    seed, gamma, ent_coef -- so the appended record states what the model
+    actually trains with instead of this process's defaults."""
     if started_at is None:
         started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-    return {
+    config = {
         **{k: str(v) if isinstance(v, Path) else v
            for k, v in vars(args).items()},
         # No "n_stack": the recurrent policy replaced frame stacking, so
         # there is no stack depth to record.
         "async_resets": async_resets,  # Override with resolved boolean
         "gamma": GAMMA, "ent_coef": 0.01,
+        "target_timestep": target_timestep,
         "resumed_from_gen": resume[0] if resume else None,
         "started_at": started_at,
     }
+    if resume and previous:
+        for key in RESUME_BAKED + ("gamma", "ent_coef"):
+            if key in previous:
+                config[key] = previous[key]
+    return config
 
 
 def session_banner(timesteps: int, start_timestep: int = 0,
                    resumed_gen: int | None = None) -> str:
     """One line stating this session's budget in the dashboard's language:
-    current timestep and the target it runs to (--timesteps is additive
-    on resume, so the target is start + budget)."""
+    current timestep and the target it runs to (the budget is this
+    session's resolved step count, so the target is start + budget)."""
     target = start_timestep + timesteps
     if resumed_gen is None:
         return (f"this session: collecting {timesteps:,} steps "
@@ -128,6 +212,105 @@ def session_banner(timesteps: int, start_timestep: int = 0,
     return (f"resumed from generation {resumed_gen} at timestep "
             f"{start_timestep:,}; collecting {timesteps:,} more "
             f"(target timestep {target:,})")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--timesteps", type=int, default=500_000,
+                    help="env steps to collect this session (~54k/hour at "
+                         "15 Hz). On resume the flag stays additive -- "
+                         "collect N MORE steps -- but omitting it now "
+                         "finishes to the run's recorded target instead of "
+                         "adding the default")
+    ap.add_argument("--run-id", default=None,
+                    help="name for a NEW run under <root>/runs/ "
+                         "(default: timestamp)")
+    ap.add_argument("--resume", type=Path, default=None, metavar="RUN_DIR",
+                    help="continue an existing run from its latest generation")
+    ap.add_argument("--root", type=Path, default=Path("~/hkrl").expanduser())
+    ap.add_argument("--app", type=Path, default=DEFAULT_APP)
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
+                    help="first bridge port; instance i listens on port+i")
+    ap.add_argument("--instances", type=int, default=1,
+                    help="game instances to run in parallel. Every instance "
+                         "is a full game client -- 2-3 is realistic on one "
+                         "machine, and every window must stay visible")
+    ap.add_argument("--gen-every", type=int, default=15_000)
+    ap.add_argument("--n-steps", type=int, default=None,
+                    help="PPO rollout length PER INSTANCE (default: "
+                         "2048 // instances, inflated ~23%% when async "
+                         "resets are on so the update still sees ~2048 REAL "
+                         "samples after the placeholder mask). The default "
+                         "divides so the total batch -- and with it the "
+                         "update's wall-clock time -- stays roughly constant "
+                         "as --instances grows: the games run on in real "
+                         "time while the update computes, every Knight "
+                         "standing in a live fight")
+    ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--n-epochs", type=int, default=5,
+                    help="PPO epochs per update. Kept at 5 so the recurrent "
+                         "256x256+LSTM update stays short (~6.7s on CPU): "
+                         "the keepalive pinger keeps connections alive "
+                         "through longer updates, but the Knights stand in "
+                         "their live fights for the whole update. Raise "
+                         "only if the net moves off CPU.")
+    ap.add_argument("--target-kl", type=float, default=None,
+                    help="early-stop an update's remaining epochs once "
+                         "approx_kl exceeds ~1.5x this (SB3 semantics). "
+                         "Unset: no cap, and a resumed checkpoint keeps "
+                         "whatever it trained with. When set it also "
+                         "overrides the checkpoint on resume, unlike the "
+                         "other hyperparameters. Try 0.05 against the "
+                         "late-run win-rate slide (observed approx_kl "
+                         "~0.15-0.25 without a cap).")
+    ap.add_argument("--boss", default=None, choices=sorted(BOSSES),
+                    help=f"which boss to train against (default: {DEFAULT_BOSS}). "
+                         "Sets the observation space, so checkpoints are "
+                         "boss-specific: a resume always keeps the run's "
+                         "recorded boss and refuses a conflicting flag.")
+    ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--auto", action="store_true",
+                    help="skip the interactive ready prompt (unattended/"
+                         "dashboard launches); the boot macro drives the "
+                         "game into the Hall of Gods")
+    ap.add_argument("--measure-resets", action="store_true",
+                    help="Phase 0 async-resets measurement: log every reset's "
+                         "wall-clock span to resets_<port>.jsonl under the run "
+                         "dir. Analyze with scripts/measure_reset_freeze.py. "
+                         "Off by default; a normal run pays nothing.")
+    ap.add_argument("--async-resets", action=argparse.BooleanOptionalAction,
+                    default=None,
+                    help="background-thread resets with placeholder steps so "
+                         "one instance's reset never freezes its siblings. "
+                         "Default: on at --instances >= 2 (Phase 2 gate "
+                         "passed 2026-07-22 -- see the async-resets design doc), off at "
+                         "1. --no-async-resets forces the old synchronous "
+                         "behavior.")
+    ap.add_argument("--async-reset-mode", choices=("prefix", "isolated"),
+                    default="isolated",
+                    help="what the pending window is to PPO: a prefix of the "
+                         "next episode (LSTM state carries across the splice) "
+                         "or an isolated throwaway episode (LSTM state resets "
+                         "at the fight's first real frame)")
+    return ap
+
+
+def parse_session_args(argv=None):
+    """Parse argv and learn which flags the user actually typed.
+
+    Returns (args, explicit): the parsed namespace plus the set of dests
+    that appeared on the command line, learned from a second parse of the
+    same argv with every default suppressed -- a dest surviving into that
+    namespace can only have come from an actual flag. Resume inheritance
+    (apply_recorded_config) needs exactly that typed-vs-default
+    distinction.
+    """
+    args = build_parser().parse_args(argv)
+    probe = build_parser()
+    for action in probe._actions:
+        action.default = argparse.SUPPRESS
+    explicit = set(vars(probe.parse_args(argv)))
+    return args, explicit
 
 
 def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs):
@@ -339,86 +522,35 @@ def build_prepares(ports):
     return [make(p) for p in ports]
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--timesteps", type=int, default=500_000,
-                    help="env steps to collect this session (~54k/hour at "
-                         "15 Hz; adds onto a resumed run's count)")
-    ap.add_argument("--run-id", default=None,
-                    help="name for a NEW run under <root>/runs/ "
-                         "(default: timestamp)")
-    ap.add_argument("--resume", type=Path, default=None, metavar="RUN_DIR",
-                    help="continue an existing run from its latest generation")
-    ap.add_argument("--root", type=Path, default=Path("~/hkrl").expanduser())
-    ap.add_argument("--app", type=Path, default=DEFAULT_APP)
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
-                    help="first bridge port; instance i listens on port+i")
-    ap.add_argument("--instances", type=int, default=1,
-                    help="game instances to run in parallel. Every instance "
-                         "is a full game client -- 2-3 is realistic on one "
-                         "machine, and every window must stay visible")
-    ap.add_argument("--gen-every", type=int, default=15_000)
-    ap.add_argument("--n-steps", type=int, default=None,
-                    help="PPO rollout length PER INSTANCE (default: "
-                         "2048 // instances, inflated ~23%% when async "
-                         "resets are on so the update still sees ~2048 REAL "
-                         "samples after the placeholder mask). The default "
-                         "divides so the total batch -- and with it the "
-                         "update's wall-clock time -- stays roughly constant "
-                         "as --instances grows: the games run on in real "
-                         "time while the update computes, every Knight "
-                         "standing in a live fight")
-    ap.add_argument("--batch-size", type=int, default=64)
-    ap.add_argument("--n-epochs", type=int, default=5,
-                    help="PPO epochs per update. Kept at 5 so the recurrent "
-                         "256x256+LSTM update stays short (~6.7s on CPU): "
-                         "the keepalive pinger keeps connections alive "
-                         "through longer updates, but the Knights stand in "
-                         "their live fights for the whole update. Raise "
-                         "only if the net moves off CPU.")
-    ap.add_argument("--target-kl", type=float, default=None,
-                    help="early-stop an update's remaining epochs once "
-                         "approx_kl exceeds ~1.5x this (SB3 semantics). "
-                         "Unset: no cap, and a resumed checkpoint keeps "
-                         "whatever it trained with. When set it also "
-                         "overrides the checkpoint on resume, unlike the "
-                         "other hyperparameters. Try 0.05 against the "
-                         "late-run win-rate slide (observed approx_kl "
-                         "~0.15-0.25 without a cap).")
-    ap.add_argument("--boss", default=None, choices=sorted(BOSSES),
-                    help=f"which boss to train against (default: {DEFAULT_BOSS}). "
-                         "Sets the observation space, so checkpoints are "
-                         "boss-specific: a resume always keeps the run's "
-                         "recorded boss and refuses a conflicting flag.")
-    ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument("--auto", action="store_true",
-                    help="skip the interactive ready prompt (unattended/"
-                         "dashboard launches); the boot macro drives the "
-                         "game into the Hall of Gods")
-    ap.add_argument("--measure-resets", action="store_true",
-                    help="Phase 0 async-resets measurement: log every reset's "
-                         "wall-clock span to resets_<port>.jsonl under the run "
-                         "dir. Analyze with scripts/measure_reset_freeze.py. "
-                         "Off by default; a normal run pays nothing.")
-    ap.add_argument("--async-resets", action=argparse.BooleanOptionalAction,
-                    default=None,
-                    help="background-thread resets with placeholder steps so "
-                         "one instance's reset never freezes its siblings. "
-                         "Default: on at --instances >= 2 (Phase 2 gate "
-                         "passed 2026-07-22 -- see the async-resets design doc), off at "
-                         "1. --no-async-resets forces the old synchronous "
-                         "behavior.")
-    ap.add_argument("--async-reset-mode", choices=("prefix", "isolated"),
-                    default="isolated",
-                    help="what the pending window is to PPO: a prefix of the "
-                         "next episode (LSTM state carries across the splice) "
-                         "or an isolated throwaway episode (LSTM state resets "
-                         "at the fight's first real frame)")
-    args = ap.parse_args()
+def prepare_session(argv=None) -> tuple[argparse.Namespace, Path, tuple | None, int, bool]:
+    """Everything before any game process exists: parse and layer args,
+    locate or create the run dir, resolve boss and step budget, and append
+    this session's config record. Returns (args, run_dir, resume, budget,
+    async_resets). Split from main() so the whole pre-flight -- including
+    resume inheritance -- is testable without launching a game."""
+    args, explicit = parse_session_args(argv)
+
+    if args.resume is not None:
+        run_dir = args.resume.expanduser()
+        resume = latest_checkpoint(run_dir)  # (gen, weights, vecnorm)
+        configs = read_jsonl(run_dir / "config.jsonl")
+        previous = configs[-1] if configs else {}
+        try:
+            apply_recorded_config(args, explicit, previous)
+        except ValueError as exc:
+            sys.exit(str(exc))
+    else:
+        resume = None
+        previous = None
+        run_dir = args.root / "runs" / (args.run_id
+                                        or time.strftime("%Y%m%d_%H%M%S"))
+
     if args.instances < 1:
         sys.exit("--instances must be at least 1")
-    # Note: only warn about explicit --async-resets at N=1; default (None) is handled by resolve_async_resets
-    if args.async_resets is True and args.instances < 2:
+    # Warn only for a TYPED --async-resets at N=1: an inherited True is
+    # silently forced off by resolve_async_resets below, as designed.
+    if (args.async_resets is True and "async_resets" in explicit
+            and args.instances < 2):
         print("hkrl: --async-resets is a no-op at --instances 1 (no sibling "
               "to freeze); running synchronously", file=sys.stderr, flush=True)
     # Resolved before the config dump below so config.jsonl records the
@@ -428,12 +560,33 @@ def main() -> None:
     if args.n_steps is None:
         args.n_steps = default_n_steps(args.instances, async_resets)
 
-    if args.resume is not None:
-        run_dir = args.resume.expanduser()
-        resume = latest_checkpoint(run_dir)  # (gen, weights, vecnorm)
-    else:
-        resume = None
-        run_dir = args.root / "runs" / (args.run_id or time.strftime("%Y%m%d_%H%M%S"))
+    try:
+        args.boss = resolve_boss(args.boss,
+                                 run_dir if args.resume is not None else None)
+    except ValueError as exc:
+        sys.exit(str(exc))
+
+    generations = read_jsonl(run_dir / "generations.jsonl")
+    current = (next((g["timestep"] for g in generations
+                     if g["gen"] == resume[0]), 0) if resume else 0)
+    try:
+        budget, target = resolve_session_budget(
+            args.timesteps, "timesteps" in explicit, previous, current,
+            generations)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    # The record must state what this session actually collects: on an
+    # untyped finish-to-target resume args.timesteps still holds the
+    # argparse default, which would misstate the session. Fresh runs and
+    # explicit resumes are no-ops (budget == the flag there). An inherited
+    # target_kl is also re-applied to the loaded model via build_model --
+    # idempotent, the checkpoint trained under that same recorded value.
+    args.timesteps = budget
+
+    # The dir is created only after every validation above passed, so bad
+    # args never leave a junk run dir behind (same guarantee main() gave
+    # by validating before its mkdir).
+    if resume is None:
         try:
             run_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
@@ -441,17 +594,17 @@ def main() -> None:
                      f"run is never implicit: pass --resume {run_dir} to "
                      f"continue it, or a different --run-id to start fresh.")
 
-    try:
-        args.boss = resolve_boss(args.boss,
-                                 run_dir if args.resume is not None else None)
-    except ValueError as exc:
-        sys.exit(str(exc))
-
     # One JSON object per session, appended, so a resumed run's full history
     # stays inspectable next to its checkpoints.
     with (run_dir / "config.jsonl").open("a") as f:
-        config = build_config_dict(args, async_resets, resume=resume)
+        config = build_config_dict(args, async_resets, resume=resume,
+                                   target_timestep=target, previous=previous)
         f.write(json.dumps(config) + "\n")
+    return args, run_dir, resume, budget, async_resets
+
+
+def main() -> None:
+    args, run_dir, resume, budget, async_resets = prepare_session()
 
     # Unconditional: every clone is seeded FROM the master save (N=1 on
     # save-isolation platforms, the master itself on others), so a quietly
@@ -461,7 +614,7 @@ def main() -> None:
     if backup is not None:
         print(f"master save backed up to {backup}", flush=True)
     if resume is None:
-        print(session_banner(args.timesteps), flush=True)
+        print(session_banner(budget), flush=True)
 
     ports = [args.port + i for i in range(args.instances)]
     # Instances must not share the game's save directory: they all autosave
@@ -531,13 +684,13 @@ def main() -> None:
                             target_kl=args.target_kl)
         if resume:
             print(f"{run_dir}: " + session_banner(
-                args.timesteps, start_timestep=model.num_timesteps,
+                budget, start_timestep=model.num_timesteps,
                 resumed_gen=resume[0]), flush=True)
         callback = GenerationCallback(run_dir, vecnorm=env,
                                       every_steps=args.gen_every,
                                       supervisor=supervisor)
         try:
-            model.learn(total_timesteps=args.timesteps,
+            model.learn(total_timesteps=budget,
                         callback=[callback, StopOnFlag(stop)],
                         reset_num_timesteps=resume is None)
         except InstanceDown as exc:

@@ -123,9 +123,15 @@ def _wins(generations: list[dict]) -> int:
 
 
 def _target_timestep(generations: list[dict], config: dict | None) -> int | None:
-    """--timesteps is additive on resume: the current session's target is the
-    resumed-from generation's timestep plus the session's budget."""
-    if config is None or "timesteps" not in config:
+    """The run's absolute step target: the recorded target_timestep when
+    the session wrote one (train.py records it since resume inheritance),
+    else reconstructed from the old additive semantics -- the resumed-from
+    generation's timestep plus that session's --timesteps budget."""
+    if config is None:
+        return None
+    if config.get("target_timestep") is not None:
+        return int(config["target_timestep"])
+    if "timesteps" not in config:
         return None
     resumed_from = config.get("resumed_from_gen")
     base = next((g["timestep"] for g in generations

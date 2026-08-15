@@ -541,3 +541,244 @@ def test_build_prepares_reseeds_that_ports_clone_save(monkeypatch):
 def test_build_prepares_is_none_without_save_isolation(monkeypatch):
     monkeypatch.setattr(train, "SAVE_ISOLATION_SUPPORTED", False)
     assert train.build_prepares([9020]) is None
+
+
+def test_parse_session_args_tracks_which_flags_were_typed():
+    args, explicit = train.parse_session_args([])
+    assert explicit == set()
+    assert args.instances == 1 and args.timesteps == 500_000
+
+    args, explicit = train.parse_session_args(
+        ["--instances", "2", "--timesteps", "40000"])
+    assert explicit == {"instances", "timesteps"}
+    assert args.instances == 2 and args.timesteps == 40_000
+
+
+def test_parse_session_args_sees_boolean_and_store_true_flags():
+    # BooleanOptionalAction (both spellings) and store_true must register
+    # as typed, or inheritance could silently override an explicit choice.
+    _, explicit = train.parse_session_args(["--no-async-resets"])
+    assert "async_resets" in explicit
+    _, explicit = train.parse_session_args(["--async-resets"])
+    assert "async_resets" in explicit
+    _, explicit = train.parse_session_args(["--auto"])
+    assert "auto" in explicit
+
+
+def test_apply_recorded_config_inherits_untyped_flags():
+    args, explicit = train.parse_session_args([])
+    train.apply_recorded_config(args, explicit, {
+        "instances": 2, "gen_every": 8000, "target_kl": 0.05,
+        "async_resets": True, "async_reset_mode": "prefix", "port": 9040})
+    assert args.instances == 2
+    assert args.gen_every == 8000
+    assert args.target_kl == 0.05
+    assert args.async_resets is True
+    assert args.async_reset_mode == "prefix"
+    assert args.port == 9040
+
+
+def test_apply_recorded_config_typed_flags_win():
+    args, explicit = train.parse_session_args(["--instances", "1"])
+    train.apply_recorded_config(args, explicit,
+                                {"instances": 2, "gen_every": 8000})
+    assert args.instances == 1     # typed: the user's choice stands
+    assert args.gen_every == 8000  # untyped: inherited
+
+
+def test_apply_recorded_config_missing_keys_keep_defaults():
+    # A record from before a flag existed simply has no opinion.
+    args, explicit = train.parse_session_args([])
+    train.apply_recorded_config(args, explicit, {"boss": "gorb"})
+    assert args.instances == 1
+    assert args.gen_every == 15_000
+
+
+def test_apply_recorded_config_refuses_baked_flags():
+    for argv, flag in [(["--n-steps", "64"], "n-steps"),
+                       (["--batch-size", "8"], "batch-size"),
+                       (["--n-epochs", "3"], "n-epochs"),
+                       (["--seed", "7"], "seed")]:
+        args, explicit = train.parse_session_args(argv)
+        with pytest.raises(ValueError, match=flag):
+            train.apply_recorded_config(args, explicit, {})
+
+
+def test_resolve_session_budget_fresh_run():
+    assert train.resolve_session_budget(500_000, False, None, 0, []) == \
+        (500_000, 500_000)
+
+
+def test_resolve_session_budget_explicit_timesteps_stays_additive():
+    cfg = {"target_timestep": 500_000}
+    assert train.resolve_session_budget(40_000, True, cfg, 120_000, []) == \
+        (40_000, 160_000)
+
+
+def test_resolve_session_budget_defaults_to_finishing_the_recorded_target():
+    cfg = {"target_timestep": 500_000, "timesteps": 500_000}
+    assert train.resolve_session_budget(500_000, False, cfg, 120_000, []) == \
+        (380_000, 500_000)
+
+
+def test_resolve_session_budget_refuses_a_finished_run():
+    cfg = {"target_timestep": 500_000}
+    with pytest.raises(ValueError, match="--timesteps"):
+        train.resolve_session_budget(500_000, False, cfg, 500_000, [])
+
+
+def test_resolve_session_budget_reconstructs_pre_key_records():
+    # A record from before target_timestep existed: that session was
+    # launched with --timesteps 100k resuming from gen 3 (timestep 30k),
+    # so its additive target was 130k -- same walk rundata does today.
+    cfg = {"timesteps": 100_000, "resumed_from_gen": 3}
+    gens = [{"gen": 3, "timestep": 30_000}]
+    assert train.resolve_session_budget(500_000, False, cfg, 60_000, gens) == \
+        (70_000, 130_000)
+
+
+def test_resolve_session_budget_without_any_target_falls_back_additive(capsys):
+    budget, target = train.resolve_session_budget(500_000, False, {}, 60_000, [])
+    assert (budget, target) == (500_000, 560_000)
+    assert "no recorded step target" in capsys.readouterr().err
+
+
+def test_build_config_dict_records_the_target_timestep():
+    args, _ = train.parse_session_args([])
+    config = train.build_config_dict(args, async_resets=False,
+                                     started_at="2026-08-14T12:00:00",
+                                     target_timestep=500_000)
+    assert config["target_timestep"] == 500_000
+    # Fresh records keep the current source constants.
+    assert config["gamma"] == train.GAMMA
+    assert config["ent_coef"] == 0.01
+
+
+def test_build_config_dict_resume_record_states_the_checkpoints_shape():
+    """A resume record must describe what the model actually trains with:
+    the checkpoint-baked values from the previous record, not this
+    process's CLI defaults or current source constants."""
+    args, _ = train.parse_session_args([])
+    previous = {"n_steps": 512, "batch_size": 32, "n_epochs": 7, "seed": 9,
+                "gamma": 0.99, "ent_coef": 0.02}
+    config = train.build_config_dict(
+        args, async_resets=False, resume=(3, None, None),
+        started_at="2026-08-14T12:00:00", target_timestep=500_000,
+        previous=previous)
+    for key, value in previous.items():
+        assert config[key] == value
+    assert config["resumed_from_gen"] == 3
+
+
+def test_build_config_dict_resume_from_a_sparse_old_record_keeps_defaults():
+    # An ancient record without the baked keys: fall back to this
+    # process's values (the record write precedes model load, so the
+    # checkpoint itself cannot be consulted -- accepted in the spec).
+    args, _ = train.parse_session_args([])
+    config = train.build_config_dict(
+        args, async_resets=False, resume=(3, None, None),
+        started_at="2026-08-14T12:00:00", target_timestep=500_000,
+        previous={"boss": "hornet1"})
+    assert config["batch_size"] == 64
+    assert config["gamma"] == train.GAMMA
+
+
+def _seed_resumable_run(tmp_path, config: dict, gen=2, timestep=16):
+    """A run dir latest_checkpoint accepts: manifest line + touched
+    checkpoint pair + one config.jsonl record."""
+    run_dir = tmp_path / "run1"
+    (run_dir / "checkpoints").mkdir(parents=True)
+    (run_dir / "checkpoints" / f"gen_{gen:04d}.zip").touch()
+    (run_dir / "checkpoints" / f"gen_{gen:04d}_vecnorm.pkl").touch()
+    (run_dir / "generations.jsonl").write_text(
+        json.dumps({"gen": gen, "timestep": timestep}) + "\n")
+    (run_dir / "config.jsonl").write_text(json.dumps(config) + "\n")
+    return run_dir
+
+
+def test_prepare_session_resume_inherits_and_appends_a_truthful_record(tmp_path):
+    run_dir = _seed_resumable_run(tmp_path, {
+        "boss": "hornet1", "instances": 2, "gen_every": 8000,
+        "target_kl": 0.05, "async_resets": True, "async_reset_mode": "prefix",
+        "port": 9040, "n_steps": 512, "batch_size": 32, "n_epochs": 7,
+        "seed": 9, "gamma": 0.99, "ent_coef": 0.02,
+        "timesteps": 100_000, "target_timestep": 100_000})
+    args, out_dir, resume, budget, async_resets = train.prepare_session(
+        ["--resume", str(run_dir)])
+    assert out_dir == run_dir and resume[0] == 2
+    assert args.instances == 2 and args.gen_every == 8000
+    assert args.target_kl == 0.05 and args.port == 9040
+    assert async_resets is True and args.async_reset_mode == "prefix"
+    assert args.boss == "hornet1"
+    assert budget == 100_000 - 16  # finish-to-target, not +500k
+    configs = [json.loads(line) for line in
+               (run_dir / "config.jsonl").read_text().splitlines()]
+    assert len(configs) == 2  # append-only, one record per session
+    rec = configs[-1]
+    assert rec["instances"] == 2 and rec["target_timestep"] == 100_000
+    # The record states what this session actually collects, not the
+    # argparse default the user never typed.
+    assert rec["timesteps"] == 100_000 - 16
+    assert rec["resumed_from_gen"] == 2
+    # Baked values inherited, so the record states the model's real shape.
+    assert rec["n_steps"] == 512 and rec["batch_size"] == 32
+    assert rec["n_epochs"] == 7 and rec["seed"] == 9
+    assert rec["gamma"] == 0.99 and rec["ent_coef"] == 0.02
+
+
+def test_prepare_session_typed_flags_override_the_record(tmp_path):
+    run_dir = _seed_resumable_run(tmp_path, {
+        "boss": "hornet1", "instances": 2,
+        "timesteps": 100_000, "target_timestep": 100_000})
+    args, _, _, budget, _ = train.prepare_session(
+        ["--resume", str(run_dir), "--instances", "1",
+         "--timesteps", "40000"])
+    assert args.instances == 1  # typed beats recorded
+    assert budget == 40_000     # explicit --timesteps stays additive
+
+
+def test_prepare_session_refuses_resuming_past_the_target(tmp_path):
+    run_dir = _seed_resumable_run(
+        tmp_path, {"boss": "hornet1", "target_timestep": 16},
+        gen=2, timestep=16)
+    with pytest.raises(SystemExit, match="--timesteps"):
+        train.prepare_session(["--resume", str(run_dir)])
+    # The refusal happens before the config append: no second record.
+    assert len((run_dir / "config.jsonl").read_text().splitlines()) == 1
+
+
+def test_prepare_session_refuses_baked_flags_on_resume(tmp_path):
+    run_dir = _seed_resumable_run(
+        tmp_path, {"boss": "hornet1", "target_timestep": 100_000})
+    with pytest.raises(SystemExit, match="batch-size"):
+        train.prepare_session(
+            ["--resume", str(run_dir), "--batch-size", "128"])
+
+
+def test_prepare_session_fresh_run_writes_the_target(tmp_path):
+    args, run_dir, resume, budget, _ = train.prepare_session(
+        ["--root", str(tmp_path), "--run-id", "fresh1",
+         "--timesteps", "1000"])
+    assert resume is None and budget == 1000
+    rec = json.loads((run_dir / "config.jsonl").read_text())
+    assert rec["target_timestep"] == 1000
+    assert rec["gamma"] == train.GAMMA and rec["instances"] == 1
+
+
+def test_prepare_session_allows_typed_target_kl_on_resume(tmp_path):
+    # The one mutable exception: unlike the baked hyperparameter flags,
+    # typing --target-kl on resume is allowed and overrides the record.
+    run_dir = _seed_resumable_run(tmp_path, {
+        "boss": "hornet1", "target_kl": 0.05,
+        "timesteps": 100_000, "target_timestep": 100_000})
+    args, _, _, _, _ = train.prepare_session(
+        ["--resume", str(run_dir), "--target-kl", "0.1"])
+    assert args.target_kl == 0.1
+
+
+def test_prepare_session_refuses_an_existing_run_dir_for_a_fresh_run(tmp_path):
+    (tmp_path / "runs" / "taken").mkdir(parents=True)
+    with pytest.raises(SystemExit, match="--resume"):
+        train.prepare_session(
+            ["--root", str(tmp_path), "--run-id", "taken",
+             "--timesteps", "1000"])

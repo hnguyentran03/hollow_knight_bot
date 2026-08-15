@@ -519,3 +519,16 @@ def test_restart_params_carries_the_boss(tmp_path, monkeypatch):
     params = launcher._restart_params(run_dir, {"mode": "resume",
                                                 "run_id": "r1"})
     assert params["boss"] == boss_id
+
+
+def test_command_resume_omits_flags_the_request_leaves_out(tmp_path,
+                                                           stub_trainer):
+    """A bare resume request forwards no shape flags at all: train.py now
+    inherits instances/gen_every from config.jsonl and finishes to the
+    recorded target when --timesteps is absent. The launcher must not
+    reintroduce CLI defaults behind the user's back."""
+    cmd = launcher.command(tmp_path, {"mode": "resume", "run_id": "old"},
+                           platform="linux")
+    assert "--resume" in cmd
+    for flag in ("--timesteps", "--instances", "--gen-every"):
+        assert flag not in cmd

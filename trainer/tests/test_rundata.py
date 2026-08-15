@@ -241,3 +241,19 @@ def test_load_run_attributes_episode_generations(tmp_path):
                    rows=[(1.0, 100, 10.0), (2.0, 100, 20.0), (3.0, 100, 30.0)])
     run = load_run(tmp_path, now=0)
     assert [e["gen"] for e in run["episodes"]] == [1, 1, None]
+
+
+def test_target_prefers_the_recorded_target_timestep(tmp_path):
+    """Sessions now record their absolute target; the additive
+    reconstruction stays only as the fallback for old runs."""
+    run_dir = tmp_path / "r"
+    run_dir.mkdir()
+    (run_dir / "generations.jsonl").write_text(
+        json.dumps({"gen": 3, "timestep": 30_000, "wall_clock_s": 60.0}) + "\n")
+    # A record whose reconstruction (30k + 500k) would disagree with the
+    # recorded target -- the recorded value must win.
+    (run_dir / "config.jsonl").write_text(json.dumps(
+        {"timesteps": 500_000, "resumed_from_gen": 3,
+         "target_timestep": 130_000}) + "\n")
+    run = load_run(run_dir)
+    assert run["status"]["target_timestep"] == 130_000
