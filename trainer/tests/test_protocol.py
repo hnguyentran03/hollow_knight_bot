@@ -1,6 +1,7 @@
 import json
 import socket
 import threading
+import time
 
 import pytest
 
@@ -56,3 +57,49 @@ def test_recv_raises_on_eof():
     with pytest.raises(ConnectionClosed):
         c.recv()
     c.close()
+
+
+def _serve_lines(lines):
+    """A one-connection server that greets with the given lines then holds
+    the socket open briefly so the client can read them all."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+
+    def run():
+        conn, _ = srv.accept()
+        f = conn.makefile("rwb")
+        for line in lines:
+            f.write(json.dumps(line).encode() + b"\n")
+        f.flush()
+        time.sleep(0.5)
+        conn.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    return srv
+
+
+def test_recv_drops_events_by_default():
+    srv = _serve_lines([{"type": "hello", "version": 4},
+                        {"type": "event", "name": "play", "bot": "b"},
+                        {"type": "state", "obs": {}}])
+    conn = Connection(port=srv.getsockname()[1], keepalive=None)
+    conn.connect()
+    try:
+        assert conn.recv()["type"] == "state"   # the event was filtered out
+    finally:
+        conn.close()
+        srv.close()
+
+
+def test_recv_delivers_events_when_opted_in():
+    srv = _serve_lines([{"type": "hello", "version": 4},
+                        {"type": "event", "name": "play", "bot": "b"}])
+    conn = Connection(port=srv.getsockname()[1], keepalive=None)
+    conn.connect()
+    conn.accept_events = True
+    try:
+        assert conn.recv() == {"type": "event", "name": "play", "bot": "b"}
+    finally:
+        conn.close()
+        srv.close()
