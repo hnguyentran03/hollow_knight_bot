@@ -532,3 +532,46 @@ def test_command_resume_omits_flags_the_request_leaves_out(tmp_path,
     assert "--resume" in cmd
     for flag in ("--timesteps", "--instances", "--gen-every"):
         assert flag not in cmd
+
+
+def _exportable_run(tmp_path):
+    run = tmp_path / "runs" / "r1"
+    ckpt = run / "checkpoints"
+    ckpt.mkdir(parents=True)
+    (ckpt / "gen_0001.zip").write_bytes(b"w")
+    (ckpt / "gen_0001_vecnorm.pkl").write_bytes(b"v")
+    (run / "generations.jsonl").write_text(
+        json.dumps({"gen": 1, "timestep": 15000}) + "\n")
+    return run
+
+
+def test_export_delegates_and_returns_the_export_name(tmp_path):
+    _exportable_run(tmp_path)
+    name = launcher.export(tmp_path, "r1", gen=1)
+    assert name == "r1_gen0001"
+    assert (tmp_path / "exports" / name / "model.zip").exists()
+    assert (tmp_path / "exports" / name / "manifest.json").exists()
+
+
+def test_export_accepts_a_custom_name_and_defaults_gen(tmp_path):
+    _exportable_run(tmp_path)
+    assert launcher.export(tmp_path, "r1", name="champ") == "champ"
+
+
+def test_export_validates_inputs(tmp_path):
+    _exportable_run(tmp_path)
+    with pytest.raises(ValueError, match="run_id is required"):
+        launcher.export(tmp_path, "")
+    with pytest.raises(ValueError, match="no run named"):
+        launcher.export(tmp_path, "nope")
+    with pytest.raises(ValueError, match="gen must be an integer"):
+        launcher.export(tmp_path, "r1", gen="x")
+    with pytest.raises(ValueError, match="gen must be a positive"):
+        launcher.export(tmp_path, "r1", gen=0)
+
+
+def test_export_maps_a_checkpointless_run_to_valueerror(tmp_path):
+    run = tmp_path / "runs" / "bare"
+    run.mkdir(parents=True)
+    with pytest.raises(ValueError, match="no complete generation"):
+        launcher.export(tmp_path, "bare")
