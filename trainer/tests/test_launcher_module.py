@@ -575,3 +575,13 @@ def test_export_maps_a_checkpointless_run_to_valueerror(tmp_path):
     run.mkdir(parents=True)
     with pytest.raises(ValueError, match="no complete generation"):
         launcher.export(tmp_path, "bare")
+
+
+def test_export_rejects_unsafe_names(tmp_path):
+    _exportable_run(tmp_path)
+    # Reject names with path traversal
+    for name in ("../evil", "/abs/evil", "a\\b", ".hidden", "-dash"):
+        with pytest.raises(ValueError):
+            launcher.export(tmp_path, "r1", name=name)
+        # No files should be created
+        assert not (tmp_path / "exports").exists()

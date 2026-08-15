@@ -385,6 +385,16 @@ def export(root, run_id, gen=None, name=None) -> str:
             raise ValueError("gen must be an integer") from None
         if gen < 1:
             raise ValueError("gen must be a positive integer")
+    if name:
+        # Validate export name to prevent path traversal attacks. Mirror the
+        # discipline _validate applies to run_id: no path separators, no
+        # traversal sequences, no leading dash or dot, and reasonable length.
+        if "/" in name or "\\" in name or ".." in name:
+            raise ValueError("export name must be a plain directory name (no path separators or ..)")
+        if name.startswith("-") or name.startswith("."):
+            raise ValueError("export name must not start with '-' or '.'")
+        if len(name) > 64:
+            raise ValueError("export name too long (max 64 chars)")
     root = Path(root).expanduser()
     run_dir = root / "runs" / run_id
     if not run_dir.is_dir():
