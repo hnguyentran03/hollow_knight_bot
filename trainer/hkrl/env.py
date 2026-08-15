@@ -160,6 +160,21 @@ class HKEnv(gym.Env):
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(n,), dtype=np.float32)
         self.action_space = spaces.Discrete(len(ACTIONS))
 
+    def set_boss(self, boss_id):
+        """Swap the obs pipeline to another boss between episodes.
+
+        The play daemon (scripts/play.py) switches exported bots on one
+        persistent connection, and exports are boss-specific by
+        construction (the FSM list sizes the one-hot). get_boss runs
+        first so an unknown id raises before anything mutates. Only safe
+        while idle: the next reset() names the new boss and re-baselines
+        the per-episode state (_max_bhp) as every reset already does.
+        """
+        self.boss = get_boss(boss_id)
+        n = len(OBS_KEYS) + len(self.boss.fsm_states)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(n,),
+                                            dtype=np.float32)
+
     # -- helpers --
 
     def _flatten(self, obs):
