@@ -344,3 +344,32 @@ def test_polled_endpoints_are_not_cached(base_url):
     for path in ["/api/runs", "/api/run/r1", "/api/launcher"]:
         h = _headers(base_url + path)
         assert "no-store" in (h.get("Cache-Control") or ""), path
+
+
+def test_post_export_delegates_and_returns_the_name(base_url, monkeypatch):
+    calls = {}
+
+    def fake_export(root, run_id, gen, name=None):
+        calls.update(run_id=run_id, gen=gen, name=name)
+        return "r1_gen0001"
+
+    monkeypatch.setattr("hkrl.launcher.export", fake_export)
+    status, data = _post(base_url + "/api/export", {"run_id": "r1", "gen": 1})
+    assert status == 200
+    assert data == {"exported": "r1_gen0001"}
+    assert calls == {"run_id": "r1", "gen": 1, "name": None}
+
+
+def test_post_export_maps_errors_to_400(base_url, monkeypatch):
+    def bad(root, run_id, gen, name=None):
+        raise ValueError("no run named 'r9'")
+
+    monkeypatch.setattr("hkrl.launcher.export", bad)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(base_url + "/api/export", {"run_id": "r9", "gen": 1})
+    assert err.value.code == 400
+
+
+def test_page_wires_the_export_button(base_url):
+    _, _, body = _get(base_url + "/")
+    assert b"/api/export" in body

@@ -121,6 +121,13 @@ class _Handler(BaseHTTPRequestHandler):
                                          body.get("gen"),
                                          body.get("episodes", 3))
                 self._json({"replaying": run_id, "gen": body.get("gen")})
+            elif path == "/api/export":
+                # A synchronous file copy (launcher.export), so unlike
+                # replay there is no detached process to report -- just the
+                # export's name for the button label.
+                self._json({"exported": launcher.export(
+                    self.server.root, body.get("run_id"), body.get("gen"),
+                    body.get("name"))})
             elif path == "/api/delete":
                 self._json({"trashed":
                             launcher.delete(self.server.root,

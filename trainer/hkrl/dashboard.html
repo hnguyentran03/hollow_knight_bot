@@ -1038,7 +1038,24 @@ function renderGens(container, runId, gens, disabled) {
     // A replay owns the single slot; it can't start while anything else does.
     play.disabled = disabled;
     play.addEventListener("click", () => openReplayDialog(runId, g.gen));
-    row.append(label, play);
+    const exp = document.createElement("button");
+    exp.type = "button";
+    exp.className = "btn";
+    exp.textContent = "Export";
+    // Unlike Replay, an export is a fast file copy with no game and no
+    // active-run slot, so it is never gated on `disabled`.
+    exp.addEventListener("click", async () => {
+      exp.disabled = true;
+      try {
+        const res = await postJSON("/api/export", { run_id: runId, gen: g.gen });
+        exp.textContent = "Exported";
+        exp.title = res.exported;
+      } catch (err) {
+        exp.disabled = false;
+        launchError(err.message);
+      }
+    });
+    row.append(label, exp, play);
     container.appendChild(row);
   }
 }
