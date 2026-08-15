@@ -29,10 +29,9 @@ from stable_baselines3.common.vec_env import (  # noqa: E402
     DummyVecEnv, VecNormalize,
 )
 
-from hkrl.bosses import DEFAULT_BOSS  # noqa: E402
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import checkpoint_paths, latest_checkpoint  # noqa: E402
-from hkrl.rundata import read_jsonl  # noqa: E402
+from hkrl.rundata import read_jsonl, run_boss  # noqa: E402
 from hkrl.vec import make_env  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -40,15 +39,6 @@ from launch_instances import (  # noqa: E402
     DEFAULT_APP, DEFAULT_PORT, SAVE_ISOLATION_SUPPORTED, backup_saves,
     prepare_instance,
 )
-
-
-def run_boss(run_dir) -> str:
-    """The boss the run trained against, from its recorded config; runs
-    from before the boss field read as DEFAULT_BOSS. The checkpoint's
-    observation space was built for this boss, so the replay env must be
-    too."""
-    configs = read_jsonl(Path(run_dir) / "config.jsonl")
-    return ((configs[-1].get("boss") if configs else None) or DEFAULT_BOSS)
 
 
 def load_policy(weights: Path, vecnorm: Path, port: int, run_dir: Path,

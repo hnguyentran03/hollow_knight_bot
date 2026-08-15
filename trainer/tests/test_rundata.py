@@ -257,3 +257,11 @@ def test_target_prefers_the_recorded_target_timestep(tmp_path):
          "target_timestep": 130_000}) + "\n")
     run = load_run(run_dir)
     assert run["status"]["target_timestep"] == 130_000
+
+
+def test_run_boss_reads_config_and_defaults_to_hornet1(tmp_path):
+    from hkrl.rundata import run_boss
+    assert run_boss(tmp_path) == "hornet1"          # no config at all
+    (tmp_path / "config.jsonl").write_text(
+        json.dumps({"boss": "gruz_mother"}) + "\n")
+    assert run_boss(tmp_path) == "gruz_mother"
