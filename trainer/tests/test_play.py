@@ -70,6 +70,27 @@ class StubEnv:
         return np.zeros(3, dtype=np.float32), 1.0, done, False, info
 
 
+class RecordingEnv(StubEnv):
+    """Like StubEnv, but each step() records whether the connection is
+    currently accepting events -- used to prove events are filtered for
+    the duration of an episode."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.accept_events_during_step = []
+
+    def step(self, action):
+        self.accept_events_during_step.append(self.conn.accept_events)
+        return super().step(action)
+
+
+class ConnClosingEnv(StubEnv):
+    """step() raises ConnectionClosed, as if the game vanished mid-fight."""
+
+    def step(self, action):
+        raise ConnectionClosed("gone mid-fight")
+
+
 def _export(tmp_path, name="bot1", boss="gruz_mother"):
     d = tmp_path / "exports" / name
     d.mkdir(parents=True)
@@ -125,6 +146,16 @@ def test_load_export_unreadable_manifest_is_an_exporterror(tmp_path):
     with pytest.raises(play.ExportError, match="manifest"):
         play.load_export(tmp_path, "bot1", {},
                          load_model=None, load_vecnorm=None)
+
+
+def test_load_export_missing_vecnorm_is_an_exporterror(tmp_path):
+    d = _export(tmp_path)
+    (d / "vecnorm.pkl").unlink()   # half-deleted export
+    calls, lm, lv = _loaders()
+    with pytest.raises(play.ExportError, match="vecnorm"):
+        play.load_export(tmp_path, "bot1", {},
+                         load_model=lm, load_vecnorm=lv)
+    assert calls == {"model": 0, "vecnorm": 0}   # loaders never called
 
 
 # ---- play_episode ----
@@ -201,6 +232,17 @@ def test_handle_event_without_a_bot_name(tmp_path, capsys):
     assert "selected" in capsys.readouterr().err
 
 
+def test_handle_event_filters_events_during_the_episode(tmp_path):
+    _export(tmp_path)
+    calls, lm, lv = _loaders()
+    env = RecordingEnv(steps=3)
+    play.handle_event(_play_event(), root=tmp_path, env=env, cache={},
+                      load_model=lm, load_vecnorm=lv)
+    # stray F9s buffered mid-fight must be filtered, same as in training
+    assert env.accept_events_during_step == [False, False, False]
+    assert env.conn.accept_events is True   # restored once the episode ends
+
+
 # ---- idle_loop ----
 
 def test_idle_loop_dispatches_and_opts_into_events(tmp_path):
@@ -223,6 +265,36 @@ def test_idle_loop_reconnects_on_a_closed_connection(tmp_path):
         play.idle_loop(env, tmp_path, {},
                        reconnect=lambda e, out: reconnects.append(e))
     assert reconnects == [env]
+
+
+def test_idle_loop_survives_an_unexpected_error_from_a_play_event(tmp_path,
+                                                                    capsys):
+    _export(tmp_path)
+
+    def load_model(path):
+        raise RuntimeError("boom")
+
+    conn = ScriptedConn([_play_event(), KeyboardInterrupt()])
+    env = StubEnv(conn=conn)
+    with pytest.raises(KeyboardInterrupt):
+        play.idle_loop(env, tmp_path, {}, load_model=load_model,
+                       load_vecnorm=None)
+    err = capsys.readouterr().err
+    assert "unexpected error" in err and "boom" in err
+
+
+def test_idle_loop_recovers_from_a_connectionclosed_inside_handle_event(
+        tmp_path):
+    _export(tmp_path)
+    calls, lm, lv = _loaders()
+    conn = ScriptedConn([_play_event(), KeyboardInterrupt()])
+    env = ConnClosingEnv(conn=conn)
+    reconnects = []
+    with pytest.raises(KeyboardInterrupt):
+        play.idle_loop(env, tmp_path, {}, load_model=lm, load_vecnorm=lv,
+                       reconnect=lambda e, out: reconnects.append(e))
+    assert reconnects == [env]
+    assert conn.accept_events is True
 
 
 # ---- parser ----

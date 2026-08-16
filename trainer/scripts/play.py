@@ -65,9 +65,16 @@ def load_export(root, name, cache, load_model=_load_model,
         manifest = json.loads(manifest_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise ExportError(f"unreadable manifest for {name!r}: {exc}")
+    model_path, vecnorm_path = d / MODEL_NAME, d / VECNORM_NAME
+    if not model_path.exists():
+        raise ExportError(f"export {name!r} is missing {MODEL_NAME} -- a "
+                          f"half-deleted export? re-export it")
+    if not vecnorm_path.exists():
+        raise ExportError(f"export {name!r} is missing {VECNORM_NAME} -- a "
+                          f"half-deleted export? re-export it")
     entry = {"manifest": manifest,
-             "model": load_model(d / MODEL_NAME),
-             "vecnorm": load_vecnorm(d / VECNORM_NAME)}
+             "model": load_model(model_path),
+             "vecnorm": load_vecnorm(vecnorm_path)}
     cache[name] = entry
     return entry
 
@@ -140,8 +147,15 @@ def handle_event(msg, *, root, env, cache, deterministic=True,
     print(f"playing {name} (gen {m.get('gen')} of {m.get('run_id')}, "
           f"{m.get('boss_display') or boss}, "
           f"win_rate {stats.get('win_rate', 0):.0%})", file=out, flush=True)
-    return play_episode(env, entry["model"], entry["vecnorm"], name=name,
-                        deterministic=deterministic, out=out)
+    # A stray F9 buffered mid-episode must not surface inside env.step's
+    # recv() (its message shape doesn't match a step reply); filter events
+    # for the duration of the fight, same as during training.
+    env.conn.accept_events = False
+    try:
+        return play_episode(env, entry["model"], entry["vecnorm"], name=name,
+                            deterministic=deterministic, out=out)
+    finally:
+        env.conn.accept_events = True
 
 
 def _reconnect(env, out=None):
@@ -152,7 +166,7 @@ def _reconnect(env, out=None):
         env.conn.close()
         try:
             env.conn.connect()
-        except OSError:
+        except (OSError, ConnectionClosed):
             time.sleep(2.0)
             continue
         version = (env.conn.hello or {}).get("version")
@@ -187,9 +201,20 @@ def idle_loop(env, root, cache, deterministic=True, out=None,
             reconnect(env, out)
             env.conn.accept_events = True
             continue
-        handle_event(msg, root=root, env=env, cache=cache,
-                     deterministic=deterministic, out=out,
-                     load_model=load_model, load_vecnorm=load_vecnorm)
+        try:
+            handle_event(msg, root=root, env=env, cache=cache,
+                         deterministic=deterministic, out=out,
+                         load_model=load_model, load_vecnorm=load_vecnorm)
+        except ConnectionClosed:
+            # The game closed mid-fight (env.step raised it): same
+            # recovery as a closed recv() above.
+            print("game connection lost; waiting for it to come back…",
+                  file=out, flush=True)
+            reconnect(env, out)
+            env.conn.accept_events = True
+        except Exception as exc:   # never BaseException: Ctrl-C must work
+            print(f"unexpected error handling a play event: {exc}",
+                  file=sys.stderr, flush=True)
 
 
 def connect_env(host, port, out=None):
@@ -202,7 +227,7 @@ def connect_env(host, port, out=None):
     while True:
         try:
             return HKEnv(host=host, port=port)
-        except OSError:
+        except (OSError, ConnectionClosed):
             if not printed:
                 print(f"waiting for game on port {port}…", file=out,
                       flush=True)
