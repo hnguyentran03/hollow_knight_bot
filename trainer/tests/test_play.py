@@ -267,6 +267,17 @@ def test_idle_loop_reconnects_on_a_closed_connection(tmp_path):
     assert reconnects == [env]
 
 
+def test_idle_loop_reconnects_on_a_malformed_message(tmp_path):
+    conn = ScriptedConn([json.JSONDecodeError("bad", "x", 0),
+                         KeyboardInterrupt()])
+    env = StubEnv(conn=conn)
+    reconnects = []
+    with pytest.raises(KeyboardInterrupt):
+        play.idle_loop(env, tmp_path, {},
+                       reconnect=lambda e, out: reconnects.append(e))
+    assert reconnects == [env]
+
+
 def test_idle_loop_survives_an_unexpected_error_from_a_play_event(tmp_path,
                                                                     capsys):
     _export(tmp_path)

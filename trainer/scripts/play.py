@@ -195,6 +195,14 @@ def idle_loop(env, root, cache, deterministic=True, out=None,
             msg = env.conn.recv()
         except TimeoutError:      # socket.timeout is an alias since 3.10
             continue
+        except json.JSONDecodeError:
+            # A garbled line from the bridge -- not a closed connection,
+            # but recovered the same way: re-dial and resume.
+            print("malformed message from the game; reconnecting…",
+                  file=out, flush=True)
+            reconnect(env, out)
+            env.conn.accept_events = True
+            continue
         except ConnectionClosed:
             print("game connection lost; waiting for it to come back…",
                   file=out, flush=True)
@@ -253,16 +261,18 @@ def main() -> None:
     backup = backup_saves(root)
     if backup is not None:
         print(f"master save backed up to {backup}", flush=True)
-    env = connect_env(args.host, args.port)
-    print("connected -- select a bot in Options > Mods > HKRLBot and "
-          "press F9 in the Hall of Gods (Ctrl-C quits)", flush=True)
+    env = None
     try:
+        env = connect_env(args.host, args.port)
+        print("connected -- select a bot in Options > Mods > HKRLBot and "
+              "press F9 in the Hall of Gods (Ctrl-C quits)", flush=True)
         idle_loop(env, root, cache={},
                   deterministic=not args.stochastic)
     except KeyboardInterrupt:
         print("\nstopping", flush=True)
     finally:
-        env.close()
+        if env is not None:
+            env.close()
 
 
 if __name__ == "__main__":
