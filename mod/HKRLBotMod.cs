@@ -1,16 +1,53 @@
 // mod/HKRLBotMod.cs
+using System.Collections.Generic;
 using Modding;
 using UnityEngine;
 
 namespace HKRLBot
 {
-    public class HKRLBotMod : Mod
+    public class HKRLBotMod : Mod, IGlobalSettings<GlobalSettings>, IMenuMod
     {
         internal static HKRLBotMod Instance;
         internal GameObject Root;
         public StateReader Reader = new StateReader();
         public VirtualInput Input = new VirtualInput();
         public BridgeServer Server = new BridgeServer();
+
+        // Selection persisted by the Modding API's global-settings
+        // lifecycle; read by OverlayUI's F9 handler and HUD.
+        internal static GlobalSettings GS = new GlobalSettings();
+        public void OnLoadGlobal(GlobalSettings s) { if (s != null) GS = s; }
+        public GlobalSettings OnSaveGlobal() => GS;
+
+        public bool ToggleButtonInsideMenu => false;
+
+        public List<IMenuMod.MenuEntry> GetMenuData(IMenuMod.MenuEntry? toggleButtonEntry)
+        {
+            // Snapshot at menu build (game boot, or a save closed back to
+            // the main menu). Exports created mid-session appear on the
+            // next build -- accepted trade-off, see the 2026-08-15 spec.
+            var exports = ExportsCatalog.List();
+            var values = new string[exports.Count == 0 ? 1 : exports.Count];
+            if (exports.Count == 0) values[0] = "(no exports)";
+            for (int i = 0; i < exports.Count; i++) values[i] = exports[i];
+            return new List<IMenuMod.MenuEntry>
+            {
+                new IMenuMod.MenuEntry(
+                    "Bot",
+                    values,
+                    "Exported bot F9 plays (from " + ExportsCatalog.Root() + "/exports)",
+                    i => { if (exports.Count > 0) GS.SelectedBot = exports[i]; },
+                    () =>
+                    {
+                        // Saved-name -> index; a vanished name displays
+                        // entry 0 WITHOUT overwriting the setting (only a
+                        // deliberate save does).
+                        for (int i = 0; i < exports.Count; i++)
+                            if (exports[i] == GS.SelectedBot) return i;
+                        return 0;
+                    })
+            };
+        }
 
         public override string GetVersion() => "0.1.0";
 

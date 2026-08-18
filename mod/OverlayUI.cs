@@ -211,6 +211,7 @@ namespace HKRLBot
             if (Input.GetKeyDown(KeyCode.F1)) show = !show;
             if (Input.GetKeyDown(KeyCode.F3)) FSMLogger.LogAll();
             if (Input.GetKeyDown(KeyCode.F4)) DiscoveryLogger.Toggle();
+            if (Input.GetKeyDown(KeyCode.F9)) TryRequestPlay();
 
             if (Input.GetKeyDown(KeyCode.F2)) { wiggle = !wiggle; if (!wiggle) HKRLBotMod.Instance.Input.Clear(); }
             if (wiggle)
@@ -223,6 +224,34 @@ namespace HKRLBot
                 b.Attack = (frame % 45) < 3;
                 HKRLBotMod.Instance.Input.Apply(b);
             }
+        }
+
+        // F9: ask the play daemon to run one episode of the selected bot.
+        // Only meaningful while a client is connected and the manager is
+        // idle -- every other state is ignored with a log line, never an
+        // error, because a human mashing F9 is expected input.
+        private void TryRequestPlay()
+        {
+            var mod = HKRLBotMod.Instance;
+            if (!mod.Server.Connected)
+            {
+                mod.Log("F9: ignored, no play daemon connected");
+                return;
+            }
+            var mgr = EpisodeManager.Instance;
+            if (mgr == null || mgr.Busy)
+            {
+                mod.Log("F9: ignored, an episode or reset is in flight");
+                return;
+            }
+            var bot = HKRLBotMod.GS.SelectedBot;
+            if (string.IsNullOrEmpty(bot))
+            {
+                mod.Log("F9: ignored, no bot selected in the mod menu");
+                return;
+            }
+            mod.Log($"F9: requesting one episode of '{bot}'");
+            mod.Server.SendEvent("play", bot);
         }
 
         // Tint the shared 1x1 texture and stretch it to fill rect. Saves/restores
@@ -280,7 +309,7 @@ namespace HKRLBot
             float bossH   = !b.Present ? RowH : (BarRowH + RowH * 3 + (BossRegistry.Current.ProjectileName != null ? RowH : 0));
             float total   = Pad + HeaderH + knightH
                           + Gap + HeaderH + bossH
-                          + Gap + HeaderH + RowH
+                          + Gap + HeaderH + RowH * 2
                           + Pad;
 
             // Right-anchored: recomputed every OnGUI so the panel stays glued to
@@ -393,9 +422,27 @@ namespace HKRLBot
 
             // ---------------- CONTROLS ----------------
             cy = SectionHeader(left, cy, cw, "CONTROLS");
-            GUI.Label(new Rect(left, cy, cw - 70f, RowH), "F1 show · F2 wiggle · F3 fsm-log · F4 discovery", dim);
+            GUI.Label(new Rect(left, cy, cw - 70f, RowH),
+                      "F1 show · F2 wiggle · F3 fsm · F4 discover · F9 play", dim);
             float wy = cy + (RowH - ChipH) / 2f;
             DrawChip(new Rect(left + cw - 66f, wy, 66f, ChipH), wiggle ? "WIGGLE" : "IDLE", wiggle, DashOn);
+            cy += RowH;
+
+            // BOT row: daemon status chip + the selected export's name, so
+            // a menu switch is confirmable at a glance. PLAYING is simply
+            // connected-and-busy -- during training it reads PLAYING too,
+            // which is accurate.
+            bool botConnected = HKRLBotMod.Instance.Server.Connected;
+            var mgr = EpisodeManager.Instance;
+            bool botBusy = botConnected && mgr != null && mgr.Busy;
+            string botLabel = !botConnected ? "OFF" : (botBusy ? "PLAYING" : "READY");
+            float by = cy + (RowH - ChipH) / 2f;
+            DrawChip(new Rect(left, by, 66f, ChipH), botLabel, botConnected,
+                     botBusy ? DashOn : GroundOn);
+            string sel = HKRLBotMod.GS.SelectedBot;
+            GUI.Label(new Rect(left + 74f, cy, cw - 74f, RowH),
+                      string.IsNullOrEmpty(sel) ? "(no bot selected)" : sel,
+                      string.IsNullOrEmpty(sel) ? dim : body);
         }
 
         // Draws a section header band and returns the y below it.

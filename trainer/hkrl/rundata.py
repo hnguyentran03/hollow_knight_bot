@@ -10,6 +10,8 @@ import json
 import time
 from pathlib import Path
 
+from hkrl.bosses import DEFAULT_BOSS
+
 # Episodes end at most ~3 minutes apart (the env's step ceiling), so five
 # silent minutes means the run is stopped or wedged, not merely mid-episode.
 LIVE_WINDOW_S = 300
@@ -31,6 +33,15 @@ def read_jsonl(path) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return records
+
+
+def run_boss(run_dir) -> str:
+    """The boss a run trained against, from its recorded config; runs from
+    before the boss field read as DEFAULT_BOSS. A run's checkpoints carry
+    observation spaces built for this boss, so any env replaying or playing
+    them must be built for it too."""
+    configs = read_jsonl(Path(run_dir) / "config.jsonl")
+    return ((configs[-1].get("boss") if configs else None) or DEFAULT_BOSS)
 
 
 def _episodes(run_dir: Path) -> list[dict]:

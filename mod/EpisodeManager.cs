@@ -7,6 +7,11 @@ namespace HKRLBot
 {
     public class EpisodeManager : MonoBehaviour
     {
+        // For OverlayUI: F9 must be ignored, and the HUD chip must read
+        // PLAYING, while an episode or reset macro is in flight.
+        internal static EpisodeManager Instance;
+        public bool Busy => episodeActive || awaitingReset;
+
         // Frames-at-60fps that one action is meant to span. Only a numerator
         // for ActionHoldSeconds -- nothing counts rendered frames, since the
         // game renders uncapped.
@@ -99,6 +104,7 @@ namespace HKRLBot
         // to, rather than a second parallel scene-tracking mechanism.
         private void Awake()
         {
+            Instance = this;
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged += OnActiveSceneChanged;
         }
 
@@ -175,18 +181,16 @@ namespace HKRLBot
 
             if (!episodeActive)
             {
-                // Idle: poll (non-lockstep) for a reset request each frame. Note this
-                // still goes through BridgeServer.ReadMessage(), which blocks on the
-                // socket's 10s ReadTimeout if the client sends nothing -- i.e. one
-                // LateUpdate call can freeze the game for up to 10s here, same as
-                // BridgeServer's documented read-timeout ceiling elsewhere. This is
-                // accepted rather than avoided: the client is expected to send
-                // "reset" immediately after connecting / immediately after
-                // receiving a done=true state, per the standard Gym reset() pattern,
-                // so the common case is sub-second. A trainer that legitimately
-                // needs long idle gaps between episodes would need BridgeServer's
-                // ReadTimeout revisited, not this loop.
-                var msg = SafeReadMessage(server);
+                // Idle: NON-BLOCKING poll for a reset request each frame
+                // (BridgeServer.TryReadMessage). This used to be a blocking
+                // read: harmless for a trainer (which sends "reset"
+                // immediately), but the play daemon idles connected for
+                // minutes, and every idle LateUpdate would park the main
+                // thread until the next keepalive ping (~3s) -- the human
+                // couldn't even walk around. A message split across TCP
+                // segments can be delayed until the next traffic (~3s,
+                // keepalive); the reset ratchet tolerates that.
+                var msg = SafeTryReadMessage(server);
                 if (msg == null) return;
                 // Liveness ping: answer from this main-thread read and stay
                 // idle. See TryAnswerPing for why the main thread must be the
@@ -357,6 +361,24 @@ namespace HKRLBot
             catch (JsonReaderException ex)
             {
                 HKRLBotMod.Instance.Log($"EpisodeManager: malformed JSON from client, dropping connection: {ex.Message}");
+                server.Drop();
+                return null;
+            }
+        }
+
+        // The idle-path sibling of SafeReadMessage: same malformed-JSON-
+        // drops-connection policy, but non-blocking underneath, so an
+        // idle frame with no traffic returns immediately instead of
+        // parking the main thread in the socket's ReadTimeout.
+        private static JObject SafeTryReadMessage(BridgeServer server)
+        {
+            try
+            {
+                return server.TryReadMessage();
+            }
+            catch (JsonReaderException ex)
+            {
+                HKRLBotMod.Instance.Log($"EpisodeManager: malformed JSON from idle client, dropping connection: {ex.Message}");
                 server.Drop();
                 return null;
             }

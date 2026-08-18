@@ -25,6 +25,7 @@ from hkrl.bosses import BOSSES
 from hkrl.game import DEFAULT_PORT
 from hkrl.generations import checkpoint_paths
 from hkrl.rundata import LIVE_WINDOW_S, read_jsonl
+from hkrl import exports
 
 TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "train.py"
 REPLAY_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "replay.py"
@@ -365,6 +366,46 @@ def replay(root, run_id, gen, episodes: int = 3,
              "mode": "replay", "gen": gen}))
         os.replace(tmp, pidfile)
         return run_id
+
+
+def export(root, run_id, gen=None, name=None) -> str:
+    """Export one generation to <root>/exports/; returns the export name.
+
+    A fast synchronous file copy -- no game, no detached process, no
+    pidfile -- so unlike launch()/replay() it needs no active-slot check
+    and can run while a training run is live.
+    """
+    if not run_id:
+        raise ValueError("run_id is required")
+    run_id = _validate({"run_id": run_id})["run_id"]
+    if gen is not None:
+        try:
+            gen = int(gen)
+        except (TypeError, ValueError):
+            raise ValueError("gen must be an integer") from None
+        if gen < 1:
+            raise ValueError("gen must be a positive integer")
+    if name:
+        # Validate export name to prevent path traversal attacks. Mirror the
+        # discipline _validate applies to run_id: no path separators, no
+        # traversal sequences, no leading dash or dot, and reasonable length.
+        if "/" in name or "\\" in name or ".." in name:
+            raise ValueError("export name must be a plain directory name (no path separators or ..)")
+        if name.startswith("-") or name.startswith("."):
+            raise ValueError("export name must not start with '-' or '.'")
+        if len(name) > 64:
+            raise ValueError("export name too long (max 64 chars)")
+    root = Path(root).expanduser()
+    run_dir = root / "runs" / run_id
+    if not run_dir.is_dir():
+        raise ValueError(f"no run named {run_id!r}")
+    try:
+        return exports.export_generation(root, run_dir, gen=gen,
+                                         name=name or None).name
+    except FileNotFoundError as exc:
+        # latest_checkpoint on a run with no complete generation: a bad
+        # request (dashboard 400), not a server fault.
+        raise ValueError(str(exc)) from None
 
 
 def stop(root) -> dict:

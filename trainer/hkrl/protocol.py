@@ -51,6 +51,11 @@ class Connection:
         self.timeout = timeout
         self.keepalive = keepalive
         self.hello = None
+        # Unsolicited {"type":"event"} messages (the mod's F9 play request)
+        # are dropped by default, like pongs: only the play daemon opts in,
+        # so a stray F9 during a training run can never desync the
+        # trainer's lockstep.
+        self.accept_events = False
         self._sock = None
         self._file = None
         self._lock = threading.Lock()
@@ -96,8 +101,12 @@ class Connection:
             if not line:
                 raise ConnectionClosed("mod closed the connection")
             msg = json.loads(line)
-            if msg.get("type") != "pong":
-                return msg
+            t = msg.get("type")
+            if t == "pong":
+                continue
+            if t == "event" and not self.accept_events:
+                continue
+            return msg
 
     def _ping_loop(self, stop: threading.Event):
         # Woken at half the keepalive interval (capped at 0.5s) so the

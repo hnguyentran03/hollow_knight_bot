@@ -15,6 +15,7 @@ namespace HKRLBot
         private TcpClient client;
         private StreamReader reader;
         private StreamWriter writer;
+        private NetworkStream netStream;
         private readonly object gate = new object();
 
         public bool Connected { get { lock (gate) return client != null && client.Connected; } }
@@ -47,6 +48,7 @@ namespace HKRLBot
                     DropLocked();
                     client = c;
                     var stream = c.GetStream();
+                    netStream = stream;
                     // This is a hard ceiling on trainer think-time, not just a
                     // dead-peer detector. ReadMessage's reader.ReadLine() (called
                     // synchronously from EpisodeManager.LateUpdate on the Unity
@@ -218,6 +220,51 @@ namespace HKRLBot
             catch (ObjectDisposedException) { DropIfCurrent(r); return null; }
         }
 
+        // Non-blocking sibling of ReadMessage for the idle path: returns
+        // null immediately when nothing is waiting, so an idle-but-
+        // connected client no longer parks the Unity main thread in a
+        // blocking ReadLine (see EpisodeManager's idle branch). Caveat:
+        // if two client lines coalesce into one TCP segment, the second
+        // can sit in the StreamReader's internal buffer with
+        // DataAvailable false until more bytes arrive -- self-healing
+        // within ~3s because the client's keepalive pinger keeps traffic
+        // flowing; worst case is a rare 3s-delayed reset, which the reset
+        // ratchet already tolerates. Same capture-then-DropIfCurrent
+        // discipline as ReadMessage so a reconnect race can never null
+        // the new client's fields.
+        public JObject TryReadMessage()
+        {
+            StreamReader r; NetworkStream s;
+            lock (gate) { r = reader; s = netStream; }
+            if (r == null || s == null) return null;
+            try
+            {
+                if (!s.DataAvailable) return null;
+                string line = r.ReadLine();
+                if (line == null) { DropIfCurrent(r); return null; }
+                return JObject.Parse(line);
+            }
+            catch (IOException) { DropIfCurrent(r); return null; }
+            catch (ObjectDisposedException) { DropIfCurrent(r); return null; }
+        }
+
+        // Unsolicited event to the client (the F9 play request, carrying
+        // the selected bot's export name). Same gated, WriteTimeout-
+        // bounded, IOException-drops-cleanly path as SendState/SendPong.
+        public void SendEvent(string name, string bot)
+        {
+            var msg = new JObject
+            {
+                ["type"] = "event", ["name"] = name, ["bot"] = bot
+            };
+            var text = msg.ToString(Formatting.None);
+            lock (gate)
+            {
+                try { writer?.WriteLine(text); }
+                catch (IOException) { DropLocked(); }
+            }
+        }
+
         private void DropIfCurrent(StreamReader r)
         {
             lock (gate) { if (ReferenceEquals(reader, r)) DropLocked(); }
@@ -227,7 +274,7 @@ namespace HKRLBot
 
         private void DropLocked()
         {
-            reader = null; writer = null;
+            reader = null; writer = null; netStream = null;
             client?.Close(); client = null;
         }
     }

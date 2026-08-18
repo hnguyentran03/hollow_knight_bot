@@ -4,6 +4,7 @@ import time
 import numpy as np
 import pytest
 
+from hkrl.bosses import BOSSES
 from hkrl.env import ACTIONS, DEFAULT_REWARD, HKEnv, StuckBoot, WrongSaveBoot
 from hkrl.fake_game import FakeGame, obs, state
 from hkrl.protocol import ConnectionClosed
@@ -408,3 +409,39 @@ def test_four_aborts_then_success_never_trip_stuck_boot():
 
 def test_stuck_boot_is_recoverable_for_the_supervisor():
     assert issubclass(StuckBoot, ConnectionClosed)
+
+
+def test_set_boss_swaps_the_obs_pipeline():
+    with FakeGame([]) as fg:
+        env = HKEnv(port=fg.port)
+        n_hornet = env.observation_space.shape[0]
+        env.set_boss("gorb")
+        try:
+            assert env.boss.id == "gorb"
+            expected = (n_hornet - len(BOSSES["hornet1"].fsm_states)
+                        + len(BOSSES["gorb"].fsm_states))
+            assert env.observation_space.shape[0] == expected
+        finally:
+            env.close()
+
+
+def test_set_boss_unknown_id_raises_and_leaves_env_intact():
+    with FakeGame([]) as fg:
+        env = HKEnv(port=fg.port)
+        try:
+            with pytest.raises(ValueError, match="unknown boss"):
+                env.set_boss("nope")
+            assert env.boss.id == "hornet1"
+        finally:
+            env.close()
+
+
+def test_reset_after_set_boss_names_the_new_boss():
+    with FakeGame([[state(obs())]], bosses=("hornet1", "gorb")) as fg:
+        env = HKEnv(port=fg.port)
+        try:
+            env.set_boss("gorb")
+            env.reset()
+            assert fg.reset_bosses == ["gorb"]
+        finally:
+            env.close()
