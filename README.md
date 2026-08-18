@@ -4,7 +4,7 @@ A reinforcement-learning bot that learns to fight **Hall of Gods bosses (Attuned
 
 The project has two halves:
 
-- **`mod/`** — a C# game mod (HKRLBot) that runs inside Hollow Knight. It exposes a TCP bridge that accepts button actions, holds them for one 67&nbsp;ms tick, samples the game state (Knight + boss positions, velocities, HP, SOUL, the boss's FSM state), and sends it back. It also drives all episode resets itself: from a fresh boot it can walk through the title menu, stand up from the Hall of Gods bench, get to the chosen boss's statue, and start the fight — no human input needed. An in-game HUD styled after the game's own UI (F1) shows what the mod sees: HP/SOUL bars, boss name and HP, FSM state, projectile tracking.
+- **`mod/`** — a C# game mod (HKRLBot) that runs inside Hollow Knight. It exposes a TCP bridge that accepts button actions, holds them for one 67&nbsp;ms tick, samples the game state (Knight + boss positions, velocities, HP, SOUL, the boss's FSM state), and sends it back. It also drives all episode resets itself: from a fresh boot it can walk through the title menu, stand up from the Hall of Gods bench, get to the chosen boss's statue, and start the fight — no human input needed. An in-game HUD styled after the game's own UI (F1) shows what the mod sees: HP/SOUL bars, boss name and HP, FSM state, projectile tracking. A Mods-menu selector plus the F9 keybind let a trained, exported bot take over your own game for exactly one Hall of Gods fight.
 - **`trainer/`** — a Python package (`hkrl`) exposing the mod as a Gymnasium environment, plus scripts for training (RecurrentPPO from sb3-contrib), replaying checkpoints, and smoke-testing with a random agent.
 
 ## How it works
@@ -39,6 +39,7 @@ trainer/
     game.py                 launches/kills the game process
     supervisor.py           VecEnv wrapper that recovers from crashes/wedges
     generations.py          checkpointing + manifest + resume
+    exports.py              copy a generation to ~/hkrl/exports for in-game playback
     rundata.py              read-only parsing/aggregation of run directories
     dashboard.py            HTTP server for the web dashboard (+ dashboard.html)
     fake_game.py            scripted in-process game for tests
@@ -47,6 +48,8 @@ trainer/
     dashboard.py            serve the web dashboard (default port 9700)
     random_agent.py         random-policy smoke test (game must already be running)
     replay.py               watch a saved generation play
+    export_gen.py           export a generation (CLI; the dashboard can too)
+    play.py                 playback daemon: in-game F9 plays the selected exported bot
     launch_instances.py     manually launch a game instance (for random_agent/replay)
   tests/                  pytest suite (real sockets against fake_game, no mocks)
 ```
@@ -245,6 +248,35 @@ After training stops (never against a port a live trainer is using), launch a ga
 ```
 
 Comparing an early generation against the latest is the quickest way to *see* what it has learned.
+
+### Play a bot in-game with F9
+
+Replay drives a whole scripted session; the export path instead drops a trained
+bot into *your* game, one fight at a time. First export a generation — the
+Export button on any generation row in the dashboard's run cards, or:
+
+```bash
+./.venv/bin/python scripts/export_gen.py --run-dir ~/hkrl/runs/my-run          # latest gen
+./.venv/bin/python scripts/export_gen.py --run-dir ~/hkrl/runs/my-run --gen 204
+```
+
+Exports land in `~/hkrl/exports/<name>/` (default name `<run-id>_gen<NNNN>`)
+and survive run-dir cleanup. Then start the playback daemon and the game, in
+either order (never beside a live training run — they'd fight over the port):
+
+```bash
+./.venv/bin/python scripts/play.py
+```
+
+In the game, pick a bot under **Options → Mods → HKRLBotMod** (left/right
+arrows cycle the choices; the selection persists across restarts), stand in
+the Hall of Gods, and press **F9**. The daemon loads that export — the first
+press after a switch pays a few silent seconds of model load — walks the
+Knight to the right statue (even a different boss's), fights exactly one
+episode, and hands control back to you when it ends. F9 again replays
+instantly from cache. The F1 HUD's BOT chip shows the daemon state
+(OFF/READY/PLAYING) and the selected bot; ignored presses (no daemon, no
+selection, fight already running) each log their reason to ModLog.
 
 ## Things that bite
 
