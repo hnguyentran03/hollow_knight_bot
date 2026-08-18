@@ -276,7 +276,7 @@
   #resume-dialog .choice { display: flex; align-items: center; gap: 8px; padding: 3px 0; margin: 0; font-family: var(--body); font-size: 14px; letter-spacing: normal; text-transform: none; color: var(--ink); }
   #resume-dialog .choice[hidden] { display: none; }  /* display:flex above outranks the UA's [hidden] rule -- same trap as .launch form */
   #resume-dialog .choice input { width: auto; margin: 0; }
-  #resume-dialog #resume-extra, #resume-dialog #resume-target-kl {
+  #resume-dialog #resume-extra {
     width: 160px; font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
     margin: 6px 0 4px 24px;
@@ -374,12 +374,6 @@
       </label>
       <input type="number" id="resume-extra" min="1" value="500000"
              aria-label="Additional steps to collect">
-      <label class="choice" for="resume-target-kl" style="margin-top:10px">
-        <span>Target KL</span>
-      </label>
-      <input type="number" id="resume-target-kl" min="0" step="0.005"
-             placeholder="keep recorded"
-             aria-label="Target KL override (blank keeps the recorded value)">
       <div class="dialog-actions">
         <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
         <button type="submit" class="btn" value="resume">Resume</button>
@@ -1212,7 +1206,6 @@ function openResumeDialog(r) {
   title.textContent = (noCheckpoint ? "Restart " : "Resume ") + r.id;
   confirmBtn.textContent = noCheckpoint ? "Restart" : "Resume";
   extra.value = "500000";  // fresh per open
-  document.getElementById("resume-target-kl").value = "";
 
   if (noCheckpoint) {
     // No checkpoint (nothing to resume FROM): this restarts the run from
@@ -1327,10 +1320,6 @@ resumeDialog.addEventListener("close", async () => {
     // additive when typed.
     body = { mode: "resume", run_id: r.id, timesteps: extra };
   }
-  // The one PPO knob train.py accepts on resume: sent only when typed,
-  // so a blank field keeps the run's recorded value via inheritance.
-  const kl = document.getElementById("resume-target-kl").value;
-  if (kl !== "") body.target_kl = kl;
   launchError("");
   startBtn.disabled = true;
   try {
