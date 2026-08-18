@@ -131,6 +131,27 @@ def test_build_model_target_kl_fresh_and_resume_override(tmp_path):
             env.close()
 
 
+def test_build_model_target_kl_zero_means_off(tmp_path):
+    # 0 flows through configs and argv as a real value but SB3 spells
+    # "no cap" as None; build_model owns that translation on both paths.
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path)
+        try:
+            model = train.build_model(env, tmp_path, n_steps=8, batch_size=8,
+                                      target_kl=0.0)
+            assert model.target_kl is None
+            capped = train.build_model(env, tmp_path, n_steps=8, batch_size=8,
+                                       target_kl=0.05)
+            saved = tmp_path / "model.zip"
+            capped.save(saved)
+            uncapped = train.build_model(env, tmp_path, resume_model=saved,
+                                         target_kl=0.0)
+            assert uncapped.target_kl is None
+        finally:
+            env.close()
+
+
 def test_two_instance_training_collects_from_both_games(tmp_path):
     """--instances N end to end at N=2 (minus the real processes): two
     bridges feed one vectorized PPO through build_env, and the rollout
@@ -763,6 +784,58 @@ def test_prepare_session_fresh_run_writes_the_target(tmp_path):
     rec = json.loads((run_dir / "config.jsonl").read_text())
     assert rec["target_timestep"] == 1000
     assert rec["gamma"] == train.GAMMA and rec["instances"] == 1
+
+
+def test_prepare_session_fresh_run_defaults_target_kl(tmp_path):
+    # Fresh runs get the update cap by default, and the RESOLVED value is
+    # what config.jsonl records, so future resumes inherit 0.03 through
+    # the ordinary mechanism with no special casing.
+    args, run_dir, _, _, _ = train.prepare_session(
+        ["--root", str(tmp_path), "--run-id", "fresh-kl",
+         "--timesteps", "1000"])
+    assert args.target_kl == train.DEFAULT_TARGET_KL == 0.03
+    rec = json.loads((run_dir / "config.jsonl").read_text())
+    assert rec["target_kl"] == 0.03
+
+
+def test_prepare_session_fresh_run_typed_target_kl_wins(tmp_path):
+    args, run_dir, _, _, _ = train.prepare_session(
+        ["--root", str(tmp_path), "--run-id", "fresh-kl2",
+         "--timesteps", "1000", "--target-kl", "0.05"])
+    assert args.target_kl == 0.05
+    rec = json.loads((run_dir / "config.jsonl").read_text())
+    assert rec["target_kl"] == 0.05
+
+
+def test_prepare_session_target_kl_zero_disables_and_is_recorded(tmp_path):
+    # 0 is the explicit off-switch: recorded as 0 (not null), so a later
+    # resume inherits "off" rather than falling back to the default.
+    args, run_dir, _, _, _ = train.prepare_session(
+        ["--root", str(tmp_path), "--run-id", "fresh-kl0",
+         "--timesteps", "1000", "--target-kl", "0"])
+    assert args.target_kl == 0.0
+    rec = json.loads((run_dir / "config.jsonl").read_text())
+    assert rec["target_kl"] == 0.0
+
+
+def test_prepare_session_resume_of_null_record_stays_uncapped(tmp_path):
+    # Pre-default runs recorded target_kl null; resume is a continuation
+    # (PR #23), so they stay uncapped unless a value is typed.
+    run_dir = _seed_resumable_run(tmp_path, {
+        "boss": "hornet1", "target_kl": None,
+        "timesteps": 100_000, "target_timestep": 100_000})
+    args, _, _, _, _ = train.prepare_session(["--resume", str(run_dir)])
+    assert args.target_kl is None
+
+
+def test_prepare_session_resume_of_zero_record_stays_off(tmp_path):
+    # A run that explicitly disabled the cap (recorded 0) inherits 0, not
+    # the fresh-run default; build_model then maps 0 to SB3's None.
+    run_dir = _seed_resumable_run(tmp_path, {
+        "boss": "hornet1", "target_kl": 0.0,
+        "timesteps": 100_000, "target_timestep": 100_000})
+    args, _, _, _, _ = train.prepare_session(["--resume", str(run_dir)])
+    assert args.target_kl == 0.0
 
 
 def test_prepare_session_allows_typed_target_kl_on_resume(tmp_path):

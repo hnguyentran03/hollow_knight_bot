@@ -39,6 +39,12 @@ from hkrl.cloneprep import prepare_clone_save  # noqa: E402
 
 GAMMA = 0.995
 
+# Fresh-run default for --target-kl. Both overnight 2-instance runs and
+# hornet-1 destabilized late at approx_kl ~0.15-0.25; healthy early updates
+# sat near 0.02. 0.03 (SB3 trips at 1.5x = 0.045) barely touches early
+# learning while capping the tail. 0 disables the cap.
+DEFAULT_TARGET_KL = 0.03
+
 # Fraction of collected rows that are async-reset placeholders in a
 # two-instance isolated run (measured on overnight-0723; see the
 # RealEpisodeVecNormalize docstring in hkrl/vec.py). The gradient mask
@@ -257,12 +263,14 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--target-kl", type=float, default=None,
                     help="early-stop an update's remaining epochs once "
                          "approx_kl exceeds ~1.5x this (SB3 semantics). "
-                         "Unset: no cap, and a resumed checkpoint keeps "
-                         "whatever it trained with. When set it also "
-                         "overrides the checkpoint on resume, unlike the "
-                         "other hyperparameters. Try 0.05 against the "
-                         "late-run win-rate slide (observed approx_kl "
-                         "~0.15-0.25 without a cap).")
+                         f"Fresh runs default to {DEFAULT_TARGET_KL} "
+                         "(observed approx_kl ~0.15-0.25 without a cap "
+                         "drives the late-run win-rate slide); 0 disables "
+                         "the cap. Resumes inherit the run's recorded "
+                         "value; typing the flag overrides the checkpoint, "
+                         "unlike the other hyperparameters. The argparse "
+                         "default stays None so inheritance can tell typed "
+                         "from unset.")
     ap.add_argument("--boss", default=None, choices=sorted(BOSSES),
                     help=f"which boss to train against (default: {DEFAULT_BOSS}). "
                          "Sets the observation space, so checkpoints are "
@@ -370,13 +378,15 @@ def build_model(env, run_dir, resume_model=None, seed=None,
     On resume every hyperparameter comes from the checkpoint zip; the
     keyword arguments here shape fresh models only -- except target_kl,
     which when set overrides the checkpoint too, because the flag exists
-    to change update dynamics on a run already in progress.
+    to change update dynamics on a run already in progress; a value of 0
+    turns the cap off.
     """
     if resume_model is not None:
         model = MaskedRecurrentPPO.load(str(resume_model), env=env,
                                         device="cpu")
         if target_kl is not None:
-            model.target_kl = target_kl
+            # 0 spells "cap off" in configs and argv; SB3 spells it None.
+            model.target_kl = target_kl or None
         return model
     return MaskedRecurrentPPO(
         "MlpLstmPolicy",
@@ -416,14 +426,10 @@ def build_model(env, run_dir, resume_model=None, seed=None,
         # RecurrentPPO's default -- it is the memory, not the per-step
         # capacity, this net_arch controls.
         policy_kwargs=dict(net_arch=dict(pi=[256, 256], vf=[256, 256])),
-        # Off (None) unless --target-kl is passed: aborts an update's
-        # remaining epochs once approx_kl exceeds ~1.5x this. Both overnight
-        # 2-instance runs trained at approx_kl ~0.10-0.25 with clip_fraction
-        # ~0.45 -- every update far outside the clip trust region -- which
-        # reads as fast early learning, then a win-rate peak that slides and
-        # oscillates instead of settling. A cap keeps late-run updates from
-        # rewriting a policy that is already winning.
-        target_kl=target_kl,
+        # Cap on update size (see DEFAULT_TARGET_KL): aborts an update's
+        # remaining epochs once approx_kl exceeds ~1.5x this. 0 from the
+        # flag/config means no cap, which SB3 spells as None.
+        target_kl=target_kl or None,
         seed=seed,
         verbose=1,
         # The policy is a small LSTM + MLP; CPU avoids the per-batch device
@@ -559,6 +565,13 @@ def prepare_session(argv=None) -> tuple[argparse.Namespace, Path, tuple | None, 
     async_resets = resolve_async_resets(args.async_resets, args.instances)
     if args.n_steps is None:
         args.n_steps = default_n_steps(args.instances, async_resets)
+
+    # Fresh runs get the update cap by default; the resolved value lands in
+    # the config dump below so resumes inherit it. Resume path untouched:
+    # a pre-default run recorded null and stays uncapped (resume is a
+    # continuation), until --target-kl is typed once.
+    if resume is None and args.target_kl is None:
+        args.target_kl = DEFAULT_TARGET_KL
 
     try:
         args.boss = resolve_boss(args.boss,
