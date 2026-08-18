@@ -2,7 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using Newtonsoft.Json.Linq;
 
 namespace HKRLBot
 {
@@ -12,12 +11,6 @@ namespace HKRLBot
     // snapshot taken whenever the Mods menu is built.
     public static class ExportsCatalog
     {
-        public struct Entry
-        {
-            public string Name;   // directory name == export name
-            public string Label;  // "name · Boss Display" for the menu
-        }
-
         // Matches the trainer's --root default (~/hkrl); HKRL_ROOT
         // overrides it, mirroring how HKRL_PORT already reaches the mod.
         public static string Root()
@@ -29,9 +22,13 @@ namespace HKRLBot
                 "hkrl");
         }
 
-        public static List<Entry> List()
+        // Export names, sorted. Bare names only: the Mods menu renders a
+        // horizontal option's value right-aligned across the same rect as
+        // its label, so anything longer (e.g. a "name · Boss" suffix)
+        // collides with the label text.
+        public static List<string> List()
         {
-            var entries = new List<Entry>();
+            var entries = new List<string>();
             string dir;
             try { dir = Path.Combine(Root(), "exports"); }
             catch (Exception) { return entries; }
@@ -43,21 +40,7 @@ namespace HKRLBot
                     // Only directories that actually hold a model qualify --
                     // a half-deleted export must not be selectable.
                     if (!File.Exists(Path.Combine(d, "model.zip"))) continue;
-                    var name = Path.GetFileName(d);
-                    var label = name;
-                    try
-                    {
-                        var manifest = JObject.Parse(
-                            File.ReadAllText(Path.Combine(d, "manifest.json")));
-                        var display = (string)manifest["boss_display"];
-                        if (!string.IsNullOrEmpty(display))
-                            label = name + " · " + display;
-                    }
-                    catch (Exception)
-                    {
-                        // Unreadable manifest: degrade to the bare name.
-                    }
-                    entries.Add(new Entry { Name = name, Label = label });
+                    entries.Add(Path.GetFileName(d));
                 }
             }
             catch (Exception)
@@ -66,7 +49,7 @@ namespace HKRLBot
                 // filesystem): degrade to whatever entries were already
                 // collected rather than breaking the Mods menu build.
             }
-            entries.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
+            entries.Sort(string.CompareOrdinal);
             return entries;
         }
     }

@@ -29,21 +29,21 @@ namespace HKRLBot
             var exports = ExportsCatalog.List();
             var values = new string[exports.Count == 0 ? 1 : exports.Count];
             if (exports.Count == 0) values[0] = "(no exports)";
-            for (int i = 0; i < exports.Count; i++) values[i] = exports[i].Label;
+            for (int i = 0; i < exports.Count; i++) values[i] = exports[i];
             return new List<IMenuMod.MenuEntry>
             {
                 new IMenuMod.MenuEntry(
                     "Bot",
                     values,
                     "Exported bot F9 plays (from " + ExportsCatalog.Root() + "/exports)",
-                    i => { if (exports.Count > 0) GS.SelectedBot = exports[i].Name; },
+                    i => { if (exports.Count > 0) GS.SelectedBot = exports[i]; },
                     () =>
                     {
                         // Saved-name -> index; a vanished name displays
                         // entry 0 WITHOUT overwriting the setting (only a
                         // deliberate save does).
                         for (int i = 0; i < exports.Count; i++)
-                            if (exports[i].Name == GS.SelectedBot) return i;
+                            if (exports[i] == GS.SelectedBot) return i;
                         return 0;
                     })
             };
