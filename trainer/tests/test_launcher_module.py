@@ -134,6 +134,47 @@ def test_command_resume_forwards_runtime_flags_only(tmp_path, stub_trainer):
     assert "--timesteps" in cmd and "--instances" in cmd
 
 
+def test_command_forwards_target_kl_in_both_modes(tmp_path, stub_trainer):
+    # train.py deliberately accepts --target-kl on resume (the flag exists
+    # to change update dynamics mid-run), so unlike the model-shaping ints
+    # it forwards in resume mode too.
+    cmd = launcher.command(
+        tmp_path, {"run_id": "r1", "target_kl": "0.03"}, platform="linux")
+    assert ["--target-kl", "0.03"] == cmd[cmd.index("--target-kl"):][:2]
+    cmd = launcher.command(
+        tmp_path, {"mode": "resume", "run_id": "old", "target_kl": 0.03},
+        platform="linux")
+    assert ["--target-kl", "0.03"] == cmd[cmd.index("--target-kl"):][:2]
+
+
+def test_command_omits_unset_target_kl(tmp_path, stub_trainer):
+    # Blank stays unset: on resume train.py then inherits the recorded
+    # value, and forwarding a default here would defeat that.
+    for params in ({"run_id": "r1", "target_kl": ""},
+                   {"mode": "resume", "run_id": "old"}):
+        assert "--target-kl" not in launcher.command(
+            tmp_path, params, platform="linux")
+
+
+def test_validate_rejects_bad_target_kl(tmp_path, stub_trainer):
+    for bad in ("abc", -0.5, [1]):
+        with pytest.raises(ValueError):
+            launcher.command(tmp_path, {"run_id": "r1", "target_kl": bad},
+                             platform="linux")
+
+
+def test_restart_params_carries_target_kl(tmp_path):
+    # An aborted fresh run restarted from the panel keeps the cap its
+    # config recorded, like the model-shaping params it sits beside.
+    run_dir = tmp_path / "runs" / "aborted"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.jsonl").write_text(json.dumps(
+        {"timesteps": 1000, "target_kl": 0.03}) + "\n")
+    params = launcher._restart_params(run_dir, {"mode": "resume",
+                                                "run_id": "aborted"})
+    assert params["target_kl"] == 0.03
+
+
 def test_command_rejects_bad_input(tmp_path, stub_trainer):
     for params in [
         {"run_id": "../evil"},

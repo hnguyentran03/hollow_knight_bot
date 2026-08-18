@@ -89,7 +89,7 @@ def _restart_params(run_dir: Path, request: dict) -> dict:
     configs = read_jsonl(run_dir / "config.jsonl")
     cfg = configs[-1] if configs else {}
     params = {"mode": "new", "run_id": run_dir.name}
-    for key in _INT_PARAMS + _STR_NEW_ONLY:
+    for key in _INT_PARAMS + _STR_NEW_ONLY + _FLOAT_ALWAYS:
         value = request.get(key, cfg.get(key))
         if value is not None:
             params[key] = value
@@ -157,6 +157,12 @@ _INT_PARAMS = _ALWAYS + _NEW_ONLY
 # config (and refuses a conflicting flag), so forwarding it is noise.
 _STR_NEW_ONLY = ("boss",)
 
+# Float-valued and forwardable in BOTH modes: train.py accepts --target-kl
+# on resume by design (the flag exists to change a resumed run's update
+# dynamics), unlike the checkpoint-baked ints above. Same unset-stays-unset
+# rule as _ALWAYS.
+_FLOAT_ALWAYS = ("target_kl",)
+
 
 def _validate(params: dict) -> dict:
     mode = params.get("mode", "new")
@@ -184,6 +190,16 @@ def _validate(params: dict) -> dict:
             clean[key] = int(value)
         except (TypeError, ValueError):
             raise ValueError(f"{key} must be an integer") from None
+    for key in _FLOAT_ALWAYS:
+        value = params.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            clean[key] = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be a number") from None
+        if clean[key] < 0:
+            raise ValueError(f"{key} must be >= 0")
     boss = params.get("boss")
     if boss not in (None, ""):
         if boss not in BOSSES:
@@ -221,7 +237,8 @@ def command(root, params: dict, platform: str = sys.platform) -> list[str]:
         cmd += ["--resume", str(root / "runs" / p["run_id"])]
     else:
         cmd += ["--run-id", p["run_id"]]
-    keys = _ALWAYS if p["mode"] == "resume" else _INT_PARAMS + _STR_NEW_ONLY
+    keys = (_ALWAYS + _FLOAT_ALWAYS if p["mode"] == "resume"
+            else _INT_PARAMS + _STR_NEW_ONLY + _FLOAT_ALWAYS)
     for key in keys:
         if key in p:
             cmd += ["--" + key.replace("_", "-"), str(p[key])]
