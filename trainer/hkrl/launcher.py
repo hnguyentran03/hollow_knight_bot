@@ -12,6 +12,7 @@ time -- the game instances own the bridge ports, so parallel runs could
 not coexist anyway.
 """
 import json
+import math
 import os
 import shutil
 import signal
@@ -81,11 +82,13 @@ def _trash(root, run_dir: Path) -> str:
 
 def _restart_params(run_dir: Path, request: dict) -> dict:
     """Fresh-start params for an aborted (checkpoint-less) run. Model-shaping
-    params (n_steps, batch_size, n_epochs, seed) come from the config the
-    aborted attempt recorded -- a resume request drops them -- while the
-    request's own values win where present, so the page can hand the restart a
-    new step budget (timesteps) instead of the original. Returns a 'new'-mode
-    dict reusing the run_id; command()'s _validate() coerces/range-checks it."""
+    params (n_steps, batch_size, n_epochs, seed) and target_kl come from the
+    config the aborted attempt recorded -- a resume request drops the ints -- while
+    the request's own values win where present. Returns a 'new'-mode dict reusing
+    the run_id; command()'s _validate() coerces/range-checks it.
+
+    Edge: a config with target_kl null restarts in 'new' mode and picks up
+    train.py's fresh-run 0.03 default; a recorded 0.0 carries and keeps the cap off."""
     configs = read_jsonl(run_dir / "config.jsonl")
     cfg = configs[-1] if configs else {}
     params = {"mode": "new", "run_id": run_dir.name}
@@ -198,6 +201,8 @@ def _validate(params: dict) -> dict:
             clean[key] = float(value)
         except (TypeError, ValueError):
             raise ValueError(f"{key} must be a number") from None
+        if not math.isfinite(clean[key]):
+            raise ValueError(f"{key} must be a finite number")
         if clean[key] < 0:
             raise ValueError(f"{key} must be >= 0")
     boss = params.get("boss")

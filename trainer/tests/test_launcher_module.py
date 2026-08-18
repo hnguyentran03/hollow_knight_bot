@@ -163,6 +163,14 @@ def test_validate_rejects_bad_target_kl(tmp_path, stub_trainer):
                              platform="linux")
 
 
+def test_validate_rejects_non_finite_target_kl(tmp_path, stub_trainer):
+    # NaN and inf don't pass the HTTP API's JSON.parse; reject upfront.
+    for bad in ("nan", "inf"):
+        with pytest.raises(ValueError):
+            launcher.command(tmp_path, {"run_id": "r1", "target_kl": bad},
+                             platform="linux")
+
+
 def test_restart_params_carries_target_kl(tmp_path):
     # An aborted fresh run restarted from the panel keeps the cap its
     # config recorded, like the model-shaping params it sits beside.
@@ -173,6 +181,12 @@ def test_restart_params_carries_target_kl(tmp_path):
     params = launcher._restart_params(run_dir, {"mode": "resume",
                                                 "run_id": "aborted"})
     assert params["target_kl"] == 0.03
+    # An explicit 0.0 (cap-off) also carries through on restart.
+    (tmp_path / "runs" / "no_cap").mkdir(parents=True)
+    (tmp_path / "runs" / "no_cap" / "config.jsonl").write_text(
+        json.dumps({"timesteps": 1000, "target_kl": 0.0}) + "\n")
+    params = launcher._restart_params(tmp_path / "runs" / "no_cap", {})
+    assert params["target_kl"] == 0.0
 
 
 def test_command_rejects_bad_input(tmp_path, stub_trainer):
