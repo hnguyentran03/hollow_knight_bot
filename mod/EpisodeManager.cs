@@ -648,8 +648,8 @@ namespace HKRLBot
     // VirtualDevice.Update(), which InControl also calls from the main
     // thread. An off-thread Apply() racing that read would produce a torn
     // frame (some old buttons, some new). Every call site in the mod --
-    // EpisodeManager.LateUpdate's action-handling branch, TickReset ->
-    // ResetMacro.Tick below, and OverlayUI's F2 debug wiggle -- is a
+    // EpisodeManager.LateUpdate's action-handling branch and TickReset ->
+    // ResetMacro.Tick below -- is a
     // MonoBehaviour Update/LateUpdate body, i.e. main-thread by construction;
     // there is no background thread anywhere that touches VirtualInput, and
     // BridgeServer's AcceptLoop thread never does either.

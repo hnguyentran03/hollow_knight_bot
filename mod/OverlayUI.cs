@@ -7,9 +7,6 @@ namespace HKRLBot
     {
         private bool show = true;
 
-        private bool wiggle;
-        private int frame;
-
         // Highest boss HP observed this fight. The reader only exposes the boss's
         // CURRENT hp (HealthManager.hp via reflection) -- there is no max-HP field
         // anywhere in StateReader/BossState -- so we can't fill the boss bar against
@@ -105,7 +102,7 @@ namespace HKRLBot
         // this single factor scales the fonts and the whole layout together --
         // bump it to make the entire overlay bigger or smaller without touching
         // any of the pixel constants above.
-        private const float Scale    = 1.65f;
+        private const float Scale    = 2f;
 
         private void Awake()
         {
@@ -212,18 +209,6 @@ namespace HKRLBot
             if (Input.GetKeyDown(KeyCode.F3)) FSMLogger.LogAll();
             if (Input.GetKeyDown(KeyCode.F4)) DiscoveryLogger.Toggle();
             if (Input.GetKeyDown(KeyCode.F9)) TryRequestPlay();
-
-            if (Input.GetKeyDown(KeyCode.F2)) { wiggle = !wiggle; if (!wiggle) HKRLBotMod.Instance.Input.Clear(); }
-            if (wiggle)
-            {
-                frame++;
-                var b = new ActionButtons();
-                b.Left = (frame / 30) % 2 == 0;
-                b.Right = !b.Left;
-                b.Jump = (frame % 60) < 10;
-                b.Attack = (frame % 45) < 3;
-                HKRLBotMod.Instance.Input.Apply(b);
-            }
         }
 
         // F9: ask the play daemon to run one episode of the selected bot.
@@ -309,7 +294,7 @@ namespace HKRLBot
             float bossH   = !b.Present ? RowH : (BarRowH + RowH * 3 + (BossRegistry.Current.ProjectileName != null ? RowH : 0));
             float total   = Pad + HeaderH + knightH
                           + Gap + HeaderH + bossH
-                          + Gap + HeaderH + RowH * 3
+                          + Gap + HeaderH + RowH * 2
                           + Pad;
 
             // Right-anchored: recomputed every OnGUI so the panel stays glued to
@@ -423,21 +408,12 @@ namespace HKRLBot
             // ---------------- CONTROLS ----------------
             cy = SectionHeader(left, cy, cw, "CONTROLS");
             GUI.Label(new Rect(left, cy, cw, RowH),
-                      "F1 show · F2 wiggle · F3 fsm · F4 discover · F9 play", dim);
+                      "F1 show · F3 fsm · F4 discover · F9 play", dim);
             cy += RowH;
 
-            // Mode chips: which of the mod's toggles is driving/observing
-            // the game right now. All dim = plain human play. Discovery
-            // (F4) previously had no visual state at all -- ModLog was the
-            // only way to know whether a press turned it on or off.
-            float wy = cy + (RowH - ChipH) / 2f;
-            DrawChip(new Rect(left, wy, 82f, ChipH), "DISCOVER",
-                     DiscoveryLogger.Enabled, InvulnOn);
-            DrawChip(new Rect(left + 86f, wy, 66f, ChipH), "WIGGLE", wiggle, DashOn);
-            cy += RowH;
-
-            // BOT row: daemon status chip + the selected export's name, so
-            // a menu switch is confirmable at a glance. PLAYING is simply
+            // One status line: bot daemon chip + the selected export's name
+            // on the left, the DISCOVER chip (F4 logging) on the right. All
+            // chips dim = plain human play. PLAYING is simply
             // connected-and-busy -- during training it reads PLAYING too,
             // which is accurate.
             bool botConnected = HKRLBotMod.Instance.Server.Connected;
@@ -448,9 +424,11 @@ namespace HKRLBot
             DrawChip(new Rect(left, by, 66f, ChipH), botLabel, botConnected,
                      botBusy ? DashOn : GroundOn);
             string sel = HKRLBotMod.GS.SelectedBot;
-            GUI.Label(new Rect(left + 74f, cy, cw - 74f, RowH),
+            GUI.Label(new Rect(left + 74f, cy, cw - 74f - 88f, RowH),
                       string.IsNullOrEmpty(sel) ? "(no bot selected)" : sel,
                       string.IsNullOrEmpty(sel) ? dim : body);
+            DrawChip(new Rect(left + cw - 82f, by, 82f, ChipH), "DISCOVER",
+                     DiscoveryLogger.Enabled, InvulnOn);
         }
 
         // Draws a section header band and returns the y below it.
