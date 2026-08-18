@@ -68,6 +68,17 @@ def test_api_run_returns_the_full_series(base_url):
     run = json.loads(body)
     assert run["status"]["timestep"] == 15_000
     assert [g["gen"] for g in run["generations"]] == [1]
+    # No exports dir yet: every generation reads unexported.
+    assert [g["exported"] for g in run["generations"]] == [False]
+
+
+def test_api_run_flags_exported_generations(base_url, tmp_path):
+    exp = tmp_path / "exports" / "r1_gen0001"
+    exp.mkdir(parents=True)
+    (exp / "manifest.json").write_text(json.dumps({"run_id": "r1", "gen": 1}))
+    _, _, body = _get(base_url + "/api/run/r1")
+    run = json.loads(body)
+    assert [g["exported"] for g in run["generations"]] == [True]
 
 
 def test_unknown_run_and_unknown_path_are_404(base_url):

@@ -72,3 +72,25 @@ def export_generation(root, run_dir, gen=None, name=None,
     }
     (dest / EXPORT_MANIFEST).write_text(json.dumps(manifest, indent=2))
     return dest
+
+
+def exported_generations(root, run_id) -> set:
+    """Generation numbers of run_id that already have an export under
+    <root>/exports, read from the export manifests (the directory name is
+    user-chosen, so only the manifest knows the source run). Unreadable
+    entries are skipped: this feeds a display flag, never a guard."""
+    exports_dir = Path(root).expanduser() / EXPORTS_DIR
+    gens = set()
+    try:
+        dirs = list(exports_dir.iterdir())
+    except OSError:
+        return gens
+    for d in dirs:
+        try:
+            manifest = json.loads((d / EXPORT_MANIFEST).read_text())
+        except (OSError, ValueError):
+            continue
+        if manifest.get("run_id") == run_id \
+                and isinstance(manifest.get("gen"), int):
+            gens.add(manifest["gen"])
+    return gens

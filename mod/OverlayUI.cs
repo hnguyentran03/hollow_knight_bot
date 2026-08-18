@@ -309,7 +309,7 @@ namespace HKRLBot
             float bossH   = !b.Present ? RowH : (BarRowH + RowH * 3 + (BossRegistry.Current.ProjectileName != null ? RowH : 0));
             float total   = Pad + HeaderH + knightH
                           + Gap + HeaderH + bossH
-                          + Gap + HeaderH + RowH * 2
+                          + Gap + HeaderH + RowH * 3
                           + Pad;
 
             // Right-anchored: recomputed every OnGUI so the panel stays glued to
@@ -422,10 +422,18 @@ namespace HKRLBot
 
             // ---------------- CONTROLS ----------------
             cy = SectionHeader(left, cy, cw, "CONTROLS");
-            GUI.Label(new Rect(left, cy, cw - 70f, RowH),
+            GUI.Label(new Rect(left, cy, cw, RowH),
                       "F1 show · F2 wiggle · F3 fsm · F4 discover · F9 play", dim);
+            cy += RowH;
+
+            // Mode chips: which of the mod's toggles is driving/observing
+            // the game right now. All dim = plain human play. Discovery
+            // (F4) previously had no visual state at all -- ModLog was the
+            // only way to know whether a press turned it on or off.
             float wy = cy + (RowH - ChipH) / 2f;
-            DrawChip(new Rect(left + cw - 66f, wy, 66f, ChipH), wiggle ? "WIGGLE" : "IDLE", wiggle, DashOn);
+            DrawChip(new Rect(left, wy, 82f, ChipH), "DISCOVER",
+                     DiscoveryLogger.Enabled, InvulnOn);
+            DrawChip(new Rect(left + 86f, wy, 66f, ChipH), "WIGGLE", wiggle, DashOn);
             cy += RowH;
 
             // BOT row: daemon status chip + the selected export's name, so

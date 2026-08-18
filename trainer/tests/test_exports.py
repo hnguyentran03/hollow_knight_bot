@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from hkrl.exports import export_generation
+from hkrl.exports import export_generation, exported_generations
 
 
 def _run(tmp_path, boss="gruz_mother", gens=(1, 2)):
@@ -78,3 +78,22 @@ def test_run_without_any_checkpoint_raises(tmp_path):
     run.mkdir(parents=True)
     with pytest.raises(FileNotFoundError):
         export_generation(tmp_path, run)
+
+
+def test_exported_generations_reads_manifests_not_names(tmp_path):
+    run = _run(tmp_path)
+    export_generation(tmp_path, run, gen=1)
+    export_generation(tmp_path, run, gen=2, name="renamed")  # name != r1_gen0002
+    # Foreign and broken entries are skipped, never fatal.
+    other = tmp_path / "exports" / "other"
+    other.mkdir()
+    (other / "manifest.json").write_text(json.dumps({"run_id": "r2", "gen": 5}))
+    broken = tmp_path / "exports" / "broken"
+    broken.mkdir()
+    (broken / "manifest.json").write_text("not json")
+    assert exported_generations(tmp_path, "r1") == {1, 2}
+    assert exported_generations(tmp_path, "r2") == {5}
+
+
+def test_exported_generations_without_an_exports_dir_is_empty(tmp_path):
+    assert exported_generations(tmp_path, "r1") == set()

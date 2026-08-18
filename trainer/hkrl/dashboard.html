@@ -1041,20 +1041,29 @@ function renderGens(container, runId, gens, disabled) {
     const exp = document.createElement("button");
     exp.type = "button";
     exp.className = "btn";
-    exp.textContent = "Export";
-    // Unlike Replay, an export is a fast file copy with no game and no
-    // active-run slot, so it is never gated on `disabled`.
-    exp.addEventListener("click", async () => {
+    // The server flags generations that already have an export on disk, so
+    // the button reads "Exported" durably -- across the 2s re-renders,
+    // page reloads, and exports made from the CLI.
+    if (g.exported) {
+      exp.textContent = "Exported";
       exp.disabled = true;
-      try {
-        const res = await postJSON("/api/export", { run_id: runId, gen: g.gen });
-        exp.textContent = "Exported";
-        exp.title = res.exported;
-      } catch (err) {
-        exp.disabled = false;
-        launchError(err.message);
-      }
-    });
+    } else {
+      exp.textContent = "Export";
+      // Unlike Replay, an export is a fast file copy with no game and no
+      // active-run slot, so it is never gated on `disabled`.
+      exp.addEventListener("click", async () => {
+        exp.disabled = true;
+        try {
+          const res = await postJSON("/api/export", { run_id: runId, gen: g.gen });
+          exp.textContent = "Exported";
+          exp.title = res.exported;
+          g.exported = true;  // keep cache re-renders from resetting the button
+        } catch (err) {
+          exp.disabled = false;
+          launchError(err.message);
+        }
+      });
+    }
     row.append(label, exp, play);
     container.appendChild(row);
   }
@@ -1066,7 +1075,7 @@ async function fetchGens(runId, disabled) {
   catch (err) { return; }  // banner already reports a lost server
   // Newest-first, matching the run list's own ordering.
   const gens = (run.generations || []).slice().sort((a, b) => b.gen - a.gen);
-  const sig = gens.map(g => g.gen + ":" + g.timestep).join(",");
+  const sig = gens.map(g => g.gen + ":" + g.timestep + (g.exported ? "e" : "")).join(",");
   const unchanged = genSig[runId] === sig && genCache[runId] !== undefined;
   genCache[runId] = gens;
   genSig[runId] = sig;

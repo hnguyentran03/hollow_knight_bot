@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from hkrl import launcher
 from hkrl.bosses import BOSSES
+from hkrl.exports import exported_generations
 from hkrl.rundata import load_run, scan_runs
 
 PAGE = Path(__file__).with_name("dashboard.html")
@@ -151,7 +152,13 @@ class _Handler(BaseHTTPRequestHandler):
                 or (run_dir / "config.jsonl").exists()):
             self.send_error(404)
             return
-        self._json(load_run(run_dir))
+        detail = load_run(run_dir)
+        # Exported-ness lives on disk, so the page's Export buttons stay
+        # "Exported" across re-renders, reloads, and CLI exports alike.
+        exported = exported_generations(self.server.root, run_id)
+        for g in detail.get("generations", []):
+            g["exported"] = g.get("gen") in exported
+        self._json(detail)
 
     def _json(self, payload, status: int = 200):
         self._send(status, "application/json",
