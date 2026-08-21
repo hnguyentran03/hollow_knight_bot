@@ -76,6 +76,16 @@ namespace HKRLBot
             // several instances at once and only one can hold focus, so without this
             // every background instance freezes and its trainer socket times out.
             Application.runInBackground = true;
+            // Batchmode (-batchmode -nographics) has no window and no
+            // vsync, so Unity spins the frame loop flat out (~a full core
+            // measured 2026-08-20). 60 fps is exactly the FrameSkip-4
+            // granularity the 67 ms action hold assumes. Headed games are
+            // untouched: they render uncapped as always.
+            if (Application.isBatchMode)
+            {
+                Application.targetFrameRate = 60;
+                Log("batchmode: frame rate capped at 60");
+            }
             Server.Start();
             Log("HKRLBot initialized");
         }
