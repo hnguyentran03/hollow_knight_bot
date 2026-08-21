@@ -109,7 +109,7 @@ def resolve_boss(flag: str | None, run_dir: Path | None) -> str:
 # flag was typed: they are the settings still live on a resume (fleet
 # shape, checkpoint cadence, update cap), where falling back to a CLI
 # default silently reshapes the run -- the bug that dropped marmu-1 from
-# 2 instances to 1. Session-specific flags (auto, measure_resets, root,
+# 2 instances to 1. Session-specific flags (auto, headless, measure_resets, root,
 # app, run_id) and the checkpoint-baked model shape stay out.
 RESUME_INHERITED = ("instances", "gen_every", "target_kl", "async_resets",
                     "async_reset_mode", "port")
