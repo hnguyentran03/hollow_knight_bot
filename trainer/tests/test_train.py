@@ -586,6 +586,21 @@ def test_parse_session_args_sees_boolean_and_store_true_flags():
     assert "auto" in explicit
 
 
+def test_headless_is_a_session_flag():
+    args, explicit = train.parse_session_args(["--headless"])
+    assert args.headless is True
+    assert "headless" in explicit
+    # Session-scoped like --auto: never inherited from config.jsonl and
+    # not checkpoint-baked, so a resume is headed unless retyped.
+    assert "headless" not in train.RESUME_INHERITED
+    assert "headless" not in train.RESUME_BAKED
+
+
+def test_headless_defaults_off():
+    args, _ = train.parse_session_args([])
+    assert args.headless is False
+
+
 def test_apply_recorded_config_inherits_untyped_flags():
     args, explicit = train.parse_session_args([])
     train.apply_recorded_config(args, explicit, {
