@@ -278,3 +278,31 @@ def test_fleet_threads_one_prepare_per_slot():
 def test_fleet_rejects_mismatched_prepares():
     with pytest.raises(ValueError):
         GameFleet(_free_ports(2), app=Path("/fake"), prepares=[lambda: None])
+
+
+# --- headless launch argv -------------------------------------------------
+
+def _fake_popen_recorder(monkeypatch):
+    import launch_instances
+    calls = []
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            calls.append(list(argv))
+
+    monkeypatch.setattr(launch_instances.subprocess, "Popen", FakePopen)
+    return launch_instances, calls
+
+
+def test_launch_headless_appends_batchmode_args(monkeypatch):
+    launch_instances, calls = _fake_popen_recorder(monkeypatch)
+    launch_instances.launch(9020, Path("/tmp/game-binary"), visible=False,
+                            headless=True)
+    assert calls[0] == ["/tmp/game-binary", "-batchmode", "-nographics"]
+
+
+def test_launch_default_argv_is_bare_binary(monkeypatch):
+    # Regression pin: headed launches must not grow arguments.
+    launch_instances, calls = _fake_popen_recorder(monkeypatch)
+    launch_instances.launch(9020, Path("/tmp/game-binary"), visible=False)
+    assert calls[0] == ["/tmp/game-binary"]
