@@ -192,7 +192,7 @@ def test_restart_params_carries_target_kl(tmp_path):
 def test_command_rejects_bad_input(tmp_path, stub_trainer):
     for params in [
         {"run_id": "../evil"},
-        {"run_id": "r1", "instances": 4},
+        {"run_id": "r1", "instances": 5},
         {"run_id": "r1", "instances": 0},
         {"run_id": "r1", "timesteps": "lots"},
         {"run_id": "r1", "timesteps": -5},
@@ -640,3 +640,51 @@ def test_export_rejects_unsafe_names(tmp_path):
             launcher.export(tmp_path, "r1", name=name)
         # No files should be created
         assert not (tmp_path / "exports").exists()
+
+
+def test_command_forwards_headless_in_both_modes(tmp_path, stub_trainer):
+    cmd = launcher.command(tmp_path, {"run_id": "r1", "headless": True},
+                           platform="linux")
+    assert "--headless" in cmd
+    cmd = launcher.command(
+        tmp_path, {"mode": "resume", "run_id": "old", "headless": True},
+        platform="linux")
+    assert "--headless" in cmd
+
+
+def test_command_omits_unset_or_false_headless(tmp_path, stub_trainer):
+    for params in ({"run_id": "r1"},
+                   {"run_id": "r1", "headless": False}):
+        assert "--headless" not in launcher.command(tmp_path, dict(params),
+                                                    platform="linux")
+
+
+def test_validate_rejects_non_bool_headless(tmp_path, stub_trainer):
+    for bad in ("yes", 1, "true"):
+        with pytest.raises(ValueError):
+            launcher.command(tmp_path, {"run_id": "r1", "headless": bad},
+                             platform="linux")
+
+
+def test_validate_accepts_four_instances(tmp_path, stub_trainer):
+    # The old 1..3 range predates headless; the N=4 gate launches from
+    # the panel, so the server-side cap must match the form's max="4".
+    cmd = launcher.command(tmp_path, {"run_id": "r1", "instances": 4},
+                           platform="linux")
+    assert "4" in cmd
+    with pytest.raises(ValueError):
+        launcher.command(tmp_path, {"run_id": "r1", "instances": 5},
+                         platform="linux")
+
+
+def test_restart_params_never_resurrects_headless(tmp_path):
+    # Aborted-run restarts rebuild params from config.jsonl; headless is
+    # session-scoped and must not come back even if a config somehow
+    # recorded it.
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.jsonl").write_text(
+        json.dumps({"timesteps": 1000, "headless": True}) + "\n")
+    params = launcher._restart_params(run_dir, {"mode": "resume",
+                                                "run_id": "r1"})
+    assert "headless" not in params

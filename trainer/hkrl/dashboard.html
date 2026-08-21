@@ -332,7 +332,7 @@
     </div>
     <form id="launch-form" hidden>
       <div><label for="f-run-id">Run id</label><input id="f-run-id" name="run_id" autocomplete="off"></div>
-      <div><label for="f-instances">Instances</label><input id="f-instances" name="instances" type="number" min="1" max="3" value="1"></div>
+      <div><label for="f-instances">Instances</label><input id="f-instances" name="instances" type="number" min="1" max="4" value="1"></div>
       <div><label for="f-boss">Boss</label><select id="f-boss" name="boss"></select></div>
       <div><label for="f-timesteps">Timesteps</label><input id="f-timesteps" name="timesteps" type="number" min="1" value="500000"></div>
       <details class="advanced">
@@ -343,6 +343,7 @@
           <div><label for="f-batch-size">Batch size</label><input id="f-batch-size" name="batch_size" type="number" min="1"></div>
           <div><label for="f-n-epochs">N epochs</label><input id="f-n-epochs" name="n_epochs" type="number" min="1"></div>
           <div><label for="f-target-kl">Target KL</label><input id="f-target-kl" name="target_kl" type="number" min="0" step="0.005" placeholder="0.03"></div>
+          <div><label for="f-headless">Headless</label><input id="f-headless" name="headless" type="checkbox"></div>
           <div><label for="f-seed">Seed</label><input id="f-seed" name="seed" type="number" placeholder="random"></div>
         </div>
       </details>
@@ -922,7 +923,11 @@ function launchError(msg) {
 function formParams() {
   const params = {};
   for (const input of document.querySelectorAll("#launch-form input, #launch-form select")) {
-    if (input.value !== "") params[input.name] = input.value;
+    if (input.type === "checkbox") {
+      if (input.checked) params[input.name] = true;  // unchecked: stay unset
+    } else if (input.value !== "") {
+      params[input.name] = input.value;
+    }
   }
   return params;
 }

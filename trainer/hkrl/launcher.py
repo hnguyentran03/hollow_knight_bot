@@ -166,6 +166,11 @@ _STR_NEW_ONLY = ("boss",)
 # rule as _ALWAYS.
 _FLOAT_ALWAYS = ("target_kl",)
 
+# Boolean and forwardable in BOTH modes, mapped to a bare flag. Session-
+# scoped (like train.py's --auto): never read back from config.jsonl, so
+# _restart_params must not include it.
+_BOOL_ALWAYS = ("headless",)
+
 
 def _validate(params: dict) -> dict:
     mode = params.get("mode", "new")
@@ -205,14 +210,21 @@ def _validate(params: dict) -> dict:
             raise ValueError(f"{key} must be a finite number")
         if clean[key] < 0:
             raise ValueError(f"{key} must be >= 0")
+    for key in _BOOL_ALWAYS:
+        value = params.get(key)
+        if value in (None, "", False):
+            continue
+        if value is not True:
+            raise ValueError(f"{key} must be a boolean")
+        clean[key] = True
     boss = params.get("boss")
     if boss not in (None, ""):
         if boss not in BOSSES:
             raise ValueError(
                 f"unknown boss {boss!r}; known: {', '.join(sorted(BOSSES))}")
         clean["boss"] = boss
-    if not 1 <= clean.get("instances", 1) <= 3:
-        raise ValueError("instances must be between 1 and 3")
+    if not 1 <= clean.get("instances", 1) <= 4:
+        raise ValueError("instances must be between 1 and 4")
     if clean.get("timesteps", 1) < 1:
         raise ValueError("timesteps must be positive")
     return clean
@@ -247,6 +259,9 @@ def command(root, params: dict, platform: str = sys.platform) -> list[str]:
     for key in keys:
         if key in p:
             cmd += ["--" + key.replace("_", "-"), str(p[key])]
+    for key in _BOOL_ALWAYS:
+        if p.get(key):
+            cmd += ["--" + key.replace("_", "-")]
     return _caffeinate(cmd, platform)
 
 
