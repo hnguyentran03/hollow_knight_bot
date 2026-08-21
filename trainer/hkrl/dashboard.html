@@ -342,6 +342,7 @@
           <div><label for="f-n-steps">N steps</label><input id="f-n-steps" name="n_steps" type="number" min="1" placeholder="auto"></div>
           <div><label for="f-batch-size">Batch size</label><input id="f-batch-size" name="batch_size" type="number" min="1"></div>
           <div><label for="f-n-epochs">N epochs</label><input id="f-n-epochs" name="n_epochs" type="number" min="1"></div>
+          <div><label for="f-target-kl">Target KL</label><input id="f-target-kl" name="target_kl" type="number" min="0" step="0.005" placeholder="0.03"></div>
           <div><label for="f-seed">Seed</label><input id="f-seed" name="seed" type="number" placeholder="random"></div>
         </div>
       </details>
@@ -839,7 +840,7 @@ function render() {
   if (run.config) {
     const keys = ["started_at", "boss", "instances", "timesteps", "target_timestep",
                   "resumed_from_gen", "gen_every", "n_steps", "batch_size", "n_epochs",
-                  "gamma", "ent_coef", "n_stack", "seed", "port"];
+                  "target_kl", "gamma", "ent_coef", "n_stack", "seed", "port"];
     for (const k of keys) {
       if (!(k in run.config)) continue;
       const tr = document.createElement("tr");
