@@ -856,3 +856,103 @@ def test_restart_params_carries_recorded_timescale(tmp_path):
         json.dumps({"timesteps": 1000, "timescale": 2.0}) + "\n")
     params = launcher._restart_params(run, {"mode": "resume", "run_id": "r1"})
     assert params["timescale"] == 2.0
+
+
+FAIL_STUB = """\
+import sys
+print("Traceback (most recent call last):", flush=True)
+print("  boom", flush=True)
+print("!!! startup failed: port 9020 is held by pid 424242 (zombie)", flush=True)
+sys.exit(1)
+"""
+
+
+def _stub(tmp_path, monkeypatch, body):
+    script = tmp_path / "stub.py"
+    script.write_text(body)
+    monkeypatch.setattr(launcher, "TRAIN_SCRIPT", script)
+
+
+def test_an_unclean_death_writes_an_exit_record(tmp_path, monkeypatch):
+    _stub(tmp_path, monkeypatch, FAIL_STUB)
+    launcher.launch(tmp_path, {"mode": "new", "run_id": "r1"})
+    assert wait_for(lambda: launcher.status(tmp_path) is None)
+    rec = json.loads((tmp_path / "launcher" / "r1.exit").read_text())
+    assert rec["exit_code"] == 1
+    assert rec["reason"] == [
+        "startup failed: port 9020 is held by pid 424242 (zombie)"]
+    assert "Traceback" in rec["log_excerpt"]
+
+
+def test_a_verdictless_crash_gets_a_generic_reason(tmp_path, monkeypatch):
+    _stub(tmp_path, monkeypatch, "import sys\nsys.exit(3)\n")
+    launcher.launch(tmp_path, {"mode": "new", "run_id": "r1"})
+    assert wait_for(lambda: launcher.status(tmp_path) is None)
+    rec = json.loads((tmp_path / "launcher" / "r1.exit").read_text())
+    assert rec["reason"] == ["run exited with code 3"]
+
+
+def test_a_clean_exit_writes_no_record(tmp_path, monkeypatch):
+    _stub(tmp_path, monkeypatch, "print('done', flush=True)\n")
+    launcher.launch(tmp_path, {"mode": "new", "run_id": "r1"})
+    assert wait_for(lambda: launcher.status(tmp_path) is None)
+    assert not (tmp_path / "launcher" / "r1.exit").exists()
+
+
+def test_record_exit_respects_the_stop_marker(tmp_path):
+    launcher._mark_stopped(tmp_path, "r1")
+    launcher._record_exit(tmp_path, {"run_id": "r1", "log_offset": 0}, 130)
+    assert not (tmp_path / "launcher" / "r1.exit").exists()
+
+
+def test_dead_pid_fallback_records_only_with_a_verdict(tmp_path):
+    # Dashboard restarted: the pid is dead and was never our child, so the
+    # exit code is unknowable -- record only when the slice says "!!!".
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    d = launcher._dir(tmp_path)
+    (d / "r1.log").write_text("!!! startup failed: squatted\n")
+    (d / "r1.pid").write_text(json.dumps(
+        {"run_id": "r1", "pid": p.pid, "started": 1.0, "log_offset": 0}))
+    assert launcher.status(tmp_path) is None
+    rec = json.loads((d / "r1.exit").read_text())
+    assert rec["exit_code"] is None
+    assert rec["reason"] == ["startup failed: squatted"]
+
+
+def test_dead_pid_fallback_skips_a_verdictless_log(tmp_path):
+    # A clean finish that ended while the dashboard was down must not
+    # resurface as a failure card.
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    d = launcher._dir(tmp_path)
+    (d / "r1.log").write_text("final checkpoint: gen 12\n")
+    (d / "r1.pid").write_text(json.dumps(
+        {"run_id": "r1", "pid": p.pid, "started": 1.0, "log_offset": 0}))
+    assert launcher.status(tmp_path) is None
+    assert not (d / "r1.exit").exists()
+
+
+def test_scrape_ignores_lines_before_the_session_offset(tmp_path):
+    log = launcher._dir(tmp_path) / "r1.log"
+    prior = "!!! stale verdict from a previous session\n"
+    log.write_text(prior + "fresh session output\n")
+    reasons, excerpt = launcher._scrape_log(tmp_path, "r1", len(prior))
+    assert reasons == []
+    assert "stale" not in excerpt
+
+
+def test_a_new_launch_clears_exit_records(tmp_path, stub_trainer):
+    (launcher._dir(tmp_path) / "old.exit").write_text(
+        json.dumps({"run_id": "old"}))
+    launcher.launch(tmp_path, {"mode": "new", "run_id": "r2"})
+    assert not list((tmp_path / "launcher").glob("*.exit"))
+
+
+def test_last_exit_and_dismiss(tmp_path):
+    launcher._dir(tmp_path)
+    (tmp_path / "launcher" / "a.exit").write_text(
+        json.dumps({"run_id": "a", "exit_code": 1}))
+    assert launcher.last_exit(tmp_path)["run_id"] == "a"
+    launcher.dismiss_exit(tmp_path)
+    assert launcher.last_exit(tmp_path) is None

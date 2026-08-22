@@ -31,7 +31,7 @@ from hkrl import exports
 TRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "train.py"
 REPLAY_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "replay.py"
 
-# Popen handles for children this process spawned, so _alive() can reap
+# Popen handles for children this process spawned, so _poll() can reap
 # them once they exit: os.kill(pid, 0) cannot tell a zombie from a live
 # process (it succeeds on both), and an unreaped child would stay a
 # zombie -- and read as "still running" -- for the dashboard's lifetime.
@@ -67,6 +67,74 @@ def _mark_stopped(root, run_id) -> None:
 
 def _clear_stop_marker(root, run_id) -> None:
     _stop_marker(root, run_id).unlink(missing_ok=True)
+
+
+# An unclean death drops <run_id>.exit beside the pidfile it outlives: the
+# summon page's failure card reads it via /api/launcher until a dismiss or
+# the next launch clears it. Never written for exit 0 or for a run the
+# panel itself stopped.
+def _record_exit(root, rec: dict, exit_code: int | None) -> None:
+    run_id = rec.get("run_id")
+    if not run_id or exit_code == 0:
+        return
+    if (_dir(root) / f"{run_id}.exit").exists():
+        # First writer wins: status() runs unlocked from concurrent GET
+        # polls, and the loser of the _poll race sees no Popen handle
+        # (code None) -- it must not downgrade the winner's real code.
+        return
+    if _stop_marker(root, run_id).exists():
+        return
+    reasons, excerpt = _scrape_log(root, run_id, rec.get("log_offset", 0))
+    if exit_code is None and not reasons:
+        # Unknowable code and no verdict in the slice: as likely a clean
+        # finish while the dashboard was down as a crash. Stay quiet.
+        return
+    record = {"run_id": run_id, "exit_code": exit_code,
+              "ended_at": time.time(),
+              "reason": reasons or [f"run exited with code {exit_code}"],
+              "log_excerpt": excerpt}
+    if rec.get("mode") == "replay":
+        record["mode"] = "replay"
+    (_dir(root) / f"{run_id}.exit").write_text(json.dumps(record))
+
+
+def _scrape_log(root, run_id, offset) -> tuple[list[str], str]:
+    """(`!!!` verdict lines, last ~30 lines) of the session's log slice.
+
+    The slice starts at the byte offset the pidfile recorded at spawn --
+    the log appends across launches of one id, so a verdict from an
+    earlier session must never resurface. The `!!!` lines are collected
+    from the whole slice, not the tail: the InstanceDown handler's are
+    followed by final-checkpoint output."""
+    log = _dir(root) / f"{run_id}.log"
+    try:
+        with log.open("rb") as f:
+            f.seek(max(0, int(offset or 0)))
+            text = f.read().decode(errors="replace")
+    except OSError:
+        return [], ""
+    lines = text.splitlines()
+    reasons = [line.split("!!!", 1)[1].strip()
+               for line in lines if line.lstrip().startswith("!!!")]
+    return [r for r in reasons if r], "\n".join(lines[-30:])
+
+
+def last_exit(root) -> dict | None:
+    """The newest recorded unclean exit, or None."""
+    records = sorted(_dir(root).glob("*.exit"),
+                     key=lambda p: p.stat().st_mtime)
+    for p in reversed(records):
+        try:
+            return json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
+def dismiss_exit(root) -> None:
+    """Drop every exit record -- the operator has seen the card."""
+    for p in _dir(root).glob("*.exit"):
+        p.unlink(missing_ok=True)
 
 
 def _trash(root, run_dir: Path) -> Path:
@@ -123,24 +191,28 @@ def _preflight(root_dir: Path, p: dict) -> None:
         raise RuntimeError("\n".join(verdicts))
 
 
-def _alive(pid: int) -> bool:
+def _poll(pid: int) -> tuple[bool, int | None]:
+    """(alive, exit_code). The code is None while alive and None when
+    unknowable -- a pid this process never spawned (dashboard restart,
+    reboot) has no Popen handle to ask."""
     if pid <= 0:  # kill(0/-n, 0) would probe a process GROUP, not a pid
-        return False
+        return False, None
     child = _children.get(pid)
     if child is not None:
-        if child.poll() is None:
-            return True
+        code = child.poll()
+        if code is None:
+            return True, None
         # pop, not del: two poll threads can race the same exited child,
         # and the loser's del would raise KeyError into a 500.
         _children.pop(pid, None)
-        return False
+        return False, code
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):
         # PermissionError means the pid exists but is not ours -- after a
         # reboot the number belongs to a stranger, not to our run.
-        return False
-    return True
+        return False, None
+    return True, None
 
 
 def status(root) -> dict | None:
@@ -161,9 +233,11 @@ def status(root) -> dict | None:
                 OSError):
             pidfile.unlink(missing_ok=True)
             continue
-        if _alive(pid):
+        alive, code = _poll(pid)
+        if alive:
             active = rec
         else:
+            _record_exit(root, rec, code)
             pidfile.unlink(missing_ok=True)
     return active
 
@@ -354,7 +428,11 @@ def launch(root, params: dict) -> str:
         # _validate() is idempotent on an already-clean dict, so this is
         # safe.
         cmd = command(root, p)
-        with (d / f"{p['run_id']}.log").open("ab") as log:
+        log_path = d / f"{p['run_id']}.log"
+        # Where THIS session's log slice starts (the file appends across
+        # launches of one id) -- _scrape_log bounds its read here.
+        log_offset = log_path.stat().st_size if log_path.exists() else 0
+        with log_path.open("ab") as log:
             # start_new_session: the run must not die with the dashboard, and
             # it makes the child a process-group leader so stop() can SIGINT
             # the whole group (caffeinate wrapper included) at once.
@@ -362,6 +440,8 @@ def launch(root, params: dict) -> str:
                                      stderr=subprocess.STDOUT,
                                      start_new_session=True)
         _children[child.pid] = child
+        for stale in d.glob("*.exit"):  # a new launch supersedes the card
+            stale.unlink(missing_ok=True)
         # Write-then-rename: the page polls status() every 2s from another
         # thread, and a reader landing mid-write would parse a truncated
         # file as corrupt and unlink the pidfile of a run that is very much
@@ -369,7 +449,8 @@ def launch(root, params: dict) -> str:
         pidfile = d / f"{p['run_id']}.pid"
         tmp = d / f"{p['run_id']}.pid.tmp"
         tmp.write_text(json.dumps(
-            {"run_id": p["run_id"], "pid": child.pid, "started": time.time()}))
+            {"run_id": p["run_id"], "pid": child.pid, "started": time.time(),
+             "log_offset": log_offset}))
         os.replace(tmp, pidfile)
         return p["run_id"]
 
@@ -434,18 +515,23 @@ def replay(root, run_id, gen, episodes: int = 3,
              "--port", str(DEFAULT_PORT)],
             platform)
         d = _dir(root)
-        with (d / f"{run_id}.log").open("ab") as log:
+        log_path = d / f"{run_id}.log"
+        # Where THIS session's log slice starts, like launch()'s.
+        log_offset = log_path.stat().st_size if log_path.exists() else 0
+        with log_path.open("ab") as log:
             child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log,
                                      stderr=subprocess.STDOUT,
                                      start_new_session=True)
         _children[child.pid] = child
+        for stale in d.glob("*.exit"):  # a new launch supersedes the card
+            stale.unlink(missing_ok=True)
         # Write-then-rename, atomic like launch()'s: the 2s status() poll must
         # never read a half-written pidfile and unlink a live replay.
         pidfile = d / f"{run_id}.pid"
         tmp = d / f"{run_id}.pid.tmp"
         tmp.write_text(json.dumps(
             {"run_id": run_id, "pid": child.pid, "started": time.time(),
-             "mode": "replay", "gen": gen}))
+             "mode": "replay", "gen": gen, "log_offset": log_offset}))
         os.replace(tmp, pidfile)
         return run_id
 
