@@ -89,6 +89,18 @@ def test_auto_defaults_off_and_root_has_a_default():
     assert args.root is not None     # ~/hkrl by default, for backup_saves
 
 
+def test_headless_and_timescale_are_accepted_flags():
+    # --auto --headless --timescale K is the speed-fidelity gate command;
+    # both must parse without touching a game.
+    args = replay.build_parser().parse_args(
+        ["--run-dir", "x", "--auto", "--headless", "--timescale", "2"])
+    assert args.headless is True
+    assert args.timescale == 2.0
+    args = replay.build_parser().parse_args(["--run-dir", "x"])
+    assert args.headless is False
+    assert args.timescale == 1.0
+
+
 def test_replay_stops_at_the_episode_boundary_when_flagged(tmp_path):
     # A set stop flag ends the loop at the next episode boundary (mirrors
     # train.py's StopOnFlag): the dashboard's single Stop -> SIGINT sets it,
