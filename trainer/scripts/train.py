@@ -33,7 +33,7 @@ from hkrl.vec import RealEpisodeVecMonitor, RealEpisodeVecNormalize  # noqa: E40
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from launch_instances import (  # noqa: E402
     DEFAULT_APP, DEFAULT_PORT, MASTER_BUNDLE_ID, SAVE_ISOLATION_SUPPORTED,
-    backup_saves, prepare_instance, seed_save_dir,
+    backup_saves, prepare_instance, preflight_ports, seed_save_dir,
 )
 from hkrl.cloneprep import prepare_clone_save  # noqa: E402
 
@@ -650,6 +650,22 @@ def prepare_session(argv=None) -> tuple[argparse.Namespace, Path, tuple | None, 
 def main() -> None:
     args, run_dir, resume, budget, async_resets = prepare_session()
 
+    ports = [args.port + i for i in range(args.instances)]
+    # Fail fast on squatted ports BEFORE the save backup and the clone
+    # work: the PortInUse that used to fire at spawn time arrived after
+    # both, buried under a traceback (observed 2026-08-22 -- three launches
+    # died on leftover games squatting 9021-9023). Dashboard launches are
+    # normally refused even earlier, by launcher._preflight.
+    verdicts = preflight_ports(ports)
+    if verdicts:
+        for v in verdicts:
+            print(f"!!! {v}", file=sys.stderr, flush=True)
+        print(f"!!! nothing was launched. This session is already recorded "
+              f"in {run_dir}; free the port(s), then resume the run (or "
+              f"remove that dir to start it fresh).",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+
     # Unconditional: every clone is seeded FROM the master save (N=1 on
     # save-isolation platforms, the master itself on others), so a quietly
     # corrupt master would propagate. A run must never be the event that
@@ -660,7 +676,6 @@ def main() -> None:
     if resume is None:
         print(session_banner(budget), flush=True)
 
-    ports = [args.port + i for i in range(args.instances)]
     # Instances must not share the game's save directory: they all autosave
     # the same slot throughout a run (observed corrupting the master save
     # live, 2026-07-20 -- see seed_save_dir). Each slot gets its own app

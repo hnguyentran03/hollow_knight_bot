@@ -1,5 +1,6 @@
 import json
 import pathlib
+import socket
 import sys
 import threading
 
@@ -950,3 +951,23 @@ def test_prepare_session_refuses_an_existing_run_dir_for_a_fresh_run(tmp_path):
         train.prepare_session(
             ["--root", str(tmp_path), "--run-id", "taken",
              "--timesteps", "1000"])
+
+
+def test_main_preflights_ports_before_the_save_backup(tmp_path, monkeypatch,
+                                                      capsys):
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        monkeypatch.setattr(
+            train, "backup_saves",
+            lambda root: pytest.fail("backup ran after a failed preflight"))
+        monkeypatch.setattr(sys, "argv", [
+            "train.py", "--root", str(tmp_path), "--run-id", "squat",
+            "--port", str(port), "--auto", "--timesteps", "1000"])
+        with pytest.raises(SystemExit) as exc:
+            train.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert str(port) in err
+    assert any(line.startswith("!!!") for line in err.splitlines())
