@@ -235,7 +235,7 @@ def wait_for_port(
 
 
 def launch(port: int, app: Path, visible: bool,
-           headless: bool = False) -> subprocess.Popen:
+           headless: bool = False, timescale: float = 1.0) -> subprocess.Popen:
     # SteamAppId/SteamGameId are the launch context Steam exports to its
     # children; the Steam build's DRM check looks for them in the
     # environment. Executed directly without them, the game asks Steam to
@@ -246,6 +246,11 @@ def launch(port: int, app: Path, visible: bool,
     # Unverified on Windows, where steam_appid.txt reportedly also works;
     # the env vars are kept as the single cross-platform mechanism.
     env = dict(os.environ, HKRL_PORT=str(port),
+               # Faster-than-real-time multiplier for the mod's TimeScale
+               # class; always set so a stale value inherited from this
+               # process's own environment can never leak through. 1.0 is
+               # the mod's documented no-op.
+               HKRL_TIMESCALE=str(timescale),
                SteamAppId="367520", SteamGameId="367520")
     # Detach the game from the terminal's Ctrl-C: Ctrl-C at the trainer must
     # interrupt the trainer alone, not kill the game out from under the
@@ -312,6 +317,9 @@ def main() -> None:
     ap.add_argument("--headless", action="store_true",
                     help="launch with -batchmode -nographics (no window); "
                          "the mod caps the frame loop at 60 fps")
+    ap.add_argument("--timescale", type=float, default=1.0,
+                    help="run the game at K x real time (mod-side "
+                         "Time.timeScale multiplier, 1-10; 1 = off)")
     args = ap.parse_args()
 
     # Fail fast on squatted ports BEFORE launching anything: the mod's
@@ -354,7 +362,8 @@ def main() -> None:
         # boot is tens of seconds each) -- same shape as GameFleet.start().
         for i in range(args.instances):
             procs.append(launch(args.port + i, apps[i], visible=True,
-                                headless=args.headless))
+                                headless=args.headless,
+                                timescale=args.timescale))
             print(f"launched: port={args.port + i}", flush=True)
         for i, proc in enumerate(procs):
             wait_for_port(args.port + i, proc=proc)

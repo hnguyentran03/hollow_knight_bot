@@ -308,6 +308,34 @@ def test_launch_default_argv_is_bare_binary(monkeypatch):
     assert calls[0] == ["/tmp/game-binary"]
 
 
+def test_launch_exports_timescale_env(monkeypatch):
+    import launch_instances
+    captured = {}
+
+    def fake_popen(argv, env=None, **kwargs):
+        captured["env"] = env
+        return object()
+
+    monkeypatch.setattr(launch_instances.subprocess, "Popen", fake_popen)
+    launch_instances.launch(9021, Path("/fake.app"), False, timescale=2.0)
+    assert captured["env"]["HKRL_TIMESCALE"] == "2.0"
+
+
+def test_launch_default_timescale_is_one(monkeypatch):
+    import launch_instances
+    captured = {}
+
+    def fake_popen(argv, env=None, **kwargs):
+        captured["env"] = env
+        return object()
+
+    monkeypatch.setattr(launch_instances.subprocess, "Popen", fake_popen)
+    launch_instances.launch(9021, Path("/fake.app"), False)
+    # Always exported (a stale HKRL_TIMESCALE in the parent env must not
+    # leak through); 1.0 is the mod's no-op value.
+    assert captured["env"]["HKRL_TIMESCALE"] == "1.0"
+
+
 def test_game_process_launches_and_relaunches_headless():
     seen = []
 
