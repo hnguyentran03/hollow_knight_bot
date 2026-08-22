@@ -867,7 +867,7 @@ function render() {
   const config = document.getElementById("config");
   config.replaceChildren();
   if (run.config) {
-    const keys = ["started_at", "boss", "instances", "timesteps", "target_timestep",
+    const keys = ["started_at", "boss", "instances", "headless", "timesteps", "target_timestep",
                   "resumed_from_gen", "gen_every", "n_steps", "batch_size", "n_epochs",
                   "target_kl", "gamma", "ent_coef", "n_stack", "seed", "port"];
     for (const k of keys) {

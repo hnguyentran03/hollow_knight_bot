@@ -677,14 +677,26 @@ def test_validate_accepts_four_instances(tmp_path, stub_trainer):
                          platform="linux")
 
 
-def test_restart_params_never_resurrects_headless(tmp_path):
-    # Aborted-run restarts rebuild params from config.jsonl; headless is
-    # session-scoped and must not come back even if a config somehow
-    # recorded it.
+def test_restart_params_carries_recorded_headless(tmp_path):
+    # Aborted-run restarts run in 'new' mode, outside train.py's resume
+    # inheritance, so the recorded headless must be carried explicitly or
+    # an aborted headless run would silently restart headed.
     run_dir = tmp_path / "runs" / "r1"
     run_dir.mkdir(parents=True)
     (run_dir / "config.jsonl").write_text(
         json.dumps({"timesteps": 1000, "headless": True}) + "\n")
+    params = launcher._restart_params(run_dir, {"mode": "resume",
+                                                "run_id": "r1"})
+    assert params["headless"] is True
+
+
+def test_restart_params_omits_headless_recorded_false(tmp_path):
+    # A recorded false stays unset: 'new' mode's default is headed anyway,
+    # and _validate treats false as unset.
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.jsonl").write_text(
+        json.dumps({"timesteps": 1000, "headless": False}) + "\n")
     params = launcher._restart_params(run_dir, {"mode": "resume",
                                                 "run_id": "r1"})
     assert "headless" not in params

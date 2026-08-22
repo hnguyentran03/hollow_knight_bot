@@ -82,9 +82,9 @@ def _trash(root, run_dir: Path) -> str:
 
 def _restart_params(run_dir: Path, request: dict) -> dict:
     """Fresh-start params for an aborted (checkpoint-less) run. Model-shaping
-    params (n_steps, batch_size, n_epochs, seed) and target_kl come from the
-    config the aborted attempt recorded -- a resume request drops the ints -- while
-    the request's own values win where present. Returns a 'new'-mode dict reusing
+    params (n_steps, batch_size, n_epochs, seed), target_kl, and headless come
+    from the config the aborted attempt recorded -- a resume request drops the
+    ints -- while the request's own values win where present. Returns a 'new'-mode dict reusing
     the run_id; command()'s _validate() coerces/range-checks it.
 
     Edge: a config with target_kl null restarts in 'new' mode and picks up
@@ -95,6 +95,13 @@ def _restart_params(run_dir: Path, request: dict) -> dict:
     for key in _INT_PARAMS + _STR_NEW_ONLY + _FLOAT_ALWAYS:
         value = request.get(key, cfg.get(key))
         if value is not None:
+            params[key] = value
+    for key in _BOOL_ALWAYS:
+        # Restarting in 'new' mode skips train.py's resume inheritance, so
+        # the recorded value must be carried here or an aborted headless
+        # run would silently restart headed.
+        value = request.get(key, cfg.get(key))
+        if value is True:
             params[key] = value
     return params
 
@@ -166,9 +173,13 @@ _STR_NEW_ONLY = ("boss",)
 # rule as _ALWAYS.
 _FLOAT_ALWAYS = ("target_kl",)
 
-# Boolean and forwardable in BOTH modes, mapped to a bare flag. Session-
-# scoped (like train.py's --auto): never read back from config.jsonl, so
-# _restart_params must not include it.
+# Boolean and forwardable in BOTH modes, mapped to a bare flag. On resume
+# train.py inherits the last session's recorded value when the flag is
+# absent, so an unset field must stay unset (same rule as _ALWAYS); an
+# explicit true forces it on. False counts as unset here -- the launch
+# form never sends it, and forcing a headless run back to headed takes a
+# CLI --no-headless. _restart_params carries the recorded value because a
+# checkpoint-less restart runs in 'new' mode, outside resume inheritance.
 _BOOL_ALWAYS = ("headless",)
 
 
