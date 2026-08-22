@@ -11,7 +11,6 @@ GameProcess is the single-instance unit; GameFleet composes N of them, one
 per port, and presents the exact (ports, relaunch(slot)) surface
 SupervisedVecEnv is built around.
 """
-import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -21,7 +20,8 @@ from typing import Callable
 # hkrl/supervisor.py.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from launch_instances import (  # noqa: E402
-    DEFAULT_APP, DEFAULT_PORT, launch, shutdown, wait_for_port,
+    DEFAULT_APP, DEFAULT_PORT, launch, port_squatter_verdict,
+    preflight_ports, shutdown, wait_for_port,
 )
 
 
@@ -83,18 +83,9 @@ class GameProcess:
         throws on an in-use port) while the readiness probe happily greets
         the zombie.
         """
-        if _accepting(self.port):
-            if sys.platform == "win32":
-                find_it = (f"`netstat -ano | findstr :{self.port}` then "
-                           f"`taskkill /PID <pid> /F`")
-            else:
-                find_it = f"`lsof -nP -iTCP:{self.port} -sTCP:LISTEN`"
-            raise PortInUse(
-                f"port {self.port} is already accepting connections before "
-                f"any game was launched -- an unmanaged process (a leftover "
-                f"from an earlier run?) holds it. Find it with "
-                f"{find_it}, kill it, rerun."
-            )
+        verdict = port_squatter_verdict(self.port)
+        if verdict is not None:
+            raise PortInUse(verdict)
         self._proc = self._launch(self.port, self.app, False, self.headless,
                                   self.timescale)
 
@@ -192,11 +183,3 @@ class GameFleet:
     def stop(self) -> None:
         for g in self.games:
             g.stop()
-
-
-def _accepting(port: int, host: str = "127.0.0.1") -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=0.5):
-            return True
-    except OSError:
-        return False

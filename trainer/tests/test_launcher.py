@@ -290,6 +290,39 @@ def test_backup_saves_is_a_noop_without_a_master_save_dir(tmp_path):
     assert not (tmp_path / "hkrl" / "save-backups").exists()
 
 
+def test_port_squatter_verdict_names_the_holder():
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        verdict = launch_instances.port_squatter_verdict(port)
+        assert verdict is not None
+        assert str(port) in verdict
+        if sys.platform == "darwin":
+            # lsof resolves the squatter -- here, this test process.
+            assert f"pid {os.getpid()}" in verdict
+            assert f"kill {os.getpid()}" in verdict
+
+
+def test_port_squatter_verdict_is_none_on_a_free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    assert launch_instances.port_squatter_verdict(port) is None
+
+
+def test_preflight_ports_reports_every_squatted_port():
+    with socket.socket() as a, socket.socket() as b:
+        for s in (a, b):
+            s.bind(("127.0.0.1", 0))
+            s.listen(1)
+        ports = [a.getsockname()[1], b.getsockname()[1]]
+        verdicts = launch_instances.preflight_ports(ports)
+        assert len(verdicts) == 2
+        assert str(ports[0]) in verdicts[0] and str(ports[1]) in verdicts[1]
+
+
 @pytest.mark.skipif(sys.platform != "darwin",
                     reason="app-clone isolation is macOS-only")
 def test_prepare_instance_strips_foreign_profiles_from_the_clone(tmp_path,
