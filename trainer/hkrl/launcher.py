@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 from hkrl.bosses import BOSSES
-from hkrl.game import DEFAULT_PORT
+from hkrl.game import DEFAULT_PORT, preflight_ports
 from hkrl.generations import checkpoint_paths
 from hkrl.rundata import LIVE_WINDOW_S, read_jsonl
 from hkrl import exports
@@ -104,6 +104,23 @@ def _restart_params(run_dir: Path, request: dict) -> dict:
         if value is True:
             params[key] = value
     return params
+
+
+def _preflight(root_dir: Path, p: dict) -> None:
+    """Refuse a launch whose bridge ports are already held, before anything
+    spawns -- the RuntimeError maps to a 409 the page shows inline, which
+    beats a spawned run dying to PortInUse deep in its log (observed
+    2026-08-22, three times in a row). Ports mirror train.py's allocation
+    (DEFAULT_PORT + i); instances falls back to the run's recorded config
+    on resume -- train.py inherits it from the same place -- then 1."""
+    instances = p.get("instances")
+    if instances is None:
+        configs = read_jsonl(root_dir / "runs" / p["run_id"] / "config.jsonl")
+        instances = configs[-1].get("instances") if configs else None
+    verdicts = preflight_ports([DEFAULT_PORT + i
+                                for i in range(int(instances or 1))])
+    if verdicts:
+        raise RuntimeError("\n".join(verdicts))
 
 
 def _alive(pid: int) -> bool:
@@ -316,6 +333,7 @@ def launch(root, params: dict) -> str:
             raise ValueError(
                 f"run {p['run_id']!r} already exists; resume it or "
                 "pick another id")
+        _preflight(root_dir, p)
         # A relaunch means this run is active again, so any panel-stop marker
         # left from a prior stop is stale -- drop it (see delete()).
         _clear_stop_marker(root_dir, p["run_id"])

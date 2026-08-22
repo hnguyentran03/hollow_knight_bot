@@ -1,6 +1,8 @@
 import json
 import os
 import signal
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -50,6 +52,13 @@ def stub_replay(tmp_path, monkeypatch):
             # A test that monkeypatched status() to a fake pid (e.g. the
             # "refused while active" case spawned nothing) has nothing to reap.
             pass
+
+
+@pytest.fixture(autouse=True)
+def _skip_port_preflight(monkeypatch):
+    """launch() probes real bridge ports before spawning; unrelated tests
+    must not depend on this machine's port state. Preflight tests override."""
+    monkeypatch.setattr(launcher, "preflight_ports", lambda ports: [])
 
 
 def _make_checkpoint(tmp_path, run_id="r1", gen=2):
@@ -289,6 +298,52 @@ def test_launch_new_refuses_an_existing_run_dir(tmp_path, stub_trainer):
     (tmp_path / "runs" / "r1").mkdir(parents=True)
     with pytest.raises(ValueError):
         launcher.launch(tmp_path, {"run_id": "r1"})
+
+
+def test_launch_refuses_a_squatted_port(tmp_path, stub_trainer, monkeypatch):
+    from hkrl.game import preflight_ports as real_preflight
+    monkeypatch.setattr(launcher, "preflight_ports", real_preflight)
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        monkeypatch.setattr(launcher, "DEFAULT_PORT", srv.getsockname()[1])
+        with pytest.raises(RuntimeError, match="held by|accepting"):
+            launcher.launch(tmp_path, {"mode": "new", "run_id": "r1"})
+    assert launcher.status(tmp_path) is None
+    assert not (tmp_path / "launcher" / "r1.pid").exists()
+
+
+def test_launch_preflights_the_recorded_instance_count_on_resume(
+        tmp_path, stub_trainer, monkeypatch):
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "generations.jsonl").write_text(
+        json.dumps({"gen": 1, "timestep": 100}) + "\n")
+    (run_dir / "config.jsonl").write_text(
+        json.dumps({"instances": 3}) + "\n")
+    seen = {}
+
+    def capture(ports):
+        seen["ports"] = list(ports)
+        return []
+
+    monkeypatch.setattr(launcher, "preflight_ports", capture)
+    launcher.launch(tmp_path, {"mode": "resume", "run_id": "r1"})
+    assert seen["ports"] == [launcher.DEFAULT_PORT + i for i in range(3)]
+
+
+def test_launch_preflights_the_requested_instance_count(
+        tmp_path, stub_trainer, monkeypatch):
+    seen = {}
+
+    def capture(ports):
+        seen["ports"] = list(ports)
+        return []
+
+    monkeypatch.setattr(launcher, "preflight_ports", capture)
+    launcher.launch(tmp_path, {"mode": "new", "run_id": "r1",
+                               "instances": 2})
+    assert seen["ports"] == [launcher.DEFAULT_PORT, launcher.DEFAULT_PORT + 1]
 
 
 def test_restart_params_merges_request_over_the_aborted_config(tmp_path):
