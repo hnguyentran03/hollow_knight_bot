@@ -186,9 +186,9 @@ def prepare_instance(port: int, app: Path = None,
         else Path("~/hkrl/instances").expanduser()
     clone = root / f"port-{port}" / bundle.name
     clone.parent.mkdir(parents=True, exist_ok=True)
+    print(f"cloning app for port {port}...", flush=True)
     if clone.exists():
         shutil.rmtree(clone)
-    print(f"cloning app for port {port}...", flush=True)
     subprocess.run(["cp", "-Rc", str(bundle), str(clone)], check=True,
                    timeout=CLONE_TIMEOUT_S)
     bundle_id = f"{MASTER_BUNDLE_ID}.hkrl{port}"
