@@ -313,6 +313,12 @@ def launch(root, params: dict) -> str:
         p = _validate(params)
         root_dir = Path(root).expanduser()
         run_dir = root_dir / "runs" / p["run_id"]
+        # Set only for a checkpoint-less restart: the trash move is deferred
+        # past _preflight below, so a refused preflight (squatted port)
+        # leaves the aborted attempt in place instead of stranding it in
+        # trash -- a retry after freeing the port must still find it under
+        # "to resume".
+        trash_first = None
         if p["mode"] == "resume":
             if not run_dir.is_dir():
                 raise ValueError(f"no run named {p['run_id']!r} to resume")
@@ -321,10 +327,11 @@ def launch(root, params: dict) -> str:
                 # resume FROM (train.py's latest_checkpoint would raise), so
                 # restart the run fresh with the config its aborted attempt
                 # recorded (overlaid with any params the request set, e.g. a
-                # new timesteps budget), reusing the id. Move the empty attempt
-                # to trash (recoverable) and continue below as a 'new' run.
+                # new timesteps budget), reusing the id. The empty attempt
+                # moves to trash (recoverable) only once _preflight below
+                # passes; the run continues below as a 'new' run.
                 p = _restart_params(run_dir, p)
-                _trash(root_dir, run_dir)
+                trash_first = run_dir
         elif run_dir.exists():
             # train.py exits instantly on an existing run dir; catching it
             # here instead of letting the spawn die is the difference
@@ -334,6 +341,8 @@ def launch(root, params: dict) -> str:
                 f"run {p['run_id']!r} already exists; resume it or "
                 "pick another id")
         _preflight(root_dir, p)
+        if trash_first is not None:
+            _trash(root_dir, trash_first)
         # A relaunch means this run is active again, so any panel-stop marker
         # left from a prior stop is stale -- drop it (see delete()).
         _clear_stop_marker(root_dir, p["run_id"])

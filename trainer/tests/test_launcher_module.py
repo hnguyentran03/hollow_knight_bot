@@ -387,6 +387,24 @@ def test_resume_without_a_checkpoint_restarts_fresh(tmp_path, stub_trainer):
     assert launcher.status(tmp_path)["run_id"] == "r2"
 
 
+def test_refused_preflight_leaves_a_checkpointless_restart_untrashed(
+        tmp_path, stub_trainer, monkeypatch):
+    # A checkpoint-less resume whose preflight refuses must not strand the
+    # aborted attempt in trash -- a retry after freeing the port has to find
+    # it under "to resume" again, not get "no run named ... to resume".
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.jsonl").write_text(
+        json.dumps({"instances": 1}) + "\n")
+    monkeypatch.setattr(launcher, "preflight_ports",
+                         lambda ports: ["port X is held by pid 999"])
+    with pytest.raises(RuntimeError, match="held by"):
+        launcher.launch(tmp_path, {"mode": "resume", "run_id": "r1"})
+    assert run_dir.is_dir()
+    assert not (tmp_path / "trash").exists()
+    assert launcher.status(tmp_path) is None
+
+
 def test_resume_with_a_checkpoint_still_resumes(tmp_path, stub_trainer):
     # A run with a generation resumes normally (a real --resume, not a restart).
     done = tmp_path / "runs" / "r3"
