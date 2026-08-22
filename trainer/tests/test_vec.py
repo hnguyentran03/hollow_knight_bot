@@ -80,6 +80,38 @@ def test_real_episode_vec_monitor_skips_reset_pending_episodes(tmp_path):
     assert [float(r.split(",")[0]) for r in rows] == [1.0, 2.0]
 
 
+def test_real_episode_vec_monitor_tolerates_missing_keywords(tmp_path):
+    """With info_keywords set, a done step that lacks the keys (the
+    supervisor's recovery frames carry only terminal_observation) must
+    write a row with blank extras instead of raising and killing the run."""
+    script = [
+        (1.0, True, {"won": True, "boss_damage_frac": 0.75}),
+        (0.5, True, {}),  # recovery frame: neither key
+    ]
+    venv = DummyVecEnv([lambda: _ScriptedEnv(script)])
+    mon = RealEpisodeVecMonitor(
+        venv, filename=str(tmp_path / "monitor_test"),
+        info_keywords=("won", "boss_damage_frac"))
+    mon.reset()
+    records = []
+    for _ in range(len(script)):
+        _, _, dones, infos = mon.step(np.array([0]))
+        if dones[0]:
+            records.append(infos[0].get("episode"))
+    mon.close()
+
+    assert records[0]["won"] is True
+    assert records[0]["boss_damage_frac"] == 0.75
+    assert "won" not in records[1]  # missing keys stay missing, not invented
+
+    csv = next(tmp_path.glob("monitor_test*.monitor.csv"))
+    lines = csv.read_text().splitlines()
+    assert lines[1] == "r,l,t,won,boss_damage_frac"
+    rows = [line.split(",") for line in lines[2:]]
+    assert [r[3] for r in rows] == ["True", ""]  # blank, not a crash
+    assert [r[4] for r in rows] == ["0.75", ""]
+
+
 class _ObsScriptedEnv(gym.Env):
     """Replays (obs_value, reward, done, info) tuples; reset observations
     are 5.0 like real frames, so any 0.0 placeholder frame that leaks into

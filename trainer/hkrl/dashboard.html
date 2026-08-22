@@ -138,8 +138,8 @@
   @media (prefers-reduced-motion: reduce) {
     .badge.live .dot { animation: none; }
     .bossbar .fill { transition: none; }
-    .launch .check-row input[type="checkbox"],
-    .launch .check-row .check-hint { transition: none; }
+    .check-row input[type="checkbox"],
+    .check-row .check-hint { transition: none; }
   }
 
   /* The game's menu rule: a hairline fading at both ends, a diamond at heart. */
@@ -243,32 +243,45 @@
   .launch .actions { display: flex; gap: 8px; grid-column: 1 / -1; }
   .launch .advanced { grid-column: 1 / -1; margin: 0; }
   .launch .advanced .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 8px; }
-  /* The Headless cell: the checkbox drawn as a soul gem in a field-height
-     row, its hint a second click target. Checked, the gem fills with soul
-     and the hint brightens from cave mist to bone. */
-  .launch .check-row { display: flex; align-items: center; gap: 8px; height: 32px; }
-  .launch .check-row input[type="checkbox"] {
-    appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
-    flex: none; margin: 0; padding: 0; cursor: pointer;
-    background: var(--raised); border: 1px solid var(--border); border-radius: 3px;
+  /* The Headless cell: the checkbox is the section-divider gem grown to
+     control size -- an empty soul vessel, cut like a gem (facet lines in
+     the SVG background; the 45° rotation is what makes it a diamond).
+     Checked, it fills with the boss bar's soul gradient and glows, and the
+     hint brightens from cave mist to bone. The hint is a second click
+     target. Facet strokes are hardcoded bone rgba (SVG data URIs can't
+     read CSS vars); the focus outline rotates with the element into a
+     diamond on purpose. */
+  .check-row { display: flex; align-items: center; gap: 10px; height: 32px; }
+  .check-row input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none; width: 14px; height: 14px;
+    flex: none; margin: 0 3px; padding: 0; cursor: pointer;
+    transform: rotate(45deg);
+    background: var(--raised) center / 100% no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cg fill='none' stroke='rgba(233,230,218,0.22)' stroke-width='1'%3E%3Crect x='4.5' y='4.5' width='5' height='5'/%3E%3Cpath d='M0 0l4.5 4.5M14 0L9.5 4.5M0 14l4.5-4.5M14 14L9.5 9.5'/%3E%3C/g%3E%3C/svg%3E");
+    border: 1px solid var(--tick); border-radius: 2px;
     transition: background 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
   }
-  .launch .check-row input[type="checkbox"]:hover { border-color: var(--tick); }
-  .launch .check-row input[type="checkbox"]:checked {
-    background: var(--s1) center / 11px no-repeat
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M1.5 5.5 4 8l4.5-6' fill='none' stroke='%23e9e6da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-    border-color: var(--s1); box-shadow: 0 0 8px var(--glow);
+  .check-row input[type="checkbox"]:hover {
+    border-color: var(--ink-2); box-shadow: 0 0 6px rgba(233, 230, 218, 0.16);
   }
-  .launch .check-row input[type="checkbox"]:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+  /* Checked fill is pale bone-white -- the facets flip dark so the cut
+     still reads against the light gem. */
+  .check-row input[type="checkbox"]:checked {
+    background: center / 100% no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cg fill='none' stroke='rgba(17,22,34,0.4)' stroke-width='1'%3E%3Crect x='4.5' y='4.5' width='5' height='5'/%3E%3Cpath d='M0 0l4.5 4.5M14 0L9.5 4.5M0 14l4.5-4.5M14 14L9.5 9.5'/%3E%3C/g%3E%3C/svg%3E"),
+      linear-gradient(135deg, #fdfcf6, #d9d5c6);
+    border-color: var(--ink); box-shadow: 0 0 10px rgba(233, 230, 218, 0.35);
+  }
+  .check-row input[type="checkbox"]:focus-visible { outline: 2px solid var(--s1); outline-offset: 3px; }
   /* Outranks .launch label: the hint is the placeholder register ("auto",
      "random"), not a carved field label. */
-  .launch .check-row .check-hint {
+  .check-row .check-hint {
     display: inline; font-family: var(--body); font-size: 13px;
     letter-spacing: normal; text-transform: none; color: var(--muted);
     margin: 0; cursor: pointer;
     transition: color 120ms ease;
   }
-  .launch .check-row input:checked ~ .check-hint { color: var(--ink); }
+  .check-row input:checked ~ .check-hint { color: var(--ink); }
   .launch .error { margin-top: 8px; color: var(--critical); font-size: 13px; }
   a.btn { text-decoration: none; display: inline-block; }
   a.btn[hidden] { display: none; }  /* same [hidden]-vs-display specificity trap as .launch form above */
@@ -299,6 +312,14 @@
   #replay-dialog label { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
   #replay-dialog #replay-episodes {
     width: 120px; font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+  }
+  /* Overrides row: prefilled with the run's recorded shape; a value is
+     sent only when changed, so untouched fields keep resume inheritance. */
+  #resume-dialog .resume-overrides { display: flex; gap: 16px; margin: 0 0 14px; }
+  #resume-dialog .resume-overrides label:not(.check-hint) { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+  #resume-dialog #resume-instances {
+    width: 72px; font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
   }
   #resume-dialog .choice { display: flex; align-items: center; gap: 8px; padding: 3px 0; margin: 0; font-family: var(--body); font-size: 14px; letter-spacing: normal; text-transform: none; color: var(--ink); }
@@ -363,6 +384,7 @@
       <div><label for="f-instances">Instances</label><input id="f-instances" name="instances" type="number" min="1" max="4" value="1"></div>
       <div><label for="f-boss">Boss</label><select id="f-boss" name="boss"></select></div>
       <div><label for="f-timesteps">Timesteps</label><input id="f-timesteps" name="timesteps" type="number" min="1" value="500000"></div>
+      <div><label for="f-headless">Headless</label><div class="check-row"><input id="f-headless" name="headless" type="checkbox"><label class="check-hint" for="f-headless">no game window</label></div></div>
       <details class="advanced">
         <summary>Advanced</summary>
         <div class="fields">
@@ -371,7 +393,6 @@
           <div><label for="f-batch-size">Batch size</label><input id="f-batch-size" name="batch_size" type="number" min="1"></div>
           <div><label for="f-n-epochs">N epochs</label><input id="f-n-epochs" name="n_epochs" type="number" min="1"></div>
           <div><label for="f-target-kl">Target KL</label><input id="f-target-kl" name="target_kl" type="number" min="0" step="0.005" placeholder="0.03"></div>
-          <div><label for="f-headless">Headless</label><div class="check-row"><input id="f-headless" name="headless" type="checkbox"><label class="check-hint" for="f-headless">no game window</label></div></div>
           <div><label for="f-seed">Seed</label><input id="f-seed" name="seed" type="number" placeholder="random"></div>
         </div>
       </details>
@@ -393,6 +414,10 @@
     <form method="dialog">
       <h2 id="resume-title">Resume</h2>
       <p class="resume-facts" id="resume-facts"></p>
+      <div class="resume-overrides">
+        <div><label for="resume-instances">Instances</label><input type="number" id="resume-instances" min="1" max="4"></div>
+        <div><label for="resume-headless">Headless</label><div class="check-row"><input id="resume-headless" type="checkbox"><label class="check-hint" for="resume-headless">no game window</label></div></div>
+      </div>
       <label class="choice">
         <input type="radio" name="resume-mode" id="resume-finish" checked>
         <span id="resume-finish-label">Finish the original target</span>
@@ -568,16 +593,20 @@ function niceTicks(lo, hi, n) {
   return ticks;
 }
 
-// series: {name, color, points:[{x,y}], kind:"line"|"dots", endDot:bool}
+// series: {name, color, points:[{x,y,color?}], kind:"line"|"dots", endDot:bool}
+// opts.legendItems: [{name, color}] replaces the series-derived legend, for
+// charts whose dots carry per-point colors the series list can't describe.
 function drawChart(card, opts) {
   card.querySelectorAll("svg, .tooltip, .legend").forEach(el => el.remove());
   const allPts = opts.series.flatMap(s => s.points);
   if (!allPts.length) return;
 
-  if (opts.series.length > 1) {
+  const legendItems = opts.legendItems ||
+    (opts.series.length > 1 ? opts.series : []);
+  if (legendItems.length) {
     const legend = document.createElement("div");
     legend.className = "legend";
-    for (const s of opts.series) {
+    for (const s of legendItems) {
       const item = document.createElement("span");
       const key = document.createElement("span");
       key.className = "key";
@@ -656,7 +685,7 @@ function drawChart(card, opts) {
   for (const s of opts.series) {
     if (s.kind === "dots") {
       for (const p of s.points)
-        el("circle", { cx: X(p.x), cy: Y(p.y), r: 2.5, fill: s.color,
+        el("circle", { cx: X(p.x), cy: Y(p.y), r: 2.5, fill: p.color || s.color,
                        stroke: css("--surface"), "stroke-width": 1 });
     } else {
       const d = s.points.map((p, i) => (i ? "L" : "M") + X(p.x) + " " + Y(p.y)).join(" ");
@@ -809,11 +838,13 @@ function render() {
     "session average"));
   tiles.appendChild(tile("ETA", st.live ? fmtDur(st.eta_s) : "—",
     st.live ? "at current pace" : "run stopped"));
+  tiles.appendChild(tile("Elapsed", fmtDur(st.elapsed_session_s),
+    st.elapsed_total_s != null ? "total " + fmtDur(st.elapsed_total_s) : ""));
   tiles.appendChild(tile("Generations", String(gens.length),
-    latest ? "win rate " + fmtPct(latest.win_rate) : ""));
-  tiles.appendChild(tile("Episodes", String(run.episodes.length), "all sessions"));
+    run.episodes.length + " episode" + (run.episodes.length === 1 ? "" : "s") +
+    " · " + st.sessions + " session" + (st.sessions === 1 ? "" : "s")));
   tiles.appendChild(tile("Wins", String(st.wins),
-    "all sessions · " + st.sessions + " session" + (st.sessions === 1 ? "" : "s")));
+    latest ? "win rate " + fmtPct(latest.win_rate) : ""));
 
   const s1 = css("--s1"), s2 = css("--s2"), muted = css("--muted");
   const genAt = new Map(gens.map(g => [g.timestep, g.gen]));
@@ -844,24 +875,41 @@ function render() {
     xTipFormat: genTip,
     xLabel: "timestep", yLabel: "steps",
   });
-  const eps = run.episodes.map(e => ({ x: e.t, y: e.r }));
-  const genByTime = new Map(run.episodes.map(e => [e.t, e.gen]));
+  /* Dots colored by outcome so the reward cloud reads as two populations:
+     statue gold = win (the win-rate line's color), red = loss (a death is
+     a death), cave mist = unrecorded (pre-outcome-column sessions,
+     recovery rows). The rolling mean stays soul blue; gold/red validated
+     against the surface, with the tooltip's won/lost text as the
+     non-color channel. */
+  const lossRed = css("--critical");
+  const dotColor = e => e.won === true ? s2 : e.won === false ? lossRed : muted;
+  const eps = run.episodes.map(e => ({ x: e.t, y: e.r, color: dotColor(e) }));
+  const epByTime = new Map(run.episodes.map(e => [e.t, e]));
+  const legendItems = [{ name: "win", color: s2 }, { name: "loss", color: lossRed }];
+  if (run.episodes.some(e => e.won == null))
+    legendItems.push({ name: "unrecorded", color: muted });
+  legendItems.push({ name: "rolling mean (20)", color: s1 });
   drawChart(document.getElementById("chart-episodes"), {
     height: 220,
     series: [
       { name: "episode reward", color: muted, kind: "dots", points: eps, snapExempt: false },
       { name: "rolling mean (20)", color: s1, points: rollingMean(eps, 20), endDot: false },
     ],
+    legendItems,
     yFormat: v => v.toFixed(1),
     xFormat: fmtClock,
     xTipFormat: x => fmtDate(x) + " · " + fmtClock(x),
     xMarks: eps.length ? midnightsBetween(eps[0].x, eps[eps.length - 1].x)
                            .map(x => ({ x, label: fmtDate(x) })) : [],
     xLabel: "time", yLabel: "reward",
-    tipMeta: gens.length ? x => {
-      const g = genByTime.get(x);
-      return g == null ? "gen in progress" : "gen " + g;
-    } : null,
+    tipMeta: x => {
+      const e = epByTime.get(x);
+      const parts = [];
+      if (gens.length)
+        parts.push(e && e.gen != null ? "gen " + e.gen : "gen in progress");
+      if (e && e.won != null) parts.push(e.won ? "won" : "lost");
+      return parts.join(" · ") || null;
+    },
   });
 
   const config = document.getElementById("config");
@@ -1213,7 +1261,8 @@ async function renderPrevRuns(activeNow) {
 
 /* The resume dialog: train.py now inherits a resume's settings from the
    run's own config.jsonl and, with no --timesteps at all, finishes to the
-   recorded target -- so "finish the run" sends nothing but the run id,
+   recorded target -- so "finish the run" sends nothing but the run id
+   (plus any instances/headless override changed from the recorded shape),
    and the remainder shown in the label is display-only. Adding more steps
    is the explicit choice and the only case that sends timesteps. */
 const resumeDialog = document.getElementById("resume-dialog");
@@ -1239,6 +1288,10 @@ function openResumeDialog(r) {
   title.textContent = (noCheckpoint ? "Restart " : "Resume ") + r.id;
   confirmBtn.textContent = noCheckpoint ? "Restart" : "Resume";
   extra.value = "500000";  // fresh per open
+  // Overrides prefill with the run's recorded shape; close() sends each
+  // only when changed, so an untouched field keeps resume inheritance.
+  document.getElementById("resume-instances").value = r.instances || 1;
+  document.getElementById("resume-headless").checked = r.headless === true;
 
   if (noCheckpoint) {
     // No checkpoint (nothing to resume FROM): this restarts the run from
@@ -1330,8 +1383,8 @@ resumeDialog.addEventListener("close", async () => {
   if (!r.timestep) {
     // No checkpoint: the server restarts from the run's own config, but honors
     // the step budget chosen here -- the original target, or a custom amount.
-    // Everything else (instances, gen_every, the model params) comes from the
-    // run's config, so the page sends only the timesteps it is overriding.
+    // Everything else (gen_every, the model params) comes from the run's
+    // config; the page sends only what this dialog overrides.
     const timesteps = finish ? (r.target_timestep || 0) : extra;
     if (!timesteps || timesteps < 1) {
       launchError("no steps to collect — enter how many");
@@ -1339,10 +1392,11 @@ resumeDialog.addEventListener("close", async () => {
     }
     body = { mode: "resume", run_id: r.id, timesteps: timesteps };
   } else if (finish) {
-    // Finish the recorded target: send nothing but the id. train.py
-    // inherits instances/gen_every from the run's config and computes
-    // the remaining budget itself -- forwarding values here would turn
-    // them into explicit CLI flags and defeat that inheritance.
+    // Finish the recorded target: send nothing but the id (plus any
+    // overrides below). train.py inherits instances/gen_every from the
+    // run's config and computes the remaining budget itself --
+    // forwarding unchanged values here would turn them into explicit
+    // CLI flags and defeat that inheritance.
     body = { mode: "resume", run_id: r.id };
   } else {
     if (!extra || extra < 1) {
@@ -1353,6 +1407,14 @@ resumeDialog.addEventListener("close", async () => {
     // additive when typed.
     body = { mode: "resume", run_id: r.id, timesteps: extra };
   }
+  // Overrides ride along only when changed from the run's recorded shape:
+  // an untouched field stays unsent, so inheritance still applies. An
+  // unchecked box on a recorded-headless run is an explicit false, which
+  // the launcher maps to --no-headless.
+  const instOverride = parseInt(document.getElementById("resume-instances").value, 10);
+  if (instOverride && instOverride !== (r.instances || 1)) body.instances = instOverride;
+  const headlessOverride = document.getElementById("resume-headless").checked;
+  if (headlessOverride !== (r.headless === true)) body.headless = headlessOverride;
   launchError("");
   startBtn.disabled = true;
   try {

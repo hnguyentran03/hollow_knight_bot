@@ -179,6 +179,19 @@ def test_resolve_run_params_spans_wallclock_across_monitor_sessions(tmp_path):
     assert wall == pytest.approx(700.0)
 
 
+def test_resolve_run_params_reads_outcome_column_monitors(tmp_path):
+    # Newer sessions append won/boss_damage_frac after r,l,t; the wall-clock
+    # span must still see those rows.
+    (tmp_path / "monitor_x.monitor.csv").write_text(
+        '#{"t_start": 1000.0, "env_id": "None"}\n'
+        "r,l,t,won,boss_damage_frac\n"
+        "-1.0,100,100.0,True,0.9\n"
+        "-1.0,100,390.0,,\n")
+    append_reset_span(reset_log_path(tmp_path, 9020), span_s=10.0, t=1.0)
+    _, wall = resolve_run_params(tmp_path)
+    assert wall == pytest.approx(390.0)
+
+
 def test_resolve_run_params_falls_back_to_sidecar_count_for_instances(tmp_path):
     # No config.jsonl: infer N from the number of per-port sidecars.
     append_reset_span(reset_log_path(tmp_path, 9020), span_s=1.0, t=1.0)

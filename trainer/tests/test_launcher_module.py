@@ -475,6 +475,25 @@ def test_delete_moves_the_run_to_trash_intact(tmp_path):
     assert (dest / "checkpoints" / "gen_0001.zip").read_text() == "weights"
 
 
+def test_delete_sweeps_launcher_files_into_the_trash_bundle(tmp_path):
+    # The run's launcher bookkeeping (log, stop marker) must ride along into
+    # the same trash bundle -- moved, never destroyed -- while other runs'
+    # files stay put. Exports are the deliberate exception and stay outside.
+    _make_run(tmp_path, "done-run")
+    d = tmp_path / "launcher"
+    d.mkdir()
+    (d / "done-run.log").write_text("log tail")
+    (d / "done-run.stopped").write_text('{"run_id": "done-run"}')
+    (d / "other-run.log").write_text("not mine")
+    trashed = launcher.delete(tmp_path, "done-run")
+    dest = tmp_path / "trash" / trashed / "launcher"
+    assert (dest / "done-run.log").read_text() == "log tail"
+    assert (dest / "done-run.stopped").exists()  # preserved, not unlinked
+    assert not (d / "done-run.log").exists()
+    assert not (d / "done-run.stopped").exists()
+    assert (d / "other-run.log").exists()
+
+
 def test_delete_refuses_the_active_launched_run(tmp_path, monkeypatch):
     _make_run(tmp_path, "busy", mtime=1000.0)
     monkeypatch.setattr(launcher, "status",
@@ -657,6 +676,32 @@ def test_command_omits_unset_or_false_headless(tmp_path, stub_trainer):
                    {"run_id": "r1", "headless": False}):
         assert "--headless" not in launcher.command(tmp_path, dict(params),
                                                     platform="linux")
+
+
+def test_command_resume_headless_false_forces_headed(tmp_path, stub_trainer):
+    # The resume dialog can force a recorded-headless run back to headed:
+    # an explicit false maps to --no-headless (absent still inherits).
+    cmd = launcher.command(
+        tmp_path, {"mode": "resume", "run_id": "old", "headless": False},
+        platform="linux")
+    assert "--no-headless" in cmd
+    assert "--headless" not in [c for c in cmd if c != "--no-headless"]
+    cmd = launcher.command(
+        tmp_path, {"mode": "resume", "run_id": "old"}, platform="linux")
+    assert "--no-headless" not in cmd  # unset stays unset: inheritance
+
+
+def test_restart_params_request_false_overrides_recorded_headless(tmp_path):
+    # Forcing headed from the dialog must beat the aborted attempt's
+    # recorded headless on a checkpoint-less restart too.
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.jsonl").write_text(
+        json.dumps({"timesteps": 1000, "headless": True}) + "\n")
+    params = launcher._restart_params(run_dir, {"mode": "resume",
+                                                "run_id": "r1",
+                                                "headless": False})
+    assert params.get("headless") is not True
 
 
 def test_validate_rejects_non_bool_headless(tmp_path, stub_trainer):

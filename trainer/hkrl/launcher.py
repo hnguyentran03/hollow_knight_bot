@@ -69,15 +69,15 @@ def _clear_stop_marker(root, run_id) -> None:
     _stop_marker(root, run_id).unlink(missing_ok=True)
 
 
-def _trash(root, run_dir: Path) -> str:
+def _trash(root, run_dir: Path) -> Path:
     """Move a run dir under <root>/trash/<name>-<timestamp>; returns the dest
-    name. A move, never an rmtree -- see delete()'s note; shared by delete()
+    path. A move, never an rmtree -- see delete()'s note; shared by delete()
     and the checkpoint-less-resume restart so both retire a dir the same way."""
     trash = Path(root).expanduser() / "trash"
     trash.mkdir(parents=True, exist_ok=True)
     dest = trash / f"{run_dir.name}-{time.strftime('%Y%m%d_%H%M%S')}"
     shutil.move(str(run_dir), str(dest))
-    return dest.name
+    return dest
 
 
 def _restart_params(run_dir: Path, request: dict) -> dict:
@@ -173,13 +173,15 @@ _STR_NEW_ONLY = ("boss",)
 # rule as _ALWAYS.
 _FLOAT_ALWAYS = ("target_kl",)
 
-# Boolean and forwardable in BOTH modes, mapped to a bare flag. On resume
-# train.py inherits the last session's recorded value when the flag is
-# absent, so an unset field must stay unset (same rule as _ALWAYS); an
-# explicit true forces it on. False counts as unset here -- the launch
-# form never sends it, and forcing a headless run back to headed takes a
-# CLI --no-headless. _restart_params carries the recorded value because a
-# checkpoint-less restart runs in 'new' mode, outside resume inheritance.
+# Boolean and forwardable in BOTH modes, mapped to a bare flag pair. On
+# resume train.py inherits the last session's recorded value when the flag
+# is absent, so an unset field must stay unset (same rule as _ALWAYS); an
+# explicit true forces it on (--headless), and an explicit false forces a
+# recorded-headless run back to headed (--no-headless, resume mode only --
+# 'new' mode's default is headed, so false just stays omitted there).
+# _restart_params carries the recorded value because a checkpoint-less
+# restart runs in 'new' mode, outside resume inheritance; a request's
+# explicit false beats the recorded value there too.
 _BOOL_ALWAYS = ("headless",)
 
 
@@ -223,11 +225,11 @@ def _validate(params: dict) -> dict:
             raise ValueError(f"{key} must be >= 0")
     for key in _BOOL_ALWAYS:
         value = params.get(key)
-        if value in (None, "", False):
+        if value in (None, ""):
             continue
-        if value is not True:
+        if not isinstance(value, bool):
             raise ValueError(f"{key} must be a boolean")
-        clean[key] = True
+        clean[key] = value
     boss = params.get("boss")
     if boss not in (None, ""):
         if boss not in BOSSES:
@@ -271,8 +273,10 @@ def command(root, params: dict, platform: str = sys.platform) -> list[str]:
         if key in p:
             cmd += ["--" + key.replace("_", "-"), str(p[key])]
     for key in _BOOL_ALWAYS:
-        if p.get(key):
+        if p.get(key) is True:
             cmd += ["--" + key.replace("_", "-")]
+        elif p.get(key) is False and p["mode"] == "resume":
+            cmd += ["--no-" + key.replace("_", "-")]
     return _caffeinate(cmd, platform)
 
 
@@ -534,5 +538,14 @@ def delete(root, run_id) -> str:
                     f"{run_id!r} shows activity in the last {LIVE_WINDOW_S}s; "
                     "if a terminal is training it, stop that first")
         dest = _trash(root, run_dir)
-        _clear_stop_marker(root, run_id)  # the run is gone; drop its marker
-        return dest
+        # Sweep the run's launcher bookkeeping (<id>.log, <id>.stopped, any
+        # stale <id>.pid/.pid.tmp) into the same bundle -- moved, never
+        # destroyed, like the run dir itself. Only here, not in _trash():
+        # the checkpoint-less-resume restart reuses the run id and must
+        # keep appending to its existing log. The dot after run_id keeps
+        # "run1.*" from matching "run12.log".
+        for stray in _dir(root).glob(f"{run_id}.*"):
+            bundle = dest / "launcher"
+            bundle.mkdir(exist_ok=True)
+            shutil.move(str(stray), str(bundle / stray.name))
+        return dest.name

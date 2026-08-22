@@ -340,11 +340,11 @@ def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs
     The monitor is RealEpisodeVecMonitor so isolated-mode async-reset
     throwaway episodes never reach the monitor CSV, the dashboard, or
     ep_rew_mean. It sits below the normalizer so its episode records carry
-    raw rewards and true lengths. It gets no info_keywords: VecMonitor indexes
-    every keyword into each done step's info, and the supervisor's recovery
-    frames carry only terminal_observation, so a keyword would KeyError there
-    and kill the run on its first recovery. GenerationCallback reads
-    won/boss_damage_frac from the raw infos instead.
+    raw rewards and true lengths. info_keywords puts won/boss_damage_frac in
+    each episode's CSV row so the dashboard can color episodes by outcome;
+    RealEpisodeVecMonitor skips keys a done step lacks (the supervisor's
+    recovery frames carry only terminal_observation), leaving those columns
+    blank. GenerationCallback still reads outcomes from the raw infos.
 
     No frame stacking: one observation is an instant, and the FSM one-hot
     does not encode how long the boss has been in a state -- but the recurrent
@@ -363,7 +363,8 @@ def build_env(ports, relaunch, run_dir, resume_vecnorm=None, **supervisor_kwargs
     # Session-stamped so a resumed run appends a new episode log instead of
     # truncating the previous session's.
     mon = RealEpisodeVecMonitor(
-        supervisor, filename=str(Path(run_dir) / f"monitor_{session}"))
+        supervisor, filename=str(Path(run_dir) / f"monitor_{session}"),
+        info_keywords=("won", "boss_damage_frac"))
     if resume_vecnorm is not None:
         # The saved statistics are the distribution the resumed weights were
         # trained under; loading them together is what makes a resume a

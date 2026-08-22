@@ -83,6 +83,48 @@ def test_monitor_torn_last_row_is_skipped(tmp_path):
     assert [e["r"] for e in run["episodes"]] == [1.0]
 
 
+def test_episodes_carry_outcome_columns_when_present(tmp_path):
+    # New-format CSV: won/boss_damage_frac after r,l,t. A blank won (a
+    # recovery row's restval) must read as unknown (None), never a loss.
+    path = tmp_path / "monitor_x.monitor.csv"
+    path.write_text('#{"t_start": 0, "env_id": "None"}\n'
+                    "r,l,t,won,boss_damage_frac\n"
+                    "1.0,100,5.0,True,0.9\n"
+                    "2.0,200,6.0,False,0.4\n"
+                    "3.0,300,7.0,,\n")
+    eps = load_run(tmp_path, now=0)["episodes"]
+    assert [e.get("won") for e in eps] == [True, False, None]
+    assert [e.get("boss_damage_frac") for e in eps] == [0.9, 0.4, None]
+
+
+def test_episodes_from_old_csvs_have_no_outcome(tmp_path):
+    _write_monitor(tmp_path, "old", t_start=0, rows=[(1.0, 100, 5.0)])
+    eps = load_run(tmp_path, now=0)["episodes"]
+    assert eps[0].get("won") is None
+    assert eps[0].get("boss_damage_frac") is None
+
+
+def test_elapsed_splits_session_from_total(tmp_path):
+    # Two sessions (the wall-clock drop marks the resume): the session
+    # elapsed is the last session's final wall_clock_s, the total sums
+    # every session's final wall_clock_s.
+    _write_manifest(tmp_path, [
+        _gen(1, 15_000, 1000.0),
+        _gen(2, 30_000, 2000.0),
+        _gen(3, 45_000, 900.0),
+    ])
+    st = load_run(tmp_path, now=0)["status"]
+    assert st["elapsed_session_s"] == 900.0
+    assert st["elapsed_total_s"] == 2900.0
+
+
+def test_elapsed_is_none_without_a_manifest(tmp_path):
+    _write_config(tmp_path)
+    st = load_run(tmp_path, now=0)["status"]
+    assert st["elapsed_session_s"] is None
+    assert st["elapsed_total_s"] is None
+
+
 def test_liveness_comes_from_file_mtimes(tmp_path):
     _write_config(tmp_path)
     _touch_all(tmp_path, 10_000.0)
@@ -209,7 +251,19 @@ def test_scan_runs_carries_the_boss(tmp_path):
     assert old["boss"] is None
 
 
-def test_scan_runs_of_a_missing_root_is_empty(tmp_path):
+def test_scan_runs_carries_headless(tmp_path):
+    # The resume dialog prefills its headless override from the summary;
+    # None where an older config predates the field.
+    d = tmp_path / "runs" / "r"
+    d.mkdir(parents=True)
+    with (d / "config.jsonl").open("a") as f:
+        f.write(json.dumps({"run_id": "r", "headless": True}) + "\n")
+    old = tmp_path / "runs" / "old"
+    old.mkdir()
+    _write_config(old)
+    runs = {s["id"]: s for s in scan_runs(tmp_path, now=0)}
+    assert runs["r"]["headless"] is True
+    assert runs["old"]["headless"] is None
     assert scan_runs(tmp_path / "nowhere", now=0) == []
 
 
