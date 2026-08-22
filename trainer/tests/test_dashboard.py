@@ -384,3 +384,19 @@ def test_post_export_maps_errors_to_400(base_url, monkeypatch):
 def test_page_wires_the_export_button(base_url):
     _, _, body = _get(base_url + "/")
     assert b"/api/export" in body
+
+
+def test_api_launcher_reports_and_dismisses_the_last_exit(base_url,
+                                                          tmp_path):
+    d = tmp_path / "launcher"
+    d.mkdir(exist_ok=True)
+    (d / "r1.exit").write_text(json.dumps(
+        {"run_id": "r1", "exit_code": 1, "ended_at": 5.0,
+         "reason": ["startup failed: squatted"], "log_excerpt": "tail"}))
+    _, _, body = _get(base_url + "/api/launcher")
+    assert json.loads(body)["last_exit"]["reason"] == [
+        "startup failed: squatted"]
+    status, data = _post(base_url + "/api/launcher/dismiss-exit", {})
+    assert status == 200 and data == {"dismissed": True}
+    _, _, body = _get(base_url + "/api/launcher")
+    assert json.loads(body)["last_exit"] is None
