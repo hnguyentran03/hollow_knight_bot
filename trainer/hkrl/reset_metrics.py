@@ -102,8 +102,10 @@ def _wallclock_from_monitors(run_dir) -> float:
             continue
         starts.append(t_start)
         for row in lines[2:]:
+            # r,l,t always lead; newer sessions append info_keyword columns
+            # (won, boss_damage_frac) that this span calculation ignores.
             parts = row.split(",")
-            if len(parts) != 3:
+            if len(parts) < 3:
                 continue
             try:
                 ends.append(t_start + float(parts[2]))

@@ -568,16 +568,20 @@ function niceTicks(lo, hi, n) {
   return ticks;
 }
 
-// series: {name, color, points:[{x,y}], kind:"line"|"dots", endDot:bool}
+// series: {name, color, points:[{x,y,color?}], kind:"line"|"dots", endDot:bool}
+// opts.legendItems: [{name, color}] replaces the series-derived legend, for
+// charts whose dots carry per-point colors the series list can't describe.
 function drawChart(card, opts) {
   card.querySelectorAll("svg, .tooltip, .legend").forEach(el => el.remove());
   const allPts = opts.series.flatMap(s => s.points);
   if (!allPts.length) return;
 
-  if (opts.series.length > 1) {
+  const legendItems = opts.legendItems ||
+    (opts.series.length > 1 ? opts.series : []);
+  if (legendItems.length) {
     const legend = document.createElement("div");
     legend.className = "legend";
-    for (const s of opts.series) {
+    for (const s of legendItems) {
       const item = document.createElement("span");
       const key = document.createElement("span");
       key.className = "key";
@@ -656,7 +660,7 @@ function drawChart(card, opts) {
   for (const s of opts.series) {
     if (s.kind === "dots") {
       for (const p of s.points)
-        el("circle", { cx: X(p.x), cy: Y(p.y), r: 2.5, fill: s.color,
+        el("circle", { cx: X(p.x), cy: Y(p.y), r: 2.5, fill: p.color || s.color,
                        stroke: css("--surface"), "stroke-width": 1 });
     } else {
       const d = s.points.map((p, i) => (i ? "L" : "M") + X(p.x) + " " + Y(p.y)).join(" ");
@@ -809,11 +813,13 @@ function render() {
     "session average"));
   tiles.appendChild(tile("ETA", st.live ? fmtDur(st.eta_s) : "—",
     st.live ? "at current pace" : "run stopped"));
+  tiles.appendChild(tile("Elapsed", fmtDur(st.elapsed_session_s),
+    st.elapsed_total_s != null ? "total " + fmtDur(st.elapsed_total_s) : ""));
   tiles.appendChild(tile("Generations", String(gens.length),
-    latest ? "win rate " + fmtPct(latest.win_rate) : ""));
-  tiles.appendChild(tile("Episodes", String(run.episodes.length), "all sessions"));
+    run.episodes.length + " episode" + (run.episodes.length === 1 ? "" : "s") +
+    " · " + st.sessions + " session" + (st.sessions === 1 ? "" : "s")));
   tiles.appendChild(tile("Wins", String(st.wins),
-    "all sessions · " + st.sessions + " session" + (st.sessions === 1 ? "" : "s")));
+    latest ? "win rate " + fmtPct(latest.win_rate) : ""));
 
   const s1 = css("--s1"), s2 = css("--s2"), muted = css("--muted");
   const genAt = new Map(gens.map(g => [g.timestep, g.gen]));
@@ -844,24 +850,39 @@ function render() {
     xTipFormat: genTip,
     xLabel: "timestep", yLabel: "steps",
   });
-  const eps = run.episodes.map(e => ({ x: e.t, y: e.r }));
-  const genByTime = new Map(run.episodes.map(e => [e.t, e.gen]));
+  /* Dots colored by outcome so the reward cloud reads as two populations:
+     statue gold = win (the win-rate line's color), soul blue = loss, cave
+     mist = unrecorded (pre-outcome-column sessions, recovery rows). The
+     rolling mean steps aside into bone ink so blue stays unambiguous. */
+  const ink2 = css("--ink-2");
+  const dotColor = e => e.won === true ? s2 : e.won === false ? s1 : muted;
+  const eps = run.episodes.map(e => ({ x: e.t, y: e.r, color: dotColor(e) }));
+  const epByTime = new Map(run.episodes.map(e => [e.t, e]));
+  const legendItems = [{ name: "win", color: s2 }, { name: "loss", color: s1 }];
+  if (run.episodes.some(e => e.won == null))
+    legendItems.push({ name: "unrecorded", color: muted });
+  legendItems.push({ name: "rolling mean (20)", color: ink2 });
   drawChart(document.getElementById("chart-episodes"), {
     height: 220,
     series: [
       { name: "episode reward", color: muted, kind: "dots", points: eps, snapExempt: false },
-      { name: "rolling mean (20)", color: s1, points: rollingMean(eps, 20), endDot: false },
+      { name: "rolling mean (20)", color: ink2, points: rollingMean(eps, 20), endDot: false },
     ],
+    legendItems,
     yFormat: v => v.toFixed(1),
     xFormat: fmtClock,
     xTipFormat: x => fmtDate(x) + " · " + fmtClock(x),
     xMarks: eps.length ? midnightsBetween(eps[0].x, eps[eps.length - 1].x)
                            .map(x => ({ x, label: fmtDate(x) })) : [],
     xLabel: "time", yLabel: "reward",
-    tipMeta: gens.length ? x => {
-      const g = genByTime.get(x);
-      return g == null ? "gen in progress" : "gen " + g;
-    } : null,
+    tipMeta: x => {
+      const e = epByTime.get(x);
+      const parts = [];
+      if (gens.length)
+        parts.push(e && e.gen != null ? "gen " + e.gen : "gen in progress");
+      if (e && e.won != null) parts.push(e.won ? "won" : "lost");
+      return parts.join(" · ") || null;
+    },
   });
 
   const config = document.getElementById("config");

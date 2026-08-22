@@ -54,6 +54,20 @@ def test_a_short_training_run_writes_generations_and_a_manifest(tmp_path):
     assert list(tmp_path.glob("monitor_*")) != []  # VecMonitor session file
 
 
+def test_build_env_monitor_logs_outcome_columns(tmp_path):
+    """The monitor CSV must carry won and boss_damage_frac so the dashboard
+    can color episode dots by outcome."""
+    with FakeGame(_episodes(2)) as fg:
+        env, _ = train.build_env([fg.port], relaunch=lambda s: None,
+                                 run_dir=tmp_path)
+        try:
+            assert env.venv.info_keywords == ("won", "boss_damage_frac")
+        finally:
+            env.close()
+    csv = next(tmp_path.glob("monitor_*.monitor.csv"))
+    assert csv.read_text().splitlines()[1] == "r,l,t,won,boss_damage_frac"
+
+
 def test_build_env_monitor_filters_reset_pending_episodes(tmp_path):
     """The monitor layer must be the reset-aware subclass, or isolated-mode
     throwaway episodes land in the CSV, the dashboard, and ep_rew_mean."""

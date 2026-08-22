@@ -475,6 +475,25 @@ def test_delete_moves_the_run_to_trash_intact(tmp_path):
     assert (dest / "checkpoints" / "gen_0001.zip").read_text() == "weights"
 
 
+def test_delete_sweeps_launcher_files_into_the_trash_bundle(tmp_path):
+    # The run's launcher bookkeeping (log, stop marker) must ride along into
+    # the same trash bundle -- moved, never destroyed -- while other runs'
+    # files stay put. Exports are the deliberate exception and stay outside.
+    _make_run(tmp_path, "done-run")
+    d = tmp_path / "launcher"
+    d.mkdir()
+    (d / "done-run.log").write_text("log tail")
+    (d / "done-run.stopped").write_text('{"run_id": "done-run"}')
+    (d / "other-run.log").write_text("not mine")
+    trashed = launcher.delete(tmp_path, "done-run")
+    dest = tmp_path / "trash" / trashed / "launcher"
+    assert (dest / "done-run.log").read_text() == "log tail"
+    assert (dest / "done-run.stopped").exists()  # preserved, not unlinked
+    assert not (d / "done-run.log").exists()
+    assert not (d / "done-run.stopped").exists()
+    assert (d / "other-run.log").exists()
+
+
 def test_delete_refuses_the_active_launched_run(tmp_path, monkeypatch):
     _make_run(tmp_path, "busy", mtime=1000.0)
     monkeypatch.setattr(launcher, "status",

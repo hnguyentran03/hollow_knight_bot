@@ -50,21 +50,35 @@ def _episodes(run_dir: Path) -> list[dict]:
     episodes = []
     for csv in run_dir.glob("monitor_*.monitor.csv"):
         lines = csv.read_text().splitlines()
-        if not lines or not lines[0].startswith("#"):
+        if len(lines) < 2 or not lines[0].startswith("#"):
             continue
         try:
             t_start = float(json.loads(lines[0][1:])["t_start"])
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             continue
+        # Column layout comes from the file's own header line: r,l,t always
+        # lead (SB3 appends info_keywords after), but only newer sessions
+        # carry won/boss_damage_frac, and one run can hold both formats.
+        columns = lines[1].split(",")
         for row in lines[2:]:
             parts = row.split(",")
-            if len(parts) != 3:
+            if len(parts) != len(columns):
                 continue
+            fields = dict(zip(columns, parts))
             try:
-                episodes.append({"r": float(parts[0]), "l": int(parts[1]),
-                                 "t": t_start + float(parts[2])})
-            except ValueError:
+                episode = {"r": float(fields["r"]), "l": int(fields["l"]),
+                           "t": t_start + float(fields["t"])}
+            except (KeyError, ValueError):
                 continue
+            # Blank cells (a pre-change session, or a recovery row's
+            # restval) stay None: unknown outcome, never a loss.
+            won = fields.get("won")
+            episode["won"] = won == "True" if won in ("True", "False") else None
+            try:
+                episode["boss_damage_frac"] = float(fields["boss_damage_frac"])
+            except (KeyError, ValueError):
+                episode["boss_damage_frac"] = None
+            episodes.append(episode)
     episodes.sort(key=lambda e: e["t"])
     return episodes
 
@@ -125,6 +139,17 @@ def _steps_per_hour(generations: list[dict]) -> float | None:
     return (last["timestep"] - start_timestep) / wall * 3600.0
 
 
+def _elapsed(generations: list[dict]) -> tuple[float | None, float | None]:
+    """(last session's elapsed, whole-of-run elapsed), in seconds. Each
+    session's final wall_clock_s is its length; both figures advance only
+    when a generation saves, so a live readout lags by up to gen_every."""
+    sessions = _sessions(generations)
+    if not sessions:
+        return None, None
+    finals = [s[-1].get("wall_clock_s", 0.0) for s in sessions]
+    return finals[-1], sum(finals)
+
+
 def _wins(generations: list[dict]) -> int:
     """Whole-of-run win total. Each manifest line records the generation's
     win_rate over its episode count, so the count of wins is recoverable
@@ -159,6 +184,7 @@ def load_run(run_dir, now: float | None = None) -> dict:
 
     timestep = generations[-1]["timestep"] if generations else 0
     rate = _steps_per_hour(generations)
+    elapsed_session, elapsed_total = _elapsed(generations)
     target = _target_timestep(generations, config)
     eta_s = None
     if rate and target is not None and timestep < target:
@@ -180,6 +206,8 @@ def load_run(run_dir, now: float | None = None) -> dict:
             "target_timestep": target,
             "steps_per_hour": rate,
             "eta_s": eta_s,
+            "elapsed_session_s": elapsed_session,
+            "elapsed_total_s": elapsed_total,
             "wins": _wins(generations),
             "sessions": len(configs),
         },

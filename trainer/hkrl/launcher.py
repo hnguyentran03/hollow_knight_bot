@@ -69,15 +69,15 @@ def _clear_stop_marker(root, run_id) -> None:
     _stop_marker(root, run_id).unlink(missing_ok=True)
 
 
-def _trash(root, run_dir: Path) -> str:
+def _trash(root, run_dir: Path) -> Path:
     """Move a run dir under <root>/trash/<name>-<timestamp>; returns the dest
-    name. A move, never an rmtree -- see delete()'s note; shared by delete()
+    path. A move, never an rmtree -- see delete()'s note; shared by delete()
     and the checkpoint-less-resume restart so both retire a dir the same way."""
     trash = Path(root).expanduser() / "trash"
     trash.mkdir(parents=True, exist_ok=True)
     dest = trash / f"{run_dir.name}-{time.strftime('%Y%m%d_%H%M%S')}"
     shutil.move(str(run_dir), str(dest))
-    return dest.name
+    return dest
 
 
 def _restart_params(run_dir: Path, request: dict) -> dict:
@@ -534,5 +534,14 @@ def delete(root, run_id) -> str:
                     f"{run_id!r} shows activity in the last {LIVE_WINDOW_S}s; "
                     "if a terminal is training it, stop that first")
         dest = _trash(root, run_dir)
-        _clear_stop_marker(root, run_id)  # the run is gone; drop its marker
-        return dest
+        # Sweep the run's launcher bookkeeping (<id>.log, <id>.stopped, any
+        # stale <id>.pid/.pid.tmp) into the same bundle -- moved, never
+        # destroyed, like the run dir itself. Only here, not in _trash():
+        # the checkpoint-less-resume restart reuses the run id and must
+        # keep appending to its existing log. The dot after run_id keeps
+        # "run1.*" from matching "run12.log".
+        for stray in _dir(root).glob(f"{run_id}.*"):
+            bundle = dest / "launcher"
+            bundle.mkdir(exist_ok=True)
+            shutil.move(str(stray), str(bundle / stray.name))
+        return dest.name
