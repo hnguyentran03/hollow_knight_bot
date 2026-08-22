@@ -45,7 +45,7 @@ def _listener_launcher(launched):
     the port and sleeps. Asserts the relaunch contract at call time: any
     prior holder of the port must already be dead AND reaped."""
 
-    def launch(port, app, visible, headless=False):
+    def launch(port, app, visible, headless=False, timescale=1.0):
         for _, prior in launched:
             assert prior.poll() is not None, (
                 "relaunch() must terminate and reap the old holder "
@@ -63,7 +63,7 @@ def _fleet_launcher(launched):
     slot while every other slot's process is alive, so only a prior holder
     of the SAME port must already be dead and reaped."""
 
-    def launch(port, app, visible, headless=False):
+    def launch(port, app, visible, headless=False, timescale=1.0):
         for p, prior in launched:
             assert p != port or prior.poll() is not None, (
                 "relaunch() must terminate and reap the old holder of this "
@@ -200,7 +200,7 @@ def test_fleet_binds_each_slot_to_its_own_app_across_relaunches(tmp_path):
     directory."""
     seen = []
 
-    def launch(port, app, visible, headless=False):
+    def launch(port, app, visible, headless=False, timescale=1.0):
         seen.append((port, app))
         return _spawn_port_listener(port)
 
@@ -225,7 +225,7 @@ class _FakeProc:
 def _ordering_harness(events, prepare=None):
     return GameProcess(
         port=_free_port(), app=Path("/fake"),
-        launch=lambda port, app, visible, headless=False: (events.append("launch"), _FakeProc())[1],
+        launch=lambda port, app, visible, headless=False, timescale=1.0: (events.append("launch"), _FakeProc())[1],
         shutdown=lambda procs: events.append("shutdown"),
         wait_for_port=lambda *a, **k: None,
         prepare=prepare,
@@ -265,7 +265,7 @@ def test_fleet_threads_one_prepare_per_slot():
     fleet = GameFleet(
         ports, app=Path("/fake"),
         prepares=[lambda: events.append("p0"), lambda: events.append("p1")],
-        launch=lambda port, app, visible, headless=False: _FakeProc(),
+        launch=lambda port, app, visible, headless=False, timescale=1.0: _FakeProc(),
         shutdown=lambda procs: None,
         wait_for_port=lambda *a, **k: None,
     )
@@ -308,6 +308,34 @@ def test_launch_default_argv_is_bare_binary(monkeypatch):
     assert calls[0] == ["/tmp/game-binary"]
 
 
+def test_launch_exports_timescale_env(monkeypatch):
+    import launch_instances
+    captured = {}
+
+    def fake_popen(argv, env=None, **kwargs):
+        captured["env"] = env
+        return object()
+
+    monkeypatch.setattr(launch_instances.subprocess, "Popen", fake_popen)
+    launch_instances.launch(9021, Path("/fake.app"), False, timescale=2.0)
+    assert captured["env"]["HKRL_TIMESCALE"] == "2.0"
+
+
+def test_launch_default_timescale_is_one(monkeypatch):
+    import launch_instances
+    captured = {}
+
+    def fake_popen(argv, env=None, **kwargs):
+        captured["env"] = env
+        return object()
+
+    monkeypatch.setattr(launch_instances.subprocess, "Popen", fake_popen)
+    launch_instances.launch(9021, Path("/fake.app"), False)
+    # Always exported (a stale HKRL_TIMESCALE in the parent env must not
+    # leak through); 1.0 is the mod's no-op value.
+    assert captured["env"]["HKRL_TIMESCALE"] == "1.0"
+
+
 def test_game_process_launches_and_relaunches_headless():
     seen = []
 
@@ -315,7 +343,7 @@ def test_game_process_launches_and_relaunches_headless():
         def poll(self):
             return None
 
-    def fake_launch(port, app, visible, headless=False):
+    def fake_launch(port, app, visible, headless=False, timescale=1.0):
         seen.append(headless)
         return FakeProc()
 
@@ -334,7 +362,7 @@ def test_game_fleet_forwards_headless():
         def poll(self):
             return None
 
-    def fake_launch(port, app, visible, headless=False):
+    def fake_launch(port, app, visible, headless=False, timescale=1.0):
         seen.append(headless)
         return FakeProc()
 
@@ -344,3 +372,33 @@ def test_game_fleet_forwards_headless():
     for g in fleet.games:
         g.spawn()
     assert seen == [True, True]
+
+
+def test_game_process_launches_and_relaunches_with_timescale():
+    seen = []
+
+    def fake_launch(port, app, visible, headless=False, timescale=1.0):
+        seen.append(timescale)
+        return _FakeProc()
+
+    gp = GameProcess(port=_free_port(), app=Path("/fake.app"), launch=fake_launch,
+                     shutdown=lambda procs, grace=15.0: None,
+                     wait_for_port=lambda *a, **k: None, timescale=2.0)
+    gp.spawn()
+    gp.relaunch()   # a 2x run must RELAUNCH at 2x too
+    assert seen == [2.0, 2.0]
+
+
+def test_game_fleet_forwards_timescale():
+    seen = []
+
+    def fake_launch(port, app, visible, headless=False, timescale=1.0):
+        seen.append(timescale)
+        return _FakeProc()
+
+    fleet = GameFleet(_free_ports(2), app=Path("/fake.app"), launch=fake_launch,
+                      shutdown=lambda procs, grace=15.0: None,
+                      wait_for_port=lambda *a, **k: None, timescale=2.0)
+    for g in fleet.games:
+        g.spawn()
+    assert seen == [2.0, 2.0]

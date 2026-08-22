@@ -170,8 +170,9 @@ _STR_NEW_ONLY = ("boss",)
 # Float-valued and forwardable in BOTH modes: train.py accepts --target-kl
 # on resume by design (the flag exists to change a resumed run's update
 # dynamics), unlike the checkpoint-baked ints above. Same unset-stays-unset
-# rule as _ALWAYS.
-_FLOAT_ALWAYS = ("target_kl",)
+# rule as _ALWAYS. timescale rides the same rail: resume inherits the
+# recorded value when absent, a typed value overrides (1 = off).
+_FLOAT_ALWAYS = ("target_kl", "timescale")
 
 # Boolean and forwardable in BOTH modes, mapped to a bare flag pair. On
 # resume train.py inherits the last session's recorded value when the flag
@@ -223,6 +224,8 @@ def _validate(params: dict) -> dict:
             raise ValueError(f"{key} must be a finite number")
         if clean[key] < 0:
             raise ValueError(f"{key} must be >= 0")
+    if "timescale" in clean and not 1.0 <= clean["timescale"] <= 10.0:
+        raise ValueError("timescale must be between 1 and 10")
     for key in _BOOL_ALWAYS:
         value = params.get(key)
         if value in (None, ""):

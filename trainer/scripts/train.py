@@ -82,6 +82,17 @@ def resolve_async_resets(flag, instances: int) -> bool:
     return True if flag is None else bool(flag)
 
 
+def resolve_timescale(value) -> float:
+    """None (untyped, nothing recorded) means 1x; anything outside [1, 10]
+    is refused rather than clamped -- the mod clamps as a last rail, but a
+    typo on the CLI should fail loudly, not train at a surprise speed."""
+    if value is None:
+        return 1.0
+    if not 1.0 <= value <= 10.0:
+        sys.exit(f"--timescale must be between 1 and 10 (got {value})")
+    return float(value)
+
+
 def resolve_boss(flag: str | None, run_dir: Path | None) -> str:
     """The boss this session fights. Fresh runs take the flag (default:
     bosses.DEFAULT_BOSS). A resume takes the run's recorded boss -- the checkpoint's
@@ -114,7 +125,7 @@ def resolve_boss(flag: str | None, run_dir: Path | None) -> str:
 # Session-specific flags (auto, measure_resets, root, app, run_id) and the
 # checkpoint-baked model shape stay out.
 RESUME_INHERITED = ("instances", "gen_every", "target_kl", "async_resets",
-                    "async_reset_mode", "port", "headless")
+                    "async_reset_mode", "port", "headless", "timescale")
 
 # Baked into the checkpoint zip: build_model ignores these on resume, so
 # a typed flag would be a silent no-op -- refused instead, like a
@@ -290,6 +301,15 @@ def build_parser() -> argparse.ArgumentParser:
                          "caps the frame loop at 60 fps. A resume keeps "
                          "the last session's value; --headless or "
                          "--no-headless overrides it.")
+    ap.add_argument("--timescale", type=float, default=None,
+                    help="run the game(s) at K x real time (1-10; the mod "
+                         "multiplies Time.timeScale and scales its frame "
+                         "cap, so a decision still spans ~66.7ms of game "
+                         "time). A resume inherits the last session's "
+                         "value; typing the flag overrides it "
+                         "(--timescale 1 turns it off). The argparse "
+                         "default stays None so inheritance can tell "
+                         "typed from unset.")
     ap.add_argument("--measure-resets", action="store_true",
                     help="Phase 0 async-resets measurement: log every reset's "
                          "wall-clock span to resets_<port>.jsonl under the run "
@@ -575,6 +595,7 @@ def prepare_session(argv=None) -> tuple[argparse.Namespace, Path, tuple | None, 
     async_resets = resolve_async_resets(args.async_resets, args.instances)
     if args.n_steps is None:
         args.n_steps = default_n_steps(args.instances, async_resets)
+    args.timescale = resolve_timescale(args.timescale)
 
     # Fresh runs get the update cap by default; the resolved value lands in
     # the config dump below so resumes inherit it. Resume path untouched:
@@ -648,7 +669,7 @@ def main() -> None:
     apps = build_apps(ports, args.app, args.root / "instances")
     game = GameFleet(ports, app=args.app, apps=apps,
                      prepares=build_prepares(ports),
-                     headless=args.headless)
+                     headless=args.headless, timescale=args.timescale)
     env = None
     exit_code = 0
     try:
@@ -673,6 +694,11 @@ def main() -> None:
                   "still open, and every occurrence costs a full "
                   "relaunch-and-reboot recovery. Suppress display sleep for "
                   "the run: caffeinate -d (in another terminal).",
+                  flush=True)
+        if args.timescale > 1.0:
+            print(f"timescale: game running at {args.timescale}x real time "
+                  "(watch ModLog's per-episode speed= ratio; below "
+                  f"{args.timescale} means the machine can't keep up)",
                   flush=True)
         confirm_ready(args.auto, get_boss(args.boss).display_name)
 

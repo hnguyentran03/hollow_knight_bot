@@ -32,6 +32,14 @@ namespace HKRLBot
         // and the held-for-ActionHoldSeconds action's resulting state is
         // sampled and sent. See the note above LateUpdate.
         private float holdEndTime;
+        // Per-episode speed diagnostic: game-time and wall-time actually
+        // elapsed across the episode's Holding-phase frames (only those --
+        // AwaitingAction frames sit in a blocked socket read whose wall
+        // gap, e.g. a PPO update, would swamp the ratio). Healthy runs
+        // log speed= ~= the timescale multiplier; a CPU-saturated
+        // instance logs below it, which is otherwise invisible.
+        private float episodeGameTime;
+        private float episodeWallTime;
         private int attempt;
         private bool episodeActive;
         private bool awaitingReset;     // trainer asked for reset; waiting for fight to be live
@@ -243,7 +251,16 @@ namespace HKRLBot
                         // action is held before the resulting state is sampled is
                         // exactly ActionHoldSeconds, regardless of the render
                         // framerate. See the note above LateUpdate.
-                        holdEndTime = Time.unscaledTime + ActionHoldSeconds;
+                        //
+                        // At timescale k, game time advances at k x the
+                        // wall clock (freeze-frame wall durations are
+                        // divided by k in the same proportion -- see
+                        // TimeScale.cs), so a wall hold of
+                        // ActionHoldSeconds / k spans the same ~66.7ms of
+                        // GAME time as 1x. At k=1 this is bit-identical
+                        // to the pre-timescale behavior.
+                        holdEndTime = Time.unscaledTime
+                            + ActionHoldSeconds / TimeScale.Multiplier;
                         break;
                     case "reset":
                         if (!TrySetBossFromReset(server, reply))
@@ -282,6 +299,8 @@ namespace HKRLBot
 
             // phase == Phase.Holding: let the just-applied action play out for
             // ActionHoldSeconds before sampling/reporting the resulting state.
+            episodeGameTime += Time.deltaTime;
+            episodeWallTime += Time.unscaledDeltaTime;
             if (Time.unscaledTime < holdEndTime) return;
 
             var k = HKRLBotMod.Instance.Reader.ReadKnight();
@@ -296,7 +315,9 @@ namespace HKRLBot
             {
                 episodeActive = false;
                 HKRLBotMod.Instance.Input.Clear();
-                HKRLBotMod.Instance.Log($"Episode {attempt} done, won={won}");
+                HKRLBotMod.Instance.Log(
+                    $"Episode {attempt} done, won={won} speed="
+                    + $"{episodeGameTime / Mathf.Max(episodeWallTime, 1e-6f):F2}x");
                 return;
             }
 
@@ -562,6 +583,8 @@ namespace HKRLBot
                 phase = Phase.AwaitingAction;
                 wonLatched = false;
                 sawBossThisEpisode = false;
+                episodeGameTime = 0f;
+                episodeWallTime = 0f;
                 attempt++;
                 // The reset macro (ResetMacro.Tick, below) drives virtual input
                 // right up until this frame (confirm pulses, walk-to-statue). If we

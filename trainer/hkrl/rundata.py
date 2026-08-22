@@ -239,6 +239,7 @@ def scan_runs(root, now: float | None = None) -> list[dict]:
             "instances": config.get("instances"),
             "boss": config.get("boss"),
             "headless": config.get("headless"),
+            "timescale": config.get("timescale"),
             "target_timestep": run["status"]["target_timestep"],
             "mean_boss_damage": latest.get("mean_boss_damage"),
             "win_rate": latest.get("win_rate"),

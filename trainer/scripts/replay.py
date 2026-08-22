@@ -130,6 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="launch a game, replay against it, then shut it "
                          "down (dashboard-driven; no already-running game "
                          "needed and no human ready prompt)")
+    ap.add_argument("--headless", action="store_true",
+                    help="with --auto: launch the game -batchmode "
+                         "-nographics (no window)")
+    ap.add_argument("--timescale", type=float, default=1.0,
+                    help="with --auto: run the game at K x real time "
+                         "(1-10; used by the speed-fidelity gate)")
     return ap
 
 
@@ -161,7 +167,7 @@ def run_connected(weights, vecnorm, *, run_dir, host, port, episodes,
 
 
 def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
-             deterministic):
+             deterministic, headless=False, timescale=1.0):
     """Self-contained replay: launch one game, replay against it, shut it
     down. Mirrors train.py's game handling so the dashboard can drive a
     replay exactly as it drives a run.
@@ -192,7 +198,8 @@ def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
               "the replay plays the master save directly (backup taken "
               "above) at the game's default window size.", file=sys.stderr,
               flush=True)
-    game = GameFleet([port], app=app, apps=apps)
+    game = GameFleet([port], app=app, apps=apps, headless=headless,
+                     timescale=timescale)
     env = None
     stop = threading.Event()
 
@@ -235,7 +242,8 @@ def main() -> None:
             weights, vecnorm, run_dir=run_dir,
             root=args.root.expanduser(), app=DEFAULT_APP,
             port=args.port, episodes=args.episodes,
-            deterministic=not args.stochastic)
+            deterministic=not args.stochastic,
+            headless=args.headless, timescale=args.timescale)
     else:
         summaries = run_connected(
             weights, vecnorm, run_dir=run_dir, host=args.host, port=args.port,
