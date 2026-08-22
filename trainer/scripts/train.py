@@ -13,9 +13,11 @@ reap a wedged game's port.
 import argparse
 import json
 import signal
+import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
 
 from hkrl.bosses import BOSSES, DEFAULT_BOSS, get_boss  # noqa: E402
-from hkrl.game import GameFleet  # noqa: E402
+from hkrl.game import GameFleet, PortInUse  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
 from hkrl.masking import MaskedRecurrentPPO  # noqa: E402
 from hkrl.rundata import read_jsonl  # noqa: E402
@@ -498,6 +500,26 @@ class StopOnFlag(BaseCallback):
         return not any(self.locals["dones"])
 
 
+def startup_verdict(exc: BaseException) -> str:
+    """Plain language for a known startup failure, printed as `!!!` lines
+    AFTER the traceback -- tail shows the end of the log, so the verdict
+    goes last (and the launcher's failure card scrapes these lines)."""
+    if isinstance(exc, PortInUse):
+        return str(exc)
+    if isinstance(exc, subprocess.TimeoutExpired):
+        cmd = exc.cmd[0] if exc.cmd else "?"
+        return (f"preparing a game copy timed out running {cmd} -- a "
+                f"leftover game may still be running the app being copied; "
+                f"find it with `lsof -nP -iTCP -sTCP:LISTEN`, kill it, "
+                f"relaunch")
+    if isinstance(exc, subprocess.CalledProcessError):
+        cmd = exc.cmd[0] if exc.cmd else "?"
+        return f"preparing a game copy failed ({cmd} exited {exc.returncode})"
+    if isinstance(exc, TimeoutError):
+        return f"a game never opened its bridge port: {exc}"
+    return str(exc)
+
+
 def confirm_ready(auto: bool, boss_display: str) -> None:
     """Gate between "games are up" and "training begins".
 
@@ -676,19 +698,32 @@ def main() -> None:
     if resume is None:
         print(session_banner(budget), flush=True)
 
-    # Instances must not share the game's save directory: they all autosave
-    # the same slot throughout a run (observed corrupting the master save
-    # live, 2026-07-20 -- see seed_save_dir). Each slot gets its own app
-    # clone with a per-port bundle id (own save dir, own ModLog), refreshed
-    # from the master app and save at every start -- see build_apps.
-    apps = build_apps(ports, args.app, args.root / "instances")
-    game = GameFleet(ports, app=args.app, apps=apps,
-                     prepares=build_prepares(ports),
-                     headless=args.headless, timescale=args.timescale)
     env = None
+    game = None
     exit_code = 0
     try:
-        game.start()
+        try:
+            # Instances must not share the game's save directory: they all
+            # autosave the same slot throughout a run (observed corrupting
+            # the master save live, 2026-07-20 -- see seed_save_dir). Each
+            # slot gets its own app clone with a per-port bundle id (own
+            # save dir, own ModLog), refreshed from the master app and save
+            # at every start -- see build_apps.
+            apps = build_apps(ports, args.app, args.root / "instances")
+            game = GameFleet(ports, app=args.app, apps=apps,
+                             prepares=build_prepares(ports),
+                             headless=args.headless,
+                             timescale=args.timescale)
+            game.start()
+        except (PortInUse, TimeoutError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired) as exc:
+            traceback.print_exc()
+            for line in startup_verdict(exc).splitlines():
+                print(f"!!! {line}", file=sys.stderr, flush=True)
+            print("!!! startup failed before any training happened; fix the "
+                  "cause above, then resume the run",
+                  file=sys.stderr, flush=True)
+            sys.exit(1)
         print(f"game(s) up on port(s) {', '.join(map(str, game.ports))}",
               flush=True)
         if args.headless:
@@ -790,7 +825,8 @@ def main() -> None:
         # was pressed during start(), the startup prints, or the input() prompt.
         if env is not None:
             env.close()
-        game.stop()
+        if game is not None:
+            game.stop()
     sys.exit(exit_code)
 
 
