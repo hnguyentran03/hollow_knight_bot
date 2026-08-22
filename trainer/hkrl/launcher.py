@@ -77,11 +77,6 @@ def _record_exit(root, rec: dict, exit_code: int | None) -> None:
     run_id = rec.get("run_id")
     if not run_id or exit_code == 0:
         return
-    if (_dir(root) / f"{run_id}.exit").exists():
-        # First writer wins: status() runs unlocked from concurrent GET
-        # polls, and the loser of the _poll race sees no Popen handle
-        # (code None) -- it must not downgrade the winner's real code.
-        return
     if _stop_marker(root, run_id).exists():
         return
     reasons, excerpt = _scrape_log(root, run_id, rec.get("log_offset", 0))
@@ -95,7 +90,18 @@ def _record_exit(root, rec: dict, exit_code: int | None) -> None:
               "log_excerpt": excerpt}
     if rec.get("mode") == "replay":
         record["mode"] = "replay"
-    (_dir(root) / f"{run_id}.exit").write_text(json.dumps(record))
+    try:
+        # Exclusive create, not exists-check + write_text: status() runs
+        # unlocked from concurrent GET polls, and an exists-check-then-write
+        # leaves a window where two threads both pass the check -- the loser
+        # of the _poll race (code None, no Popen handle) could then overwrite
+        # a winner's real exit code with null. "x" mode makes the creation
+        # itself the atomic decision of who wins.
+        f = (_dir(root) / f"{run_id}.exit").open("x")
+    except FileExistsError:
+        return  # first writer wins; concurrent unlocked polls race the same death
+    with f:
+        f.write(json.dumps(record))
 
 
 def _scrape_log(root, run_id, offset) -> tuple[list[str], str]:
@@ -508,6 +514,11 @@ def replay(root, run_id, gen, episodes: int = 3,
         if status(root) is not None:
             raise RuntimeError("a launched run is already active; stop it "
                                "before replaying")
+        # A stop marker left from stopping this run earlier is stale now that
+        # it is active again (mirrors launch()'s _clear_stop_marker call) --
+        # otherwise a crashing replay's exit record would be silently
+        # swallowed by _record_exit's stop-marker early-return.
+        _clear_stop_marker(root, run_id)
         cmd = _caffeinate(
             [sys.executable, str(REPLAY_SCRIPT), "--auto",
              "--root", str(root), "--run-dir", str(run_dir),

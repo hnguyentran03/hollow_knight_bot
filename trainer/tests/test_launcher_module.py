@@ -956,3 +956,20 @@ def test_last_exit_and_dismiss(tmp_path):
     assert launcher.last_exit(tmp_path)["run_id"] == "a"
     launcher.dismiss_exit(tmp_path)
     assert launcher.last_exit(tmp_path) is None
+
+
+def test_replay_clears_a_stale_stop_marker_so_a_crash_gets_recorded(
+        tmp_path, monkeypatch):
+    # r1 was stopped earlier (marker left behind), then replayed. If replay()
+    # did not clear the stale marker, _record_exit's stop-marker early-return
+    # would silently swallow the crash's exit record.
+    _make_checkpoint(tmp_path, "r1", gen=2)
+    launcher._mark_stopped(tmp_path, "r1")
+    script = tmp_path / "stub_replay_fail.py"
+    script.write_text(FAIL_STUB)
+    monkeypatch.setattr(launcher, "REPLAY_SCRIPT", script)
+    launcher.replay(tmp_path, "r1", gen=2)
+    assert wait_for(lambda: launcher.status(tmp_path) is None)
+    rec = json.loads((tmp_path / "launcher" / "r1.exit").read_text())
+    assert rec["reason"] == [
+        "startup failed: port 9020 is held by pid 424242 (zombie)"]
