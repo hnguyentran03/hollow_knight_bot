@@ -636,6 +636,51 @@ def test_headless_missing_from_config_defaults_headed():
     assert args.headless is False
 
 
+def test_timescale_is_inherited_on_resume():
+    args, explicit = train.parse_session_args(["--timescale", "2"])
+    assert args.timescale == 2.0
+    assert "timescale" in explicit
+    assert "timescale" in train.RESUME_INHERITED
+    assert "timescale" not in train.RESUME_BAKED
+
+
+def test_timescale_defaults_unset_for_inheritance():
+    # None, not 1.0: apply_recorded_config must be able to tell a typed
+    # --timescale 1 (an explicit off-switch on resume) from an untyped
+    # flag that should inherit the recorded value.
+    args, _ = train.parse_session_args([])
+    assert args.timescale is None
+
+
+def test_timescale_inherits_last_sessions_value():
+    args, explicit = train.parse_session_args([])
+    train.apply_recorded_config(args, explicit, {"timescale": 2.0})
+    assert args.timescale == 2.0
+
+
+def test_typed_timescale_overrides_recorded_value():
+    args, explicit = train.parse_session_args(["--timescale", "1"])
+    train.apply_recorded_config(args, explicit, {"timescale": 2.0})
+    assert args.timescale == 1.0
+
+
+def test_timescale_missing_from_config_stays_unset():
+    # Runs recorded before the flag existed have no timescale key; the
+    # resolution step in prepare_session turns None into 1.0.
+    args, explicit = train.parse_session_args([])
+    train.apply_recorded_config(args, explicit, {"headless": True})
+    assert args.timescale is None
+
+
+def test_resolve_timescale_defaults_and_validates():
+    assert train.resolve_timescale(None) == 1.0
+    assert train.resolve_timescale(2.5) == 2.5
+    with pytest.raises(SystemExit):
+        train.resolve_timescale(0.5)
+    with pytest.raises(SystemExit):
+        train.resolve_timescale(11.0)
+
+
 def test_apply_recorded_config_inherits_untyped_flags():
     args, explicit = train.parse_session_args([])
     train.apply_recorded_config(args, explicit, {
