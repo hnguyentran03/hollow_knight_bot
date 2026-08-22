@@ -862,22 +862,24 @@ function render() {
     xLabel: "timestep", yLabel: "steps",
   });
   /* Dots colored by outcome so the reward cloud reads as two populations:
-     statue gold = win (the win-rate line's color), soul blue = loss, cave
-     mist = unrecorded (pre-outcome-column sessions, recovery rows). The
-     rolling mean steps aside into bone ink so blue stays unambiguous. */
-  const ink2 = css("--ink-2");
-  const dotColor = e => e.won === true ? s2 : e.won === false ? s1 : muted;
+     statue gold = win (the win-rate line's color), red = loss (a death is
+     a death), cave mist = unrecorded (pre-outcome-column sessions,
+     recovery rows). The rolling mean stays soul blue; gold/red validated
+     against the surface, with the tooltip's won/lost text as the
+     non-color channel. */
+  const lossRed = css("--critical");
+  const dotColor = e => e.won === true ? s2 : e.won === false ? lossRed : muted;
   const eps = run.episodes.map(e => ({ x: e.t, y: e.r, color: dotColor(e) }));
   const epByTime = new Map(run.episodes.map(e => [e.t, e]));
-  const legendItems = [{ name: "win", color: s2 }, { name: "loss", color: s1 }];
+  const legendItems = [{ name: "win", color: s2 }, { name: "loss", color: lossRed }];
   if (run.episodes.some(e => e.won == null))
     legendItems.push({ name: "unrecorded", color: muted });
-  legendItems.push({ name: "rolling mean (20)", color: ink2 });
+  legendItems.push({ name: "rolling mean (20)", color: s1 });
   drawChart(document.getElementById("chart-episodes"), {
     height: 220,
     series: [
       { name: "episode reward", color: muted, kind: "dots", points: eps, snapExempt: false },
-      { name: "rolling mean (20)", color: ink2, points: rollingMean(eps, 20), endDot: false },
+      { name: "rolling mean (20)", color: s1, points: rollingMean(eps, 20), endDot: false },
     ],
     legendItems,
     yFormat: v => v.toFixed(1),
