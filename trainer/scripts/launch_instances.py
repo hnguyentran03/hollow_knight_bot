@@ -46,6 +46,12 @@ APP_SUPPORT = Path("~/Library/Application Support").expanduser()
 
 SAVE_ISOLATION_SUPPORTED = sys.platform == "darwin"
 
+# prepare_instance used to hang forever when a zombie game still held the
+# .app being copied (observed 2026-08-22, Ctrl-C'd by hand); generous
+# ceilings turn that silent hang into a TimeoutExpired train.py explains.
+CLONE_TIMEOUT_S = 120   # cp -Rc / codesign over the multi-GB bundle
+PREFS_TIMEOUT_S = 30    # PlistBuddy / defaults
+
 # The master save directory per platform; None where the location is
 # unknown (nothing to back up there).
 if sys.platform == "darwin":
@@ -138,11 +144,13 @@ def seed_prefs(bundle_id: str, slot: int = 0) -> None:
     even before anyone tiles the windows properly.
     """
     exported = subprocess.run(["defaults", "export", MASTER_BUNDLE_ID, "-"],
-                              check=True, capture_output=True).stdout
+                              check=True, capture_output=True,
+                              timeout=PREFS_TIMEOUT_S).stdout
     subprocess.run(["defaults", "delete", bundle_id],
-                   capture_output=True)  # fresh domain; ok if absent
+                   capture_output=True,
+                   timeout=PREFS_TIMEOUT_S)  # fresh domain; ok if absent
     subprocess.run(["defaults", "import", bundle_id, "-"],
-                   input=exported, check=True)
+                   input=exported, check=True, timeout=PREFS_TIMEOUT_S)
     width = max(640, 1280 - 160 * slot)
     height = max(360, 720 - 90 * slot)
     for key, value in [
@@ -153,7 +161,8 @@ def seed_prefs(bundle_id: str, slot: int = 0) -> None:
         ("Screenmanager Resolution Height", height),
     ]:
         subprocess.run(["defaults", "write", bundle_id, key,
-                        "-int", str(value)], check=True)
+                        "-int", str(value)], check=True,
+                       timeout=PREFS_TIMEOUT_S)
 
 
 def prepare_instance(port: int, app: Path = None,
@@ -179,17 +188,19 @@ def prepare_instance(port: int, app: Path = None,
     clone.parent.mkdir(parents=True, exist_ok=True)
     if clone.exists():
         shutil.rmtree(clone)
-    subprocess.run(["cp", "-Rc", str(bundle), str(clone)], check=True)
+    print(f"cloning app for port {port}...", flush=True)
+    subprocess.run(["cp", "-Rc", str(bundle), str(clone)], check=True,
+                   timeout=CLONE_TIMEOUT_S)
     bundle_id = f"{MASTER_BUNDLE_ID}.hkrl{port}"
     subprocess.run(
         ["/usr/libexec/PlistBuddy", "-c",
          f"Set :CFBundleIdentifier {bundle_id}",
          str(clone / "Contents" / "Info.plist")],
-        check=True)
+        check=True, timeout=PREFS_TIMEOUT_S)
     if sign:
         subprocess.run(
             ["codesign", "--force", "--deep", "--sign", "-", str(clone)],
-            check=True, capture_output=True)
+            check=True, capture_output=True, timeout=CLONE_TIMEOUT_S)
     save_dir = seed_save_dir(bundle_id)
     prepare_clone_save(save_dir)
     if prefs:
