@@ -678,6 +678,32 @@ def test_command_omits_unset_or_false_headless(tmp_path, stub_trainer):
                                                     platform="linux")
 
 
+def test_command_resume_headless_false_forces_headed(tmp_path, stub_trainer):
+    # The resume dialog can force a recorded-headless run back to headed:
+    # an explicit false maps to --no-headless (absent still inherits).
+    cmd = launcher.command(
+        tmp_path, {"mode": "resume", "run_id": "old", "headless": False},
+        platform="linux")
+    assert "--no-headless" in cmd
+    assert "--headless" not in [c for c in cmd if c != "--no-headless"]
+    cmd = launcher.command(
+        tmp_path, {"mode": "resume", "run_id": "old"}, platform="linux")
+    assert "--no-headless" not in cmd  # unset stays unset: inheritance
+
+
+def test_restart_params_request_false_overrides_recorded_headless(tmp_path):
+    # Forcing headed from the dialog must beat the aborted attempt's
+    # recorded headless on a checkpoint-less restart too.
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.jsonl").write_text(
+        json.dumps({"timesteps": 1000, "headless": True}) + "\n")
+    params = launcher._restart_params(run_dir, {"mode": "resume",
+                                                "run_id": "r1",
+                                                "headless": False})
+    assert params.get("headless") is not True
+
+
 def test_validate_rejects_non_bool_headless(tmp_path, stub_trainer):
     for bad in ("yes", 1, "true"):
         with pytest.raises(ValueError):

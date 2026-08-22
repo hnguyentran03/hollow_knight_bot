@@ -138,8 +138,8 @@
   @media (prefers-reduced-motion: reduce) {
     .badge.live .dot { animation: none; }
     .bossbar .fill { transition: none; }
-    .launch .check-row input[type="checkbox"],
-    .launch .check-row .check-hint { transition: none; }
+    .check-row input[type="checkbox"],
+    .check-row .check-hint { transition: none; }
   }
 
   /* The game's menu rule: a hairline fading at both ends, a diamond at heart. */
@@ -251,8 +251,8 @@
      target. Facet strokes are hardcoded bone rgba (SVG data URIs can't
      read CSS vars); the focus outline rotates with the element into a
      diamond on purpose. */
-  .launch .check-row { display: flex; align-items: center; gap: 10px; height: 32px; }
-  .launch .check-row input[type="checkbox"] {
+  .check-row { display: flex; align-items: center; gap: 10px; height: 32px; }
+  .check-row input[type="checkbox"] {
     appearance: none; -webkit-appearance: none; width: 14px; height: 14px;
     flex: none; margin: 0 3px; padding: 0; cursor: pointer;
     transform: rotate(45deg);
@@ -261,27 +261,27 @@
     border: 1px solid var(--tick); border-radius: 2px;
     transition: background 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
   }
-  .launch .check-row input[type="checkbox"]:hover {
+  .check-row input[type="checkbox"]:hover {
     border-color: var(--ink-2); box-shadow: 0 0 6px rgba(233, 230, 218, 0.16);
   }
   /* Checked fill is pale bone-white -- the facets flip dark so the cut
      still reads against the light gem. */
-  .launch .check-row input[type="checkbox"]:checked {
+  .check-row input[type="checkbox"]:checked {
     background: center / 100% no-repeat
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cg fill='none' stroke='rgba(17,22,34,0.4)' stroke-width='1'%3E%3Crect x='4.5' y='4.5' width='5' height='5'/%3E%3Cpath d='M0 0l4.5 4.5M14 0L9.5 4.5M0 14l4.5-4.5M14 14L9.5 9.5'/%3E%3C/g%3E%3C/svg%3E"),
       linear-gradient(135deg, #fdfcf6, #d9d5c6);
     border-color: var(--ink); box-shadow: 0 0 10px rgba(233, 230, 218, 0.35);
   }
-  .launch .check-row input[type="checkbox"]:focus-visible { outline: 2px solid var(--s1); outline-offset: 3px; }
+  .check-row input[type="checkbox"]:focus-visible { outline: 2px solid var(--s1); outline-offset: 3px; }
   /* Outranks .launch label: the hint is the placeholder register ("auto",
      "random"), not a carved field label. */
-  .launch .check-row .check-hint {
+  .check-row .check-hint {
     display: inline; font-family: var(--body); font-size: 13px;
     letter-spacing: normal; text-transform: none; color: var(--muted);
     margin: 0; cursor: pointer;
     transition: color 120ms ease;
   }
-  .launch .check-row input:checked ~ .check-hint { color: var(--ink); }
+  .check-row input:checked ~ .check-hint { color: var(--ink); }
   .launch .error { margin-top: 8px; color: var(--critical); font-size: 13px; }
   a.btn { text-decoration: none; display: inline-block; }
   a.btn[hidden] { display: none; }  /* same [hidden]-vs-display specificity trap as .launch form above */
@@ -312,6 +312,14 @@
   #replay-dialog label { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
   #replay-dialog #replay-episodes {
     width: 120px; font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+  }
+  /* Overrides row: prefilled with the run's recorded shape; a value is
+     sent only when changed, so untouched fields keep resume inheritance. */
+  #resume-dialog .resume-overrides { display: flex; gap: 16px; margin: 0 0 14px; }
+  #resume-dialog .resume-overrides label:not(.check-hint) { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+  #resume-dialog #resume-instances {
+    width: 72px; font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
   }
   #resume-dialog .choice { display: flex; align-items: center; gap: 8px; padding: 3px 0; margin: 0; font-family: var(--body); font-size: 14px; letter-spacing: normal; text-transform: none; color: var(--ink); }
@@ -406,6 +414,10 @@
     <form method="dialog">
       <h2 id="resume-title">Resume</h2>
       <p class="resume-facts" id="resume-facts"></p>
+      <div class="resume-overrides">
+        <div><label for="resume-instances">Instances</label><input type="number" id="resume-instances" min="1" max="4"></div>
+        <div><label for="resume-headless">Headless</label><div class="check-row"><input id="resume-headless" type="checkbox"><label class="check-hint" for="resume-headless">no game window</label></div></div>
+      </div>
       <label class="choice">
         <input type="radio" name="resume-mode" id="resume-finish" checked>
         <span id="resume-finish-label">Finish the original target</span>
@@ -1249,7 +1261,8 @@ async function renderPrevRuns(activeNow) {
 
 /* The resume dialog: train.py now inherits a resume's settings from the
    run's own config.jsonl and, with no --timesteps at all, finishes to the
-   recorded target -- so "finish the run" sends nothing but the run id,
+   recorded target -- so "finish the run" sends nothing but the run id
+   (plus any instances/headless override changed from the recorded shape),
    and the remainder shown in the label is display-only. Adding more steps
    is the explicit choice and the only case that sends timesteps. */
 const resumeDialog = document.getElementById("resume-dialog");
@@ -1275,6 +1288,10 @@ function openResumeDialog(r) {
   title.textContent = (noCheckpoint ? "Restart " : "Resume ") + r.id;
   confirmBtn.textContent = noCheckpoint ? "Restart" : "Resume";
   extra.value = "500000";  // fresh per open
+  // Overrides prefill with the run's recorded shape; close() sends each
+  // only when changed, so an untouched field keeps resume inheritance.
+  document.getElementById("resume-instances").value = r.instances || 1;
+  document.getElementById("resume-headless").checked = r.headless === true;
 
   if (noCheckpoint) {
     // No checkpoint (nothing to resume FROM): this restarts the run from
@@ -1366,8 +1383,8 @@ resumeDialog.addEventListener("close", async () => {
   if (!r.timestep) {
     // No checkpoint: the server restarts from the run's own config, but honors
     // the step budget chosen here -- the original target, or a custom amount.
-    // Everything else (instances, gen_every, the model params) comes from the
-    // run's config, so the page sends only the timesteps it is overriding.
+    // Everything else (gen_every, the model params) comes from the run's
+    // config; the page sends only what this dialog overrides.
     const timesteps = finish ? (r.target_timestep || 0) : extra;
     if (!timesteps || timesteps < 1) {
       launchError("no steps to collect — enter how many");
@@ -1375,10 +1392,11 @@ resumeDialog.addEventListener("close", async () => {
     }
     body = { mode: "resume", run_id: r.id, timesteps: timesteps };
   } else if (finish) {
-    // Finish the recorded target: send nothing but the id. train.py
-    // inherits instances/gen_every from the run's config and computes
-    // the remaining budget itself -- forwarding values here would turn
-    // them into explicit CLI flags and defeat that inheritance.
+    // Finish the recorded target: send nothing but the id (plus any
+    // overrides below). train.py inherits instances/gen_every from the
+    // run's config and computes the remaining budget itself --
+    // forwarding unchanged values here would turn them into explicit
+    // CLI flags and defeat that inheritance.
     body = { mode: "resume", run_id: r.id };
   } else {
     if (!extra || extra < 1) {
@@ -1389,6 +1407,14 @@ resumeDialog.addEventListener("close", async () => {
     // additive when typed.
     body = { mode: "resume", run_id: r.id, timesteps: extra };
   }
+  // Overrides ride along only when changed from the run's recorded shape:
+  // an untouched field stays unsent, so inheritance still applies. An
+  // unchecked box on a recorded-headless run is an explicit false, which
+  // the launcher maps to --no-headless.
+  const instOverride = parseInt(document.getElementById("resume-instances").value, 10);
+  if (instOverride && instOverride !== (r.instances || 1)) body.instances = instOverride;
+  const headlessOverride = document.getElementById("resume-headless").checked;
+  if (headlessOverride !== (r.headless === true)) body.headless = headlessOverride;
   launchError("");
   startBtn.disabled = true;
   try {

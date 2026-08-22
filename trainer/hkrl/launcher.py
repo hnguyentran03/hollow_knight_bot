@@ -173,13 +173,15 @@ _STR_NEW_ONLY = ("boss",)
 # rule as _ALWAYS.
 _FLOAT_ALWAYS = ("target_kl",)
 
-# Boolean and forwardable in BOTH modes, mapped to a bare flag. On resume
-# train.py inherits the last session's recorded value when the flag is
-# absent, so an unset field must stay unset (same rule as _ALWAYS); an
-# explicit true forces it on. False counts as unset here -- the launch
-# form never sends it, and forcing a headless run back to headed takes a
-# CLI --no-headless. _restart_params carries the recorded value because a
-# checkpoint-less restart runs in 'new' mode, outside resume inheritance.
+# Boolean and forwardable in BOTH modes, mapped to a bare flag pair. On
+# resume train.py inherits the last session's recorded value when the flag
+# is absent, so an unset field must stay unset (same rule as _ALWAYS); an
+# explicit true forces it on (--headless), and an explicit false forces a
+# recorded-headless run back to headed (--no-headless, resume mode only --
+# 'new' mode's default is headed, so false just stays omitted there).
+# _restart_params carries the recorded value because a checkpoint-less
+# restart runs in 'new' mode, outside resume inheritance; a request's
+# explicit false beats the recorded value there too.
 _BOOL_ALWAYS = ("headless",)
 
 
@@ -223,11 +225,11 @@ def _validate(params: dict) -> dict:
             raise ValueError(f"{key} must be >= 0")
     for key in _BOOL_ALWAYS:
         value = params.get(key)
-        if value in (None, "", False):
+        if value in (None, ""):
             continue
-        if value is not True:
+        if not isinstance(value, bool):
             raise ValueError(f"{key} must be a boolean")
-        clean[key] = True
+        clean[key] = value
     boss = params.get("boss")
     if boss not in (None, ""):
         if boss not in BOSSES:
@@ -271,8 +273,10 @@ def command(root, params: dict, platform: str = sys.platform) -> list[str]:
         if key in p:
             cmd += ["--" + key.replace("_", "-"), str(p[key])]
     for key in _BOOL_ALWAYS:
-        if p.get(key):
+        if p.get(key) is True:
             cmd += ["--" + key.replace("_", "-")]
+        elif p.get(key) is False and p["mode"] == "resume":
+            cmd += ["--no-" + key.replace("_", "-")]
     return _caffeinate(cmd, platform)
 
 

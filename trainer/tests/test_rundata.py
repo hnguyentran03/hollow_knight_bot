@@ -251,7 +251,19 @@ def test_scan_runs_carries_the_boss(tmp_path):
     assert old["boss"] is None
 
 
-def test_scan_runs_of_a_missing_root_is_empty(tmp_path):
+def test_scan_runs_carries_headless(tmp_path):
+    # The resume dialog prefills its headless override from the summary;
+    # None where an older config predates the field.
+    d = tmp_path / "runs" / "r"
+    d.mkdir(parents=True)
+    with (d / "config.jsonl").open("a") as f:
+        f.write(json.dumps({"run_id": "r", "headless": True}) + "\n")
+    old = tmp_path / "runs" / "old"
+    old.mkdir()
+    _write_config(old)
+    runs = {s["id"]: s for s in scan_runs(tmp_path, now=0)}
+    assert runs["r"]["headless"] is True
+    assert runs["old"]["headless"] is None
     assert scan_runs(tmp_path / "nowhere", now=0) == []
 
 
