@@ -128,12 +128,12 @@ class GenerationCallback(BaseCallback):
                 # mean_boss_damage with zeros.
                 continue
             record = dict(ep)
-            # Read from the raw step info, not VecMonitor info_keywords: the
-            # supervisor's recovery frames carry neither key, and VecMonitor
-            # indexes keywords unconditionally into each done step's info, so
-            # a keyword would KeyError on the first recovery of every run. A
-            # severed episode therefore counts as a damageless loss --
-            # conservative, and bounded by the number of recoveries.
+            # Read from the raw step info, not the monitor's episode record:
+            # the supervisor's recovery frames carry neither key, and
+            # RealEpisodeVecMonitor now skips keys a done step lacks, so the
+            # record would simply omit them there. A severed episode
+            # therefore counts as a damageless loss -- conservative, and
+            # bounded by the number of recoveries.
             record["won"] = bool(info.get("won", False))
             record["boss_damage_frac"] = float(info.get("boss_damage_frac", 0.0))
             self._episodes.append(record)
