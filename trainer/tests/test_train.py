@@ -586,6 +586,42 @@ def test_parse_session_args_sees_boolean_and_store_true_flags():
     assert "auto" in explicit
 
 
+def test_headless_is_inherited_on_resume():
+    args, explicit = train.parse_session_args(["--headless"])
+    assert args.headless is True
+    assert "headless" in explicit
+    # Inherited like --instances: a resume keeps the last session's
+    # recorded value unless the flag is typed. Not checkpoint-baked.
+    assert "headless" in train.RESUME_INHERITED
+    assert "headless" not in train.RESUME_BAKED
+
+
+def test_headless_defaults_off():
+    args, _ = train.parse_session_args([])
+    assert args.headless is False
+
+
+def test_headless_inherits_last_sessions_value():
+    args, explicit = train.parse_session_args([])
+    train.apply_recorded_config(args, explicit, {"headless": True})
+    assert args.headless is True
+
+
+def test_no_headless_overrides_recorded_value():
+    args, explicit = train.parse_session_args(["--no-headless"])
+    assert "headless" in explicit
+    train.apply_recorded_config(args, explicit, {"headless": True})
+    assert args.headless is False
+
+
+def test_headless_missing_from_config_defaults_headed():
+    # Runs recorded before the flag existed have no headless key: the CLI
+    # default (headed) stands.
+    args, explicit = train.parse_session_args([])
+    train.apply_recorded_config(args, explicit, {"instances": 2})
+    assert args.headless is False
+
+
 def test_apply_recorded_config_inherits_untyped_flags():
     args, explicit = train.parse_session_args([])
     train.apply_recorded_config(args, explicit, {

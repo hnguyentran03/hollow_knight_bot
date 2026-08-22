@@ -107,12 +107,14 @@ def resolve_boss(flag: str | None, run_dir: Path | None) -> str:
 
 # On resume these inherit from the run's last config record unless the
 # flag was typed: they are the settings still live on a resume (fleet
-# shape, checkpoint cadence, update cap), where falling back to a CLI
-# default silently reshapes the run -- the bug that dropped marmu-1 from
-# 2 instances to 1. Session-specific flags (auto, measure_resets, root,
-# app, run_id) and the checkpoint-baked model shape stay out.
+# shape, checkpoint cadence, update cap, window mode), where falling back
+# to a CLI default silently reshapes the run -- the bug that dropped
+# marmu-1 from 2 instances to 1. Each session re-records what it resolved,
+# so headless sticks to whatever the LAST session used, not the launch.
+# Session-specific flags (auto, measure_resets, root, app, run_id) and the
+# checkpoint-baked model shape stay out.
 RESUME_INHERITED = ("instances", "gen_every", "target_kl", "async_resets",
-                    "async_reset_mode", "port")
+                    "async_reset_mode", "port", "headless")
 
 # Baked into the checkpoint zip: build_model ignores these on resume, so
 # a typed flag would be a silent no-op -- refused instead, like a
@@ -281,6 +283,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the interactive ready prompt (unattended/"
                          "dashboard launches); the boot macro drives the "
                          "game into the Hall of Gods")
+    ap.add_argument("--headless", action=argparse.BooleanOptionalAction,
+                    default=False,
+                    help="launch the game(s) with -batchmode -nographics: "
+                         "no window, no occlusion App Nap risk; the mod "
+                         "caps the frame loop at 60 fps. A resume keeps "
+                         "the last session's value; --headless or "
+                         "--no-headless overrides it.")
     ap.add_argument("--measure-resets", action="store_true",
                     help="Phase 0 async-resets measurement: log every reset's "
                          "wall-clock span to resets_<port>.jsonl under the run "
@@ -637,14 +646,19 @@ def main() -> None:
     # from the master app and save at every start -- see build_apps.
     apps = build_apps(ports, args.app, args.root / "instances")
     game = GameFleet(ports, app=args.app, apps=apps,
-                     prepares=build_prepares(ports))
+                     prepares=build_prepares(ports),
+                     headless=args.headless)
     env = None
     exit_code = 0
     try:
         game.start()
         print(f"game(s) up on port(s) {', '.join(map(str, game.ports))}",
               flush=True)
-        if sys.platform == "win32":
+        if args.headless:
+            print("headless: no game window will appear; the mod caps the "
+                  "frame loop at 60 fps. Keep sleep suppressed for the run "
+                  "(caffeinate -dims on macOS).", flush=True)
+        elif sys.platform == "win32":
             print("Keep the game window visible (not minimized) for the whole "
                   "run, and disable system sleep for its duration "
                   "(Settings > System > Power, or `powercfg /change "

@@ -138,6 +138,8 @@
   @media (prefers-reduced-motion: reduce) {
     .badge.live .dot { animation: none; }
     .bossbar .fill { transition: none; }
+    .launch .check-row input[type="checkbox"],
+    .launch .check-row .check-hint { transition: none; }
   }
 
   /* The game's menu rule: a hairline fading at both ends, a diamond at heart. */
@@ -241,6 +243,32 @@
   .launch .actions { display: flex; gap: 8px; grid-column: 1 / -1; }
   .launch .advanced { grid-column: 1 / -1; margin: 0; }
   .launch .advanced .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 8px; }
+  /* The Headless cell: the checkbox drawn as a soul gem in a field-height
+     row, its hint a second click target. Checked, the gem fills with soul
+     and the hint brightens from cave mist to bone. */
+  .launch .check-row { display: flex; align-items: center; gap: 8px; height: 32px; }
+  .launch .check-row input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
+    flex: none; margin: 0; padding: 0; cursor: pointer;
+    background: var(--raised); border: 1px solid var(--border); border-radius: 3px;
+    transition: background 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+  }
+  .launch .check-row input[type="checkbox"]:hover { border-color: var(--tick); }
+  .launch .check-row input[type="checkbox"]:checked {
+    background: var(--s1) center / 11px no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M1.5 5.5 4 8l4.5-6' fill='none' stroke='%23e9e6da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    border-color: var(--s1); box-shadow: 0 0 8px var(--glow);
+  }
+  .launch .check-row input[type="checkbox"]:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+  /* Outranks .launch label: the hint is the placeholder register ("auto",
+     "random"), not a carved field label. */
+  .launch .check-row .check-hint {
+    display: inline; font-family: var(--body); font-size: 13px;
+    letter-spacing: normal; text-transform: none; color: var(--muted);
+    margin: 0; cursor: pointer;
+    transition: color 120ms ease;
+  }
+  .launch .check-row input:checked ~ .check-hint { color: var(--ink); }
   .launch .error { margin-top: 8px; color: var(--critical); font-size: 13px; }
   a.btn { text-decoration: none; display: inline-block; }
   a.btn[hidden] { display: none; }  /* same [hidden]-vs-display specificity trap as .launch form above */
@@ -332,7 +360,7 @@
     </div>
     <form id="launch-form" hidden>
       <div><label for="f-run-id">Run id</label><input id="f-run-id" name="run_id" autocomplete="off"></div>
-      <div><label for="f-instances">Instances</label><input id="f-instances" name="instances" type="number" min="1" max="3" value="1"></div>
+      <div><label for="f-instances">Instances</label><input id="f-instances" name="instances" type="number" min="1" max="4" value="1"></div>
       <div><label for="f-boss">Boss</label><select id="f-boss" name="boss"></select></div>
       <div><label for="f-timesteps">Timesteps</label><input id="f-timesteps" name="timesteps" type="number" min="1" value="500000"></div>
       <details class="advanced">
@@ -343,6 +371,7 @@
           <div><label for="f-batch-size">Batch size</label><input id="f-batch-size" name="batch_size" type="number" min="1"></div>
           <div><label for="f-n-epochs">N epochs</label><input id="f-n-epochs" name="n_epochs" type="number" min="1"></div>
           <div><label for="f-target-kl">Target KL</label><input id="f-target-kl" name="target_kl" type="number" min="0" step="0.005" placeholder="0.03"></div>
+          <div><label for="f-headless">Headless</label><div class="check-row"><input id="f-headless" name="headless" type="checkbox"><label class="check-hint" for="f-headless">no game window</label></div></div>
           <div><label for="f-seed">Seed</label><input id="f-seed" name="seed" type="number" placeholder="random"></div>
         </div>
       </details>
@@ -838,7 +867,7 @@ function render() {
   const config = document.getElementById("config");
   config.replaceChildren();
   if (run.config) {
-    const keys = ["started_at", "boss", "instances", "timesteps", "target_timestep",
+    const keys = ["started_at", "boss", "instances", "headless", "timesteps", "target_timestep",
                   "resumed_from_gen", "gen_every", "n_steps", "batch_size", "n_epochs",
                   "target_kl", "gamma", "ent_coef", "n_stack", "seed", "port"];
     for (const k of keys) {
@@ -922,7 +951,11 @@ function launchError(msg) {
 function formParams() {
   const params = {};
   for (const input of document.querySelectorAll("#launch-form input, #launch-form select")) {
-    if (input.value !== "") params[input.name] = input.value;
+    if (input.type === "checkbox") {
+      if (input.checked) params[input.name] = true;  // unchecked: stay unset
+    } else if (input.value !== "") {
+      params[input.name] = input.value;
+    }
   }
   return params;
 }

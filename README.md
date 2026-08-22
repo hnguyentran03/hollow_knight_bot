@@ -43,7 +43,7 @@ bash run.sh                                          # macOS
 powershell -ExecutionPolicy Bypass -File run.ps1     # Windows
 ```
 
-From the dashboard's **"Summon a run" panel** you can start, resume, and stop training without a terminal. It spawns `train.py --auto` detached (so the run survives a dashboard exit, and a restarted dashboard picks it back up); `--auto` lets the boot macro drive the game in — a few `reset ... reconnecting` retries in the log tail are normal. The launch form has a boss dropdown and advanced PPO fields (blank Target KL keeps the 0.03 default). One launched run at a time; Stop is the same graceful path as Ctrl-C. Runs started from a terminal are invisible to the panel — stop those in their own terminal. Deleting a run moves it to `~/hkrl/trash/`, never erases it.
+From the dashboard's **"Summon a run" panel** you can start, resume, and stop training without a terminal. It spawns `train.py --auto` detached (so the run survives a dashboard exit, and a restarted dashboard picks it back up); `--auto` lets the boot macro drive the game in — a few `reset ... reconnecting` retries in the log tail are normal. The launch form has a boss dropdown and advanced PPO fields (blank Target KL keeps the 0.03 default), plus a Headless checkbox. One launched run at a time; Stop is the same graceful path as Ctrl-C. Runs started from a terminal are invisible to the panel — stop those in their own terminal. Deleting a run moves it to `~/hkrl/trash/`, never erases it.
 
 The dashboard (`http://127.0.0.1:9700`) also monitors every run: live/stopped status, progress and ETA, steps/hour, total wins, learning curves, per-episode reward. It is read-only and safe beside a live run. Lower-level health checks:
 
@@ -54,7 +54,7 @@ tail -f ~/hkrl/runs/my-run/generations.jsonl                  # per-generation s
 
 ## Starting via the CLI
 
-Keep the **game window visible** for the whole run (macOS suspends occluded windows — App Nap — and every occurrence costs a relaunch; on Windows don't minimize), and set display-off/screen-saver to Never or use `caffeinate` as below.
+Unless running `--headless`, keep the **game window visible** for the whole run (macOS suspends occluded windows — App Nap — and every occurrence costs a relaunch; on Windows don't minimize), and set display-off/screen-saver to Never or use `caffeinate` as below.
 
 ```bash
 cd trainer
@@ -63,11 +63,11 @@ caffeinate -dims ./.venv/bin/python scripts/train.py --timesteps 500000 --run-id
 
 `train.py` launches the game itself — don't start one manually. When prompted, wait for the game to reach the Hall of Gods (the boot macro can drive it there) and press Enter. 500k steps is roughly an overnight run (~54k steps/hour at 15&nbsp;Hz).
 
-Useful flags: `--boss` (default `hornet1`; ids from `hkrl/bosses.py`), `--instances N`, `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (fresh runs only), `--target-kl` (early-stops an update when approx KL exceeds ~1.5× this; fresh runs default 0.03, 0 disables; resumes inherit the run's recorded value, and typing the flag on a resume overrides it), `--seed`, `--root` (default `~/hkrl`).
+Useful flags: `--boss` (default `hornet1`; ids from `hkrl/bosses.py`), `--instances N`, `--gen-every` (checkpoint interval, default 15000), `--n-steps` / `--batch-size` / `--n-epochs` (fresh runs only), `--target-kl` (early-stops an update when approx KL exceeds ~1.5× this; fresh runs default 0.03, 0 disables; resumes inherit the run's recorded value, and typing the flag on a resume overrides it), `--seed`, `--root` (default `~/hkrl`), `--headless` (no game window: `-batchmode -nographics`, the mod caps the frame loop at 60 fps; a resume keeps the last session's value, and `--headless`/`--no-headless` override it).
 
-**Multiple instances:** `--instances N` runs N game clients as slots of one vectorized PPO — roughly N× the samples per hour, verified live at N=2. Each instance is a full game client (2–3 per machine is realistic) and every window must stay visible — tile them, don't stack them. Episode resets run asynchronously by default at N ≥ 2 (`--no-async-resets` restores lockstep). On macOS each instance gets its own cloned app and save sandbox automatically, re-seeded from the master save every start; **Windows has no save isolation yet** — multi-instance there shares one save slot at your own risk.
+**Multiple instances:** `--instances N` runs N game clients as slots of one vectorized PPO — roughly N× the samples per hour, verified live at N=2 headed and N=4 headless (~184k steps/hour, double the N=2 rate, learning unaffected). Each headed instance's window must stay visible (tile them, don't stack them), which caps headed runs at 2–3 per machine; `--headless` removes that constraint entirely, which is what makes N=4 practical. Episode resets run asynchronously by default at N ≥ 2 (`--no-async-resets` restores lockstep). On macOS each instance gets its own cloned app and save sandbox automatically, re-seeded from the master save every start; **Windows has no save isolation yet** — multi-instance there shares one save slot at your own risk.
 
-**Pause and resume:** Ctrl-C once finishes the current episode (≤ ~3 min), saves a final generation, and shuts the game down (twice forces an abort, still saving). Resume continues the same run — weights, normalization stats, generation numbering, and the recorded config (`--instances`, `--target-kl`, ports, boss) are all inherited; omitting `--timesteps` finishes to the run's recorded target, `--timesteps N` adds N more:
+**Pause and resume:** Ctrl-C once finishes the current episode (≤ ~3 min), saves a final generation, and shuts the game down (twice forces an abort, still saving). Resume continues the same run — weights, normalization stats, generation numbering, and the recorded config (`--instances`, `--target-kl`, `--headless`, ports, boss) are all inherited from the last session; omitting `--timesteps` finishes to the run's recorded target, `--timesteps N` adds N more:
 
 ```bash
 caffeinate -dims ./.venv/bin/python scripts/train.py --resume ~/hkrl/runs/my-run

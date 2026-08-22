@@ -234,7 +234,8 @@ def wait_for_port(
     raise TimeoutError(f"port {port} never accepted a connection within {timeout}s")
 
 
-def launch(port: int, app: Path, visible: bool) -> subprocess.Popen:
+def launch(port: int, app: Path, visible: bool,
+           headless: bool = False) -> subprocess.Popen:
     # SteamAppId/SteamGameId are the launch context Steam exports to its
     # children; the Steam build's DRM check looks for them in the
     # environment. Executed directly without them, the game asks Steam to
@@ -256,8 +257,16 @@ def launch(port: int, app: Path, visible: bool) -> subprocess.Popen:
         detach = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
     else:
         detach = {"start_new_session": True}
+    # -batchmode -nographics: no window, no rendering. The mod detects
+    # batchmode itself (Application.isBatchMode) and caps the frame loop
+    # at 60 fps -- without the cap a headless game spins frames at ~a
+    # full core (measured 2026-08-20). Verified live the same day: boot
+    # macro, bridge, and a full episode all work with no window.
+    argv = [str(app)]
+    if headless:
+        argv += ["-batchmode", "-nographics"]
     return subprocess.Popen(
-        [str(app)],
+        argv,
         env=env,
         stdout=subprocess.DEVNULL if not visible else None,
         stderr=subprocess.DEVNULL if not visible else None,
@@ -300,6 +309,9 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
                     help="first bridge port; instance i listens on port+i")
     ap.add_argument("--instances", type=int, default=1)
+    ap.add_argument("--headless", action="store_true",
+                    help="launch with -batchmode -nographics (no window); "
+                         "the mod caps the frame loop at 60 fps")
     args = ap.parse_args()
 
     # Fail fast on squatted ports BEFORE launching anything: the mod's
@@ -341,7 +353,8 @@ def main() -> None:
         # Launch all, then wait all, so the games boot in parallel (a cold
         # boot is tens of seconds each) -- same shape as GameFleet.start().
         for i in range(args.instances):
-            procs.append(launch(args.port + i, apps[i], visible=True))
+            procs.append(launch(args.port + i, apps[i], visible=True,
+                                headless=args.headless))
             print(f"launched: port={args.port + i}", flush=True)
         for i, proc in enumerate(procs):
             wait_for_port(args.port + i, proc=proc)
