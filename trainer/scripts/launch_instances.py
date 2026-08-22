@@ -281,7 +281,7 @@ def port_squatter_verdict(port: int, host: str = "127.0.0.1") -> str | None:
         pid, command = holder
         return (f"port {port} is held by pid {pid} ({command}) -- a "
                 f"leftover from an earlier session? Kill it with "
-                f"`kill {pid}`, then relaunch.")
+                f"`kill -9 {pid}`, then relaunch.")
     if sys.platform == "win32":
         find_it = (f"`netstat -ano | findstr :{port}` then "
                    f"`taskkill /PID <pid> /F`")

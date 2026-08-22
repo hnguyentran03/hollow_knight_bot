@@ -517,6 +517,14 @@ def startup_verdict(exc: BaseException) -> str:
         return f"preparing a game copy failed ({cmd} exited {exc.returncode})"
     if isinstance(exc, TimeoutError):
         return f"a game never opened its bridge port: {exc}"
+    if isinstance(exc, RuntimeError):
+        verdict = f"a game exited before its bridge came up: {exc}"
+        if "code 138" in str(exc):
+            verdict += (" -- exit code 138 usually means an invalid code "
+                        "signature after a mod rebuild; re-sign the app "
+                        "with `codesign --force --deep --sign -` (see the "
+                        "build-mod docs)")
+        return verdict
     return str(exc)
 
 
@@ -716,7 +724,7 @@ def main() -> None:
                              timescale=args.timescale)
             game.start()
         except (PortInUse, TimeoutError, subprocess.CalledProcessError,
-                subprocess.TimeoutExpired) as exc:
+                subprocess.TimeoutExpired, RuntimeError) as exc:
             traceback.print_exc()
             for line in startup_verdict(exc).splitlines():
                 print(f"!!! {line}", file=sys.stderr, flush=True)

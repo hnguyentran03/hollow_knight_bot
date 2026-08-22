@@ -984,6 +984,14 @@ def test_startup_verdict_speaks_each_failure_class():
         subprocess.CalledProcessError(1, ["codesign", "x"]))
     assert "failed" in v and "codesign" in v
     assert "bridge" in train.startup_verdict(TimeoutError("no hello"))
+    v = train.startup_verdict(
+        RuntimeError("game exited with code 138 before port 9020 accepted"))
+    assert "bridge" in v and "exited" in v
+    assert "signature" in v
+    # PortInUse is a RuntimeError subclass but must still take its own
+    # branch (str passthrough), not the generic RuntimeError one.
+    assert train.startup_verdict(PortInUse("port 9021 is held")) \
+        == "port 9021 is held"
 
 
 def test_startup_failures_end_with_verdict_lines(tmp_path, monkeypatch,

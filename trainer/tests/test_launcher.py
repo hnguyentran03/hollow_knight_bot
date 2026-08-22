@@ -329,7 +329,7 @@ def test_port_squatter_verdict_names_the_holder():
         if sys.platform == "darwin":
             # lsof resolves the squatter -- here, this test process.
             assert f"pid {os.getpid()}" in verdict
-            assert f"kill {os.getpid()}" in verdict
+            assert f"kill -9 {os.getpid()}" in verdict
 
 
 def test_port_squatter_verdict_is_none_on_a_free_port():

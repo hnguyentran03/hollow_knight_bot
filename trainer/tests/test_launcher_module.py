@@ -557,13 +557,16 @@ def test_delete_sweeps_launcher_files_into_the_trash_bundle(tmp_path):
     d.mkdir()
     (d / "done-run.log").write_text("log tail")
     (d / "done-run.stopped").write_text('{"run_id": "done-run"}')
+    (d / "done-run.exit").write_text('{"run_id": "done-run", "code": 0}')
     (d / "other-run.log").write_text("not mine")
     trashed = launcher.delete(tmp_path, "done-run")
     dest = tmp_path / "trash" / trashed / "launcher"
     assert (dest / "done-run.log").read_text() == "log tail"
     assert (dest / "done-run.stopped").exists()  # preserved, not unlinked
+    assert (dest / "done-run.exit").exists()  # preserved, not unlinked
     assert not (d / "done-run.log").exists()
     assert not (d / "done-run.stopped").exists()
+    assert not (d / "done-run.exit").exists()
     assert (d / "other-run.log").exists()
 
 
