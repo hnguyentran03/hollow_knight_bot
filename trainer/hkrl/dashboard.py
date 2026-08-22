@@ -15,9 +15,25 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from hkrl import launcher
 from hkrl.bosses import BOSSES
 from hkrl.exports import exported_generations
-from hkrl.rundata import load_run, scan_runs
+from hkrl.rundata import load_run, read_jsonl, scan_runs
 
 PAGE = Path(__file__).with_name("dashboard.html")
+
+# The subset of a config.jsonl record the summon page's active-run card
+# states -- the run's shape, not its full provenance (the dashboard proper's
+# config table shows everything).
+_ACTIVE_CONFIG_KEYS = ("boss", "instances", "headless", "timescale",
+                       "timesteps", "target_timestep", "target_kl")
+
+
+def _active_config(root, run_id) -> dict | None:
+    """The active run's recorded session config, filtered for the card.
+    None until train.py's prepare_session has appended the first record."""
+    configs = read_jsonl(Path(root) / "runs" / run_id / "config.jsonl")
+    if not configs:
+        return None
+    return {k: configs[-1][k] for k in _ACTIVE_CONFIG_KEYS
+            if k in configs[-1]}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -49,8 +65,12 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/api/run/"):
             self._run(path[len("/api/run/"):])
         elif path == "/api/launcher":
+            active = launcher.status(self.server.root)
+            if active is not None:
+                active["config"] = _active_config(self.server.root,
+                                                  active["run_id"])
             self._json({
-                "active": launcher.status(self.server.root),
+                "active": active,
                 "last_exit": launcher.last_exit(self.server.root),
                 # Mirrors train.py's own defaults so the form and the CLI
                 # start from the same place.
