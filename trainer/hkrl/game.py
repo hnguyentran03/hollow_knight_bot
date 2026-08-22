@@ -49,7 +49,10 @@ class GameProcess:
                  prepare: Callable | None = None,
                  # Session-scoped like train.py's --auto: a headless run
                  # relaunches headless, but nothing records the choice.
-                 headless: bool = False):
+                 headless: bool = False,
+                 # Session-scoped like headless: recorded by train.py's
+                 # config, so a resume inherits it there, not here.
+                 timescale: float = 1.0):
         self.port = port
         self.app = Path(app)
         self.launch_timeout = launch_timeout
@@ -58,6 +61,7 @@ class GameProcess:
         self._wait_for_port = wait_for_port
         self._prepare = prepare
         self.headless = headless
+        self.timescale = timescale
         self._proc: subprocess.Popen | None = None
 
     def start(self) -> None:
@@ -91,7 +95,8 @@ class GameProcess:
                 f"from an earlier run?) holds it. Find it with "
                 f"{find_it}, kill it, rerun."
             )
-        self._proc = self._launch(self.port, self.app, False, self.headless)
+        self._proc = self._launch(self.port, self.app, False, self.headless,
+                                  self.timescale)
 
     def wait_ready(self) -> None:
         self._wait_for_port(self.port, timeout=self.launch_timeout,
@@ -113,7 +118,8 @@ class GameProcess:
             self._shutdown([self._proc])
         if self._prepare is not None:
             self._prepare()
-        self._proc = self._launch(self.port, self.app, False, self.headless)
+        self._proc = self._launch(self.port, self.app, False, self.headless,
+                                  self.timescale)
 
     def stop(self) -> None:
         proc, self._proc = self._proc, None
