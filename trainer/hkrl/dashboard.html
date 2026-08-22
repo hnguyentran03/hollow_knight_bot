@@ -282,7 +282,14 @@
     transition: color 120ms ease;
   }
   .check-row input:checked ~ .check-hint { color: var(--ink); }
-  .launch .error { margin-top: 8px; color: var(--critical); font-size: 13px; }
+  .launch .error { margin-top: 8px; color: var(--critical); font-size: 13px; white-space: pre-line; }
+  .launch .fail-card { border: 1px solid var(--critical); border-radius: 8px;
+                       padding: 12px 14px; margin: 0 0 14px; }
+  .launch .fail-head { display: flex; align-items: baseline; gap: 12px;
+                       justify-content: space-between;
+                       color: var(--critical); font-weight: 600; }
+  .launch .fail-reasons { color: var(--ink-2); font-size: 13px;
+                          margin-top: 6px; }
   a.btn { text-decoration: none; display: inline-block; }
   a.btn[hidden] { display: none; }  /* same [hidden]-vs-display specificity trap as .launch form above */
   .page-links { margin-left: auto; }
@@ -334,12 +341,13 @@
   #delete-dialog .delete-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
   #delete-dialog .delete-note code { color: var(--ink-2); }
   .active-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--ink-2); }
-  #launch-log {
+  #launch-log, #launch-fail-log {
     margin: 10px 0 0; padding: 8px 10px; max-height: 260px; overflow: auto;
     background: var(--page); border: 1px solid var(--border); border-radius: 4px;
     font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
     color: var(--ink-2); white-space: pre-wrap;
   }
+  #launch-fail-log { max-height: 180px; }
 
   .empty { margin: 48px auto; text-align: center; color: var(--ink-2); }
 </style>
@@ -378,6 +386,14 @@
         <button type="button" class="btn danger" id="stop-btn">Stop run</button>
       </div>
       <pre id="launch-log"></pre>
+    </div>
+    <div class="fail-card" id="launch-fail" hidden>
+      <div class="fail-head">
+        <span id="launch-fail-title"></span>
+        <button type="button" class="btn" id="fail-dismiss">Dismiss</button>
+      </div>
+      <div class="fail-reasons" id="launch-fail-reasons"></div>
+      <pre id="launch-fail-log"></pre>
     </div>
     <form id="launch-form" hidden>
       <div><label for="f-run-id">Run id</label><input id="f-run-id" name="run_id" autocomplete="off"></div>
@@ -1082,6 +1098,28 @@ async function refreshLauncher() {
       if (follow) el.scrollTop = el.scrollHeight;
     }
   }
+  // A dead run used to vanish without a trace -- the card and its log tail
+  // hide together, leaving a crash indistinguishable from a clean finish.
+  // The exit record persists the verdict until dismissed or relaunched.
+  const fail = data.last_exit;
+  const failEl = document.getElementById("launch-fail");
+  failEl.hidden = !!active || !fail;
+  if (!failEl.hidden) {
+    document.getElementById("launch-fail-title").textContent =
+      (fail.mode === "replay" ? "Replay " : "Run ") + fail.run_id +
+      (fail.exit_code != null
+        ? " failed (exit " + fail.exit_code + ")"
+        : " ended unexpectedly");
+    const reasons = document.getElementById("launch-fail-reasons");
+    reasons.replaceChildren();
+    for (const r of fail.reason || []) {
+      const div = document.createElement("div");
+      div.textContent = r;
+      reasons.appendChild(div);
+    }
+    document.getElementById("launch-fail-log").textContent =
+      fail.log_excerpt || "";
+  }
 }
 
 // Which runs the user has expanded to see their checkpoints, plus a cache
@@ -1487,6 +1525,11 @@ document.getElementById("stop-btn").addEventListener("click", async () => {
     refreshLauncher();
   } catch (err) { launchError(err.message); }
   finally { stopBtn.disabled = false; }
+});
+document.getElementById("fail-dismiss").addEventListener("click", async () => {
+  try { await postJSON("/api/launcher/dismiss-exit", {}); }
+  catch (err) { launchError(err.message); return; }
+  document.getElementById("launch-fail").hidden = true;
 });
 document.getElementById("summon-link").hidden = SUMMON;
 document.getElementById("dashboard-link").hidden = !SUMMON;
