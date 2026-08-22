@@ -267,6 +267,21 @@ def test_scan_runs_carries_headless(tmp_path):
     assert scan_runs(tmp_path / "nowhere", now=0) == []
 
 
+def test_scan_runs_carries_timescale(tmp_path):
+    # The resume dialog prefills its timescale override from the summary;
+    # None where an older config predates the field.
+    d = tmp_path / "runs" / "r"
+    d.mkdir(parents=True)
+    with (d / "config.jsonl").open("a") as f:
+        f.write(json.dumps({"run_id": "r", "timescale": 2.0}) + "\n")
+    old = tmp_path / "runs" / "old"
+    old.mkdir()
+    _write_config(old)
+    runs = {s["id"]: s for s in scan_runs(tmp_path, now=0)}
+    assert runs["r"]["timescale"] == 2.0
+    assert runs["old"]["timescale"] is None
+
+
 def test_attribute_generations_partitions_by_manifest_counts():
     eps = [{"t": float(i)} for i in range(7)]
     gens = [{"gen": 1, "episodes": 3}, {"gen": 2, "episodes": 2}]

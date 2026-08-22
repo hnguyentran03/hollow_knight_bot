@@ -385,6 +385,7 @@
       <div><label for="f-boss">Boss</label><select id="f-boss" name="boss"></select></div>
       <div><label for="f-timesteps">Timesteps</label><input id="f-timesteps" name="timesteps" type="number" min="1" value="500000"></div>
       <div><label for="f-headless">Headless</label><div class="check-row"><input id="f-headless" name="headless" type="checkbox"><label class="check-hint" for="f-headless">no game window</label></div></div>
+      <div><label for="f-timescale">Timescale</label><input id="f-timescale" name="timescale" type="number" min="1" max="10" step="0.5" placeholder="1"></div>
       <details class="advanced">
         <summary>Advanced</summary>
         <div class="fields">
@@ -417,6 +418,7 @@
       <div class="resume-overrides">
         <div><label for="resume-instances">Instances</label><input type="number" id="resume-instances" min="1" max="4"></div>
         <div><label for="resume-headless">Headless</label><div class="check-row"><input id="resume-headless" type="checkbox"><label class="check-hint" for="resume-headless">no game window</label></div></div>
+        <div><label for="resume-timescale">Timescale</label><input type="number" id="resume-timescale" min="1" max="10" step="0.5"></div>
       </div>
       <label class="choice">
         <input type="radio" name="resume-mode" id="resume-finish" checked>
@@ -915,7 +917,7 @@ function render() {
   const config = document.getElementById("config");
   config.replaceChildren();
   if (run.config) {
-    const keys = ["started_at", "boss", "instances", "headless", "timesteps", "target_timestep",
+    const keys = ["started_at", "boss", "instances", "headless", "timescale", "timesteps", "target_timestep",
                   "resumed_from_gen", "gen_every", "n_steps", "batch_size", "n_epochs",
                   "target_kl", "gamma", "ent_coef", "n_stack", "seed", "port"];
     for (const k of keys) {
@@ -1292,6 +1294,7 @@ function openResumeDialog(r) {
   // only when changed, so an untouched field keeps resume inheritance.
   document.getElementById("resume-instances").value = r.instances || 1;
   document.getElementById("resume-headless").checked = r.headless === true;
+  document.getElementById("resume-timescale").value = r.timescale || 1;
 
   if (noCheckpoint) {
     // No checkpoint (nothing to resume FROM): this restarts the run from
@@ -1415,6 +1418,8 @@ resumeDialog.addEventListener("close", async () => {
   if (instOverride && instOverride !== (r.instances || 1)) body.instances = instOverride;
   const headlessOverride = document.getElementById("resume-headless").checked;
   if (headlessOverride !== (r.headless === true)) body.headless = headlessOverride;
+  const tsOverride = parseFloat(document.getElementById("resume-timescale").value);
+  if (tsOverride && tsOverride !== (r.timescale || 1)) body.timescale = tsOverride;
   launchError("");
   startBtn.disabled = true;
   try {
