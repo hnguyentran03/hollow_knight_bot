@@ -210,22 +210,30 @@ class HKEnv(gym.Env):
                       file=sys.stderr, flush=True)
         return np.asarray(v + onehot, dtype=np.float32)
 
-    def _reward(self, prev, cur, done, won, truncated):
-        r = self.reward["time_penalty"]
+    def _reward_terms(self, prev, cur, done, won, truncated):
+        """The reward, itemized: only terms that fired this step, keyed by
+        their reward-config names (boss_hp_scale's term is "boss_damage").
+        _reward() sums this dict, so the breakdown a recording stores can
+        never disagree with the scalar the policy was trained on."""
+        t = {"time_penalty": self.reward["time_penalty"]}
         if cur["bhp"] < prev["bhp"]:
-            r += (prev["bhp"] - cur["bhp"]) * self.reward["boss_hp_scale"]
+            t["boss_damage"] = (prev["bhp"] - cur["bhp"]) * self.reward["boss_hp_scale"]
         if cur["khp"] < prev["khp"]:
-            r += (prev["khp"] - cur["khp"]) * self.reward["knight_hit"]
+            t["knight_hit"] = (prev["khp"] - cur["khp"]) * self.reward["knight_hit"]
         if done:
             if won:
-                r += self.reward["win"] + cur["khp"] * self.reward["health_bonus"]
+                t["win"] = self.reward["win"]
+                t["health_bonus"] = cur["khp"] * self.reward["health_bonus"]
             else:
-                r += self.reward["death"]
+                t["death"] = self.reward["death"]
         elif truncated:
             # Running out the clock is a loss, not a free exit: without this
             # a timeout undercuts dying and stalling becomes the best play.
-            r += self.reward["death"]
-        return r
+            t["death"] = self.reward["death"]
+        return t
+
+    def _reward(self, prev, cur, done, won, truncated):
+        return sum(self._reward_terms(prev, cur, done, won, truncated).values())
 
     # -- gym API --
 

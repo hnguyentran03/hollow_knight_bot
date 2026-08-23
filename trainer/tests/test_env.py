@@ -445,3 +445,32 @@ def test_reset_after_set_boss_names_the_new_boss():
             assert fg.reset_bosses == ["gorb"]
         finally:
             env.close()
+
+
+def test_reward_terms_sum_to_the_scalar_reward():
+    # The breakdown and the scalar must share one source of truth: for every
+    # outcome shape, _reward() equals the sum of _reward_terms().
+    episode = [state(obs(bhp=900))]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        cases = [
+            # (prev, cur, done, won, truncated)
+            (obs(bhp=900), obs(bhp=880), False, False, False),          # boss damage
+            (obs(khp=9), obs(khp=7), False, False, False),              # knight hit
+            (obs(), obs(bhp=0, khp=6), True, True, False),              # win + health bonus
+            (obs(), obs(khp=0), True, False, False),                    # death
+            (obs(), obs(), False, False, True),                         # truncation death
+            (obs(bhp=900, khp=9), obs(bhp=850, khp=8), True, True, False),  # everything at once
+        ]
+        for prev, cur, done, won, truncated in cases:
+            terms = env._reward_terms(prev, cur, done, won, truncated)
+            assert sum(terms.values()) == env._reward(prev, cur, done, won, truncated)
+        # Spot-check contents: a win carries win + health_bonus, no death.
+        terms = env._reward_terms(obs(), obs(bhp=0, khp=6), True, True, False)
+        assert terms["win"] == DEFAULT_REWARD["win"]
+        assert terms["health_bonus"] == 6 * DEFAULT_REWARD["health_bonus"]
+        assert "death" not in terms
+        # A quiet mid-episode step carries only the time penalty.
+        assert env._reward_terms(obs(), obs(), False, False, False) == {
+            "time_penalty": DEFAULT_REWARD["time_penalty"]}
+        env.close()
