@@ -237,3 +237,44 @@ def test_record_replay_episode_boundary_obs_pairing(tmp_path):
     assert ep2_first["i"] == 0
     assert ep2_first["obs"]["khp"] == 9      # fresh fight, not the khp=0 death frame
     assert ep2_first["obs"]["bhp"] == 900
+
+
+from hkrl.recording import SCHEMA_VERSION
+
+
+def test_parser_accepts_record_flags():
+    args = replay.build_parser().parse_args(
+        ["--run-dir", "/tmp/x", "--record", "--record-dir", "/tmp/out"])
+    assert args.record is True
+    assert str(args.record_dir) == "/tmp/out"
+    defaults = replay.build_parser().parse_args(["--run-dir", "/tmp/x"])
+    assert defaults.record is False and defaults.record_dir is None
+
+
+def test_run_connected_records_a_complete_file(tmp_path):
+    weights, vecnorm = _make_checkpoint(tmp_path)
+    record = tmp_path / "replays" / "test_gen0001.jsonl.gz"
+    scripts = [_scripted(win=True), _scripted(win=False)]
+    with FakeGame([list(ep) for ep in scripts]) as fg:
+        summaries = replay.run_connected(
+            weights, vecnorm, run_dir=tmp_path, host="127.0.0.1",
+            port=fg.port, episodes=1, deterministic=True,
+            record=record, gen=1)
+    assert [s["result"] for s in summaries] == ["WIN"]
+    rows = read_recording(record)
+    assert rows[0]["type"] == "header"
+    assert rows[0]["schema_version"] == SCHEMA_VERSION
+    assert rows[0]["gen"] == 1 and rows[0]["boss"] == "hornet1"
+    assert rows[0]["deterministic"] is True and rows[0]["auto"] is False
+    assert [r["type"] for r in rows[1:]] == ["step"] * summaries[0]["steps"] + ["episode"]
+
+
+def test_run_connected_without_record_behaves_as_before(tmp_path):
+    weights, vecnorm = _make_checkpoint(tmp_path)
+    scripts = [_scripted(win=True), _scripted(win=False)]
+    with FakeGame([list(ep) for ep in scripts]) as fg:
+        summaries = replay.run_connected(
+            weights, vecnorm, run_dir=tmp_path, host="127.0.0.1",
+            port=fg.port, episodes=1, deterministic=True)
+    assert [s["result"] for s in summaries] == ["WIN"]
+    assert not (tmp_path / "replays").exists()

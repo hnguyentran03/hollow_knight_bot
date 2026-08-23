@@ -34,6 +34,8 @@ from stable_baselines3.common.vec_env import (  # noqa: E402
 
 from hkrl.game import GameFleet  # noqa: E402
 from hkrl.generations import checkpoint_paths, latest_checkpoint  # noqa: E402
+from hkrl.recording import (RecordingWriter, build_header,  # noqa: E402
+                            recording_path)
 from hkrl.rundata import read_jsonl, run_boss  # noqa: E402
 from hkrl.vec import make_env  # noqa: E402
 
@@ -224,6 +226,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "(mirrors train.py's --root)")
     ap.add_argument("--stochastic", action="store_true",
                     help="sample the policy instead of argmax actions")
+    ap.add_argument("--record", action="store_true",
+                    help="write a schema-v1 behavior recording (raw obs, "
+                         "action distribution, V(s), itemized rewards per "
+                         "step) alongside the replay")
+    ap.add_argument("--record-dir", type=Path, default=None,
+                    help="directory for --record files (default: "
+                         "<run-dir>/replays)")
     ap.add_argument("--auto", action="store_true",
                     help="launch a game, replay against it, then shut it "
                          "down (dashboard-driven; no already-running game "
@@ -252,20 +261,29 @@ def _print_summary(summaries) -> None:
 
 
 def run_connected(weights, vecnorm, *, run_dir, host, port, episodes,
-                   deterministic):
+                   deterministic, record=None, gen=None):
     """Replay against a game already running on --port (the default mode --
-    behavior unchanged)."""
+    behavior unchanged unless `record` names a recording destination)."""
     model, env = load_policy(weights, vecnorm, port=port, run_dir=run_dir,
-                             host=host)
+                             host=host, capture=record is not None)
     try:
-        return replay(model, env, episodes=episodes,
-                      deterministic=deterministic)
+        if record is None:
+            return replay(model, env, episodes=episodes,
+                          deterministic=deterministic)
+        with RecordingWriter(record) as writer:
+            writer.header(**build_header(
+                run_dir=run_dir, gen=gen, weights=weights, vecnorm=vecnorm,
+                boss_id=run_boss(run_dir), deterministic=deterministic,
+                episodes=episodes))
+            return record_replay(model, env, episodes=episodes,
+                                 writer=writer, deterministic=deterministic)
     finally:
         env.close()
 
 
 def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
-             deterministic, headless=False, timescale=1.0):
+             deterministic, headless=False, timescale=1.0, record=None,
+             gen=None):
     """Self-contained replay: launch one game, replay against it, shut it
     down. Mirrors train.py's game handling so the dashboard can drive a
     replay exactly as it drives a run.
@@ -315,9 +333,20 @@ def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
         # After start() so a Ctrl-C during the cold boot still unwinds
         # through the finally's game.stop() rather than this handler.
         signal.signal(signal.SIGINT, request_stop)
-        model, env = load_policy(weights, vecnorm, port=port, run_dir=run_dir)
-        return replay(model, env, episodes=episodes,
-                      deterministic=deterministic, stop=stop)
+        model, env = load_policy(weights, vecnorm, port=port, run_dir=run_dir,
+                                 capture=record is not None)
+        if record is None:
+            return replay(model, env, episodes=episodes,
+                          deterministic=deterministic, stop=stop)
+        with RecordingWriter(record) as writer:
+            writer.header(**build_header(
+                run_dir=run_dir, gen=gen, weights=weights, vecnorm=vecnorm,
+                boss_id=run_boss(run_dir), deterministic=deterministic,
+                episodes=episodes, timescale=timescale, headless=headless,
+                auto=True))
+            return record_replay(model, env, episodes=episodes,
+                                 writer=writer, deterministic=deterministic,
+                                 stop=stop)
     finally:
         if env is not None:
             env.close()
@@ -335,17 +364,26 @@ def main() -> None:
         weights, vecnorm = checkpoint_paths(run_dir, gen)
     print(banner(gen, run_dir, args.episodes), flush=True)
 
+    record = None
+    if args.record:
+        rec_dir = (args.record_dir if args.record_dir is not None
+                   else run_dir / "replays")
+        record = recording_path(rec_dir, gen)
+        print(f"recording to {record}", flush=True)
+
     if args.auto:
         summaries = run_auto(
             weights, vecnorm, run_dir=run_dir,
             root=args.root.expanduser(), app=DEFAULT_APP,
             port=args.port, episodes=args.episodes,
             deterministic=not args.stochastic,
-            headless=args.headless, timescale=args.timescale)
+            headless=args.headless, timescale=args.timescale,
+            record=record, gen=gen)
     else:
         summaries = run_connected(
             weights, vecnorm, run_dir=run_dir, host=args.host, port=args.port,
-            episodes=args.episodes, deterministic=not args.stochastic)
+            episodes=args.episodes, deterministic=not args.stochastic,
+            record=record, gen=gen)
     _print_summary(summaries)
 
 
