@@ -91,6 +91,15 @@ None of these may run against a live trainer's port — the mod keeps only its n
 ./.venv/bin/python scripts/replay.py --run-dir ~/hkrl/runs/my-run --gen 1 --episodes 3
 ```
 
+Add `--record` (optionally `--record-dir`) to any replay to capture what the
+bot saw and why, one gzipped JSONL file per invocation under
+`<run-dir>/replays/<UTC stamp>_gen<NNNN>.jsonl.gz`: a self-describing header
+line, then a `step` line per decision (raw obs, the full action distribution,
+V(s), log-prob, entropy, and itemized reward) and an `episode` summary line
+after each fight. Composes with `--stochastic`, `--auto`, `--headless`, and
+`--timescale`. Full schema:
+`docs/superpowers/specs/2026-08-22-behavior-capture-design.md`.
+
 **Play a bot in-game with F9** — drops a trained bot into *your* game for exactly one fight. Export a generation (the Export button on any generation row in the dashboard, or `scripts/export_gen.py --run-dir ~/hkrl/runs/my-run`), start the playback daemon (`./.venv/bin/python scripts/play.py`) and the game in either order, pick the bot under **Options → Mods → HKRLBotMod**, stand in the Hall of Gods, and press **F9**. The daemon walks the Knight to the right statue, fights one episode, and hands control back; the F1 HUD's BOT chip shows its state.
 
 **Adding a boss** is a measurement job, not a coding one: press F4 in a normal game session and fight the new boss a few times — the mod's discovery logger records boss candidates, FSM transitions, arena extremes, statue positions, and projectile candidates to ModLog. `scripts/parse_discovery.py <ModLog path>` reduces that to registry-ready values, transcribed into `hkrl/bosses.py` and `mod/BossRegistry.cs` following `mod/DISCOVERED.md`.
