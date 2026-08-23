@@ -450,3 +450,20 @@ def test_api_launcher_config_survives_a_torn_tail(base_url, tmp_path):
 def test_api_launcher_without_an_active_run_has_no_config(base_url):
     _, _, body = _get(base_url + "/api/launcher")
     assert json.loads(body)["active"] is None
+
+
+def test_api_launcher_survives_a_pidfile_missing_run_id(base_url, tmp_path):
+    # launcher.status() only requires "pid" to consider a pidfile active
+    # (see its except clause), so a pidfile that parses as JSON but lacks
+    # run_id can reach the handler here -- it must not 500 trying to key
+    # config enrichment off a missing active["run_id"].
+    d = tmp_path / "launcher"
+    d.mkdir(exist_ok=True)
+    (d / "r1.pid").write_text(json.dumps(
+        {"pid": os.getpid(), "started": 1000.0}))
+    status, _, body = _get(base_url + "/api/launcher")
+    assert status == 200
+    data = json.loads(body)
+    assert data["active"] is not None
+    assert "run_id" not in data["active"]
+    assert "config" not in data["active"]

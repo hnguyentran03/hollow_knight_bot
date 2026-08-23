@@ -66,7 +66,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._run(path[len("/api/run/"):])
         elif path == "/api/launcher":
             active = launcher.status(self.server.root)
-            if active is not None:
+            if active is not None and active.get("run_id"):
                 active["config"] = _active_config(self.server.root,
                                                   active["run_id"])
             self._json({
