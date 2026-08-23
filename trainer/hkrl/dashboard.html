@@ -595,9 +595,13 @@ function niceTicks(lo, hi, n) {
   return ticks;
 }
 
-// series: {name, color, points:[{x,y,color?}], kind:"line"|"dots", endDot:bool}
+// series: {name, color, points:[{x,y,color?,meta?}], kind:"line"|"dots",
+//          endDot:bool, hover:bool}
 // opts.legendItems: [{name, color}] replaces the series-derived legend, for
 // charts whose dots carry per-point colors the series list can't describe.
+// opts.dotTip(meta, point) -> {title, lines:[...]}: per-dot tooltip for
+// hover:true dots series; within HIT_R px of a dot it replaces the
+// crosshair tooltip and the dot is enlarged.
 function drawChart(card, opts) {
   card.querySelectorAll("svg, .tooltip, .legend").forEach(el => el.remove());
   const allPts = opts.series.flatMap(s => s.points);
@@ -684,11 +688,15 @@ function drawChart(card, opts) {
     txt.textContent = opts.yLabel;
   }
 
+  const hitDots = [];
   for (const s of opts.series) {
     if (s.kind === "dots") {
-      for (const p of s.points)
-        el("circle", { cx: X(p.x), cy: Y(p.y), r: 2.5, fill: p.color || s.color,
-                       stroke: css("--surface"), "stroke-width": 1 });
+      for (const p of s.points) {
+        const c = el("circle", { cx: X(p.x), cy: Y(p.y), r: 2.5,
+                                 fill: p.color || s.color,
+                                 stroke: css("--surface"), "stroke-width": 1 });
+        if (s.hover) hitDots.push({ px: X(p.x), py: Y(p.y), circle: c, point: p });
+      }
     } else {
       const d = s.points.map((p, i) => (i ? "L" : "M") + X(p.x) + " " + Y(p.y)).join(" ");
       el("path", { d, fill: "none", stroke: s.color, "stroke-width": 2,
@@ -710,11 +718,67 @@ function drawChart(card, opts) {
   const snapXs = [...new Set(opts.series.filter(s => !s.snapExempt)
                                         .flatMap(s => s.points.map(p => p.x)))].sort((a, b) => a - b);
 
+  /* 2D nearest-dot hover: linear scan over precomputed pixel positions --
+     sub-millisecond at the ~7k dots a long run produces (hornet-1: 6,956).
+     If a run ever grows an order of magnitude, bucket hitDots by x. */
+  const HIT_R2 = 8 * 8;
+  let hovered = null;
+  const clearHover = () => {
+    if (!hovered) return;
+    hovered.circle.setAttribute("r", 2.5);
+    hovered.circle.setAttribute("stroke", css("--surface"));
+    hovered.circle.setAttribute("stroke-width", 1);
+    hovered = null;
+  };
+
   svg.addEventListener("pointermove", ev => {
     if (!snapXs.length) return;
     const rect = svg.getBoundingClientRect();
     const mx = (ev.clientX - rect.left) / rect.width * W;
     const dataX = xlo + (mx - M.l) / (W - M.l - M.r) * (xhi - xlo);
+
+    if (hitDots.length && opts.dotTip) {
+      const my = (ev.clientY - rect.top) / rect.height * H;
+      let bestDot = null, bestD2 = HIT_R2;
+      for (const d of hitDots) {
+        const dx = d.px - mx, dy = d.py - my;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= bestD2) { bestD2 = d2; bestDot = d; }
+      }
+      if (bestDot) {
+        if (hovered !== bestDot) {
+          clearHover();
+          hovered = bestDot;
+          bestDot.circle.setAttribute("r", 4.5);
+          bestDot.circle.setAttribute("stroke", css("--s1"));
+          bestDot.circle.setAttribute("stroke-width", 2);
+          // Dots render before the rolling-mean path; re-append so the
+          // enlarged dot sits above the line, not under it.
+          svg.appendChild(bestDot.circle);
+        }
+        cross.setAttribute("visibility", "hidden");
+        const t = opts.dotTip(bestDot.point.meta, bestDot.point);
+        tip.replaceChildren();
+        const tx = document.createElement("div");
+        tx.className = "tx";
+        tx.textContent = t.title;
+        tip.appendChild(tx);
+        for (const line of t.lines) {
+          const row = document.createElement("div");
+          row.className = "tx";
+          row.textContent = line;
+          tip.appendChild(row);
+        }
+        const cardRect = card.getBoundingClientRect();
+        const px = bestDot.px / W * rect.width + rect.left - cardRect.left;
+        tip.style.display = "block";
+        tip.style.left = Math.min(px + 12, cardRect.width - tip.offsetWidth - 8) + "px";
+        tip.style.top = (rect.top - cardRect.top + 10) + "px";
+        return;
+      }
+      clearHover();
+    }
+
     let best = snapXs[0];
     for (const x of snapXs) if (Math.abs(x - dataX) < Math.abs(best - dataX)) best = x;
     cross.setAttribute("x1", X(best));
@@ -760,6 +824,7 @@ function drawChart(card, opts) {
     tip.style.top = (rect.top - cardRect.top + 10) + "px";
   });
   svg.addEventListener("pointerleave", () => {
+    clearHover();
     cross.setAttribute("visibility", "hidden");
     tip.style.display = "none";
   });
