@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import sys
 import threading
@@ -400,3 +401,69 @@ def test_api_launcher_reports_and_dismisses_the_last_exit(base_url,
     assert status == 200 and data == {"dismissed": True}
     _, _, body = _get(base_url + "/api/launcher")
     assert json.loads(body)["last_exit"] is None
+
+
+def _fake_active(root, run_id="r1"):
+    """A pidfile naming this test process, so launcher.status() sees an
+    active run without spawning anything."""
+    d = root / "launcher"
+    d.mkdir(exist_ok=True)
+    (d / f"{run_id}.pid").write_text(json.dumps(
+        {"run_id": run_id, "pid": os.getpid(), "started": 1000.0}))
+
+
+def test_api_launcher_attaches_the_active_runs_config(base_url, tmp_path):
+    (tmp_path / "runs" / "r1" / "config.jsonl").write_text(json.dumps(
+        {"boss": "gruz_mother", "instances": 2, "headless": True,
+         "timescale": 2.0, "timesteps": 500_000, "target_timestep": 1_000_000,
+         "target_kl": 0.03, "port": 9020, "seed": None, "auto": True}) + "\n")
+    _fake_active(tmp_path)
+    _, _, body = _get(base_url + "/api/launcher")
+    active = json.loads(body)["active"]
+    assert active["run_id"] == "r1"
+    assert active["config"] == {
+        "boss": "gruz_mother", "instances": 2, "headless": True,
+        "timescale": 2.0, "timesteps": 500_000,
+        "target_timestep": 1_000_000, "target_kl": 0.03}
+
+
+def test_api_launcher_config_is_null_before_train_py_writes_it(base_url,
+                                                               tmp_path):
+    # The launcher spawns train.py moments before prepare_session appends
+    # config.jsonl; the first poll can land in that window.
+    (tmp_path / "runs" / "r2").mkdir()
+    _fake_active(tmp_path, "r2")
+    _, _, body = _get(base_url + "/api/launcher")
+    assert json.loads(body)["active"]["config"] is None
+
+
+def test_api_launcher_config_survives_a_torn_tail(base_url, tmp_path):
+    (tmp_path / "runs" / "r1" / "config.jsonl").write_text(
+        json.dumps({"boss": "hornet1", "instances": 1}) + "\n"
+        + '{"boss": "gruz_mo')  # torn mid-append
+    _fake_active(tmp_path)
+    _, _, body = _get(base_url + "/api/launcher")
+    assert json.loads(body)["active"]["config"] == {
+        "boss": "hornet1", "instances": 1}
+
+
+def test_api_launcher_without_an_active_run_has_no_config(base_url):
+    _, _, body = _get(base_url + "/api/launcher")
+    assert json.loads(body)["active"] is None
+
+
+def test_api_launcher_survives_a_pidfile_missing_run_id(base_url, tmp_path):
+    # launcher.status() only requires "pid" to consider a pidfile active
+    # (see its except clause), so a pidfile that parses as JSON but lacks
+    # run_id can reach the handler here -- it must not 500 trying to key
+    # config enrichment off a missing active["run_id"].
+    d = tmp_path / "launcher"
+    d.mkdir(exist_ok=True)
+    (d / "r1.pid").write_text(json.dumps(
+        {"pid": os.getpid(), "started": 1000.0}))
+    status, _, body = _get(base_url + "/api/launcher")
+    assert status == 200
+    data = json.loads(body)
+    assert data["active"] is not None
+    assert "run_id" not in data["active"]
+    assert "config" not in data["active"]
