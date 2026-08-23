@@ -130,13 +130,19 @@ class HKEnv(gym.Env):
     # tests, and non-measurement training pay nothing.
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
                  max_steps=2700, timeout=30.0, reset_retries=8,
-                 keepalive=3.0, reset_log_dir=None, boss=DEFAULT_BOSS):
+                 keepalive=3.0, reset_log_dir=None, boss=DEFAULT_BOSS,
+                 capture=False):
         # Resolved before any socket work so an unknown id fails instantly
         # and locally, not after a game connection is already up.
         self.boss = get_boss(boss)
         self.reward = dict(DEFAULT_REWARD, **(reward_config or {}))
         self.max_steps = max_steps
         self.reset_retries = reset_retries
+        # Behavior-capture hook (docs spec 2026-08-22): when true, step()
+        # and reset() attach the raw obs dict and the per-term reward
+        # breakdown to info for a recorder to persist. Default off so the
+        # training path allocates nothing extra.
+        self._capture = capture
         self._reset_log = (reset_log_path(reset_log_dir, port)
                            if reset_log_dir is not None else None)
         self._port = port
@@ -313,7 +319,10 @@ class HKEnv(gym.Env):
         self._prev = msg["obs"]
         self._steps = 0
         self._max_bhp = None
-        return self._flatten(msg["obs"]), dict(msg["info"])
+        info = dict(msg["info"])
+        if self._capture:
+            info["raw_obs"] = dict(msg["obs"])
+        return self._flatten(msg["obs"]), info
 
     def abort_reset(self):
         """Abandon an in-flight reset() from another thread (the async-reset
@@ -374,7 +383,13 @@ class HKEnv(gym.Env):
         cur, info = msg["obs"], dict(msg["info"])
         done, won = bool(msg["done"]), bool(info.get("won", False))
         truncated = not done and self._steps + 1 >= self.max_steps
-        reward = self._reward(self._prev, cur, done, won, truncated)
+        if self._capture:
+            terms = self._reward_terms(self._prev, cur, done, won, truncated)
+            reward = sum(terms.values())
+            info["raw_obs"] = dict(cur)
+            info["reward_terms"] = terms
+        else:
+            reward = self._reward(self._prev, cur, done, won, truncated)
         self._prev = cur
         self._steps += 1
         if done or truncated:

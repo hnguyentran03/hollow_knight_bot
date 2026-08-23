@@ -474,3 +474,40 @@ def test_reward_terms_sum_to_the_scalar_reward():
         assert env._reward_terms(obs(), obs(), False, False, False) == {
             "time_penalty": DEFAULT_REWARD["time_penalty"]}
         env.close()
+
+
+def test_capture_attaches_raw_obs_and_reward_terms():
+    first, second = obs(bhp=900), obs(bhp=880)
+    episode = [state(first), state(second)]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, capture=True)
+        _, info = env.reset()
+        assert info["raw_obs"] == first
+        _, r, *_ , info = env.step(0)
+        assert info["raw_obs"] == second
+        assert sum(info["reward_terms"].values()) == r
+        assert info["reward_terms"]["boss_damage"] == pytest.approx(
+            20 * DEFAULT_REWARD["boss_hp_scale"])
+        env.close()
+
+
+def test_capture_reward_terms_include_truncation_death():
+    episode = [state(obs()), state(obs())]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, capture=True, max_steps=1)
+        env.reset()
+        _, _, terminated, truncated, info = env.step(0)
+        assert truncated and not terminated
+        assert info["reward_terms"]["death"] == DEFAULT_REWARD["death"]
+        env.close()
+
+
+def test_capture_off_by_default_attaches_nothing():
+    episode = [state(obs()), state(obs())]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        _, info = env.reset()
+        assert "raw_obs" not in info
+        *_, info = env.step(0)
+        assert "raw_obs" not in info and "reward_terms" not in info
+        env.close()
