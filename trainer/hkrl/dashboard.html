@@ -950,7 +950,7 @@ function render() {
      non-color channel. */
   const lossRed = css("--critical");
   const dotColor = e => e.won === true ? s2 : e.won === false ? lossRed : muted;
-  const eps = run.episodes.map(e => ({ x: e.t, y: e.r, color: dotColor(e) }));
+  const eps = run.episodes.map(e => ({ x: e.t, y: e.r, color: dotColor(e), meta: e }));
   const epByTime = new Map(run.episodes.map(e => [e.t, e]));
   const legendItems = [{ name: "win", color: s2 }, { name: "loss", color: lossRed }];
   if (run.episodes.some(e => e.won == null))
@@ -959,7 +959,8 @@ function render() {
   drawChart(document.getElementById("chart-episodes"), {
     height: 220,
     series: [
-      { name: "episode reward", color: muted, kind: "dots", points: eps, snapExempt: false },
+      { name: "episode reward", color: muted, kind: "dots", points: eps,
+        snapExempt: false, hover: true },
       { name: "rolling mean (20)", color: s1, points: rollingMean(eps, 20), endDot: false },
     ],
     legendItems,
@@ -976,6 +977,18 @@ function render() {
         parts.push(e && e.gen != null ? "gen " + e.gen : "gen in progress");
       if (e && e.won != null) parts.push(e.won ? "won" : "lost");
       return parts.join(" · ") || null;
+    },
+    dotTip: e => {
+      const lines = [];
+      lines.push(e.won === true ? "won" : e.won === false ? "lost"
+                                        : "outcome unrecorded");
+      lines.push("reward " + e.r.toFixed(1));
+      if (e.l != null) lines.push("length " + fmtK(e.l) + " steps");
+      if (e.boss_damage_frac != null)
+        lines.push("boss damage " + fmtPct(e.boss_damage_frac));
+      if (gens.length)
+        lines.push(e.gen != null ? "gen " + e.gen : "gen in progress");
+      return { title: fmtDate(e.t) + " · " + fmtClock(e.t), lines };
     },
   });
 
