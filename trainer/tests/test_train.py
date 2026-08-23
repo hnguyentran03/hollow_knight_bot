@@ -1,5 +1,7 @@
 import json
 import pathlib
+import socket
+import subprocess
 import sys
 import threading
 
@@ -950,3 +952,68 @@ def test_prepare_session_refuses_an_existing_run_dir_for_a_fresh_run(tmp_path):
         train.prepare_session(
             ["--root", str(tmp_path), "--run-id", "taken",
              "--timesteps", "1000"])
+
+
+def test_main_preflights_ports_before_the_save_backup(tmp_path, monkeypatch,
+                                                      capsys):
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        monkeypatch.setattr(
+            train, "backup_saves",
+            lambda root: pytest.fail("backup ran after a failed preflight"))
+        monkeypatch.setattr(sys, "argv", [
+            "train.py", "--root", str(tmp_path), "--run-id", "squat",
+            "--port", str(port), "--auto", "--timesteps", "1000"])
+        with pytest.raises(SystemExit) as exc:
+            train.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert str(port) in err
+    assert any(line.startswith("!!!") for line in err.splitlines())
+
+
+def test_startup_verdict_speaks_each_failure_class():
+    from hkrl.game import PortInUse
+    assert "9021" in train.startup_verdict(PortInUse("port 9021 is held"))
+    v = train.startup_verdict(
+        subprocess.TimeoutExpired(cmd=["cp", "-Rc", "a", "b"], timeout=120))
+    assert "timed out" in v and "cp" in v
+    v = train.startup_verdict(
+        subprocess.CalledProcessError(1, ["codesign", "x"]))
+    assert "failed" in v and "codesign" in v
+    assert "bridge" in train.startup_verdict(TimeoutError("no hello"))
+    v = train.startup_verdict(
+        RuntimeError("game exited with code 138 before port 9020 accepted"))
+    assert "bridge" in v and "exited" in v
+    assert "signature" in v
+    # PortInUse is a RuntimeError subclass but must still take its own
+    # branch (str passthrough), not the generic RuntimeError one.
+    assert train.startup_verdict(PortInUse("port 9021 is held")) \
+        == "port 9021 is held"
+
+
+def test_startup_failures_end_with_verdict_lines(tmp_path, monkeypatch,
+                                                 capsys):
+    monkeypatch.setattr(train, "backup_saves", lambda root: None)
+    monkeypatch.setattr(train, "preflight_ports", lambda ports: [])
+
+    def boom(ports, app, root):
+        raise subprocess.TimeoutExpired(cmd=["cp", "-Rc", "a", "b"],
+                                        timeout=120)
+
+    monkeypatch.setattr(train, "build_apps", boom)
+    monkeypatch.setattr(sys, "argv", [
+        "train.py", "--root", str(tmp_path), "--run-id", "clonefail",
+        "--auto", "--timesteps", "1000"])
+    with pytest.raises(SystemExit) as exc:
+        train.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "Traceback" in err
+    bangs = [l for l in err.splitlines() if l.startswith("!!!")]
+    assert bangs and any("timed out" in l for l in bangs)
+    # The verdict lines come after the traceback: the log TAIL must read
+    # on its own.
+    assert err.rstrip().splitlines()[-1].startswith("!!!")

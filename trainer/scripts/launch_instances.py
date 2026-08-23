@@ -46,6 +46,12 @@ APP_SUPPORT = Path("~/Library/Application Support").expanduser()
 
 SAVE_ISOLATION_SUPPORTED = sys.platform == "darwin"
 
+# prepare_instance used to hang forever when a zombie game still held the
+# .app being copied (observed 2026-08-22, Ctrl-C'd by hand); generous
+# ceilings turn that silent hang into a TimeoutExpired train.py explains.
+CLONE_TIMEOUT_S = 120   # cp -Rc / codesign over the multi-GB bundle
+PREFS_TIMEOUT_S = 30    # PlistBuddy / defaults
+
 # The master save directory per platform; None where the location is
 # unknown (nothing to back up there).
 if sys.platform == "darwin":
@@ -138,11 +144,13 @@ def seed_prefs(bundle_id: str, slot: int = 0) -> None:
     even before anyone tiles the windows properly.
     """
     exported = subprocess.run(["defaults", "export", MASTER_BUNDLE_ID, "-"],
-                              check=True, capture_output=True).stdout
+                              check=True, capture_output=True,
+                              timeout=PREFS_TIMEOUT_S).stdout
     subprocess.run(["defaults", "delete", bundle_id],
-                   capture_output=True)  # fresh domain; ok if absent
+                   capture_output=True,
+                   timeout=PREFS_TIMEOUT_S)  # fresh domain; ok if absent
     subprocess.run(["defaults", "import", bundle_id, "-"],
-                   input=exported, check=True)
+                   input=exported, check=True, timeout=PREFS_TIMEOUT_S)
     width = max(640, 1280 - 160 * slot)
     height = max(360, 720 - 90 * slot)
     for key, value in [
@@ -153,7 +161,8 @@ def seed_prefs(bundle_id: str, slot: int = 0) -> None:
         ("Screenmanager Resolution Height", height),
     ]:
         subprocess.run(["defaults", "write", bundle_id, key,
-                        "-int", str(value)], check=True)
+                        "-int", str(value)], check=True,
+                       timeout=PREFS_TIMEOUT_S)
 
 
 def prepare_instance(port: int, app: Path = None,
@@ -177,19 +186,21 @@ def prepare_instance(port: int, app: Path = None,
         else Path("~/hkrl/instances").expanduser()
     clone = root / f"port-{port}" / bundle.name
     clone.parent.mkdir(parents=True, exist_ok=True)
+    print(f"cloning app for port {port}...", flush=True)
     if clone.exists():
         shutil.rmtree(clone)
-    subprocess.run(["cp", "-Rc", str(bundle), str(clone)], check=True)
+    subprocess.run(["cp", "-Rc", str(bundle), str(clone)], check=True,
+                   timeout=CLONE_TIMEOUT_S)
     bundle_id = f"{MASTER_BUNDLE_ID}.hkrl{port}"
     subprocess.run(
         ["/usr/libexec/PlistBuddy", "-c",
          f"Set :CFBundleIdentifier {bundle_id}",
          str(clone / "Contents" / "Info.plist")],
-        check=True)
+        check=True, timeout=PREFS_TIMEOUT_S)
     if sign:
         subprocess.run(
             ["codesign", "--force", "--deep", "--sign", "-", str(clone)],
-            check=True, capture_output=True)
+            check=True, capture_output=True, timeout=CLONE_TIMEOUT_S)
     save_dir = seed_save_dir(bundle_id)
     prepare_clone_save(save_dir)
     if prefs:
@@ -232,6 +243,61 @@ def wait_for_port(
                 )
             time.sleep(0.5)
     raise TimeoutError(f"port {port} never accepted a connection within {timeout}s")
+
+
+def _port_holder(port: int) -> tuple[str, str] | None:
+    """(pid, command) of the LISTENing process on `port`, or None when
+    unresolvable (win32, lsof missing or slow, listener already gone)."""
+    if sys.platform == "win32":
+        return None
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = out.strip().splitlines()
+    if len(lines) < 2:
+        return None
+    fields = lines[1].split()  # COMMAND PID USER ...
+    if len(fields) < 2:
+        return None
+    return fields[1], fields[0]
+
+
+def port_squatter_verdict(port: int, host: str = "127.0.0.1") -> str | None:
+    """One line naming the unmanaged listener on `port`, or None when free.
+
+    Operator-facing: which pid, which command, and the exact command that
+    clears it. Shown inline by the dashboard's launch rejection and printed
+    as a `!!!` line by train.py, so it must read on its own."""
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            pass
+    except OSError:
+        return None
+    holder = _port_holder(port)
+    if holder is not None:
+        pid, command = holder
+        return (f"port {port} is held by pid {pid} ({command}) -- a "
+                f"leftover from an earlier session? Kill it with "
+                f"`kill -9 {pid}`, then relaunch.")
+    if sys.platform == "win32":
+        find_it = (f"`netstat -ano | findstr :{port}` then "
+                   f"`taskkill /PID <pid> /F`")
+    else:
+        find_it = f"`lsof -nP -iTCP:{port} -sTCP:LISTEN`"
+    return (f"port {port} is already accepting connections before any game "
+            f"was launched -- an unmanaged process holds it. Find it with "
+            f"{find_it}, kill it, relaunch.")
+
+
+def preflight_ports(ports) -> list[str]:
+    """Verdicts for every squatted port in `ports`; empty means all clear.
+    Probes the whole list, not first-hit, so one attempt reports the whole
+    squat (the 2026-08-22 incident squatted three ports at once)."""
+    return [v for v in (port_squatter_verdict(p) for p in ports)
+            if v is not None]
 
 
 def launch(port: int, app: Path, visible: bool,
@@ -327,18 +393,10 @@ def main() -> None:
     # bridgeless, while wait_for_port happily greets the squatter -- observed
     # live (2026-07-20) when a second instance's port 9021 turned out to be
     # the dashboard's old default.
-    for i in range(args.instances):
-        port = args.port + i
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                pass
-        except OSError:
-            continue
-        raise SystemExit(
-            f"port {port} is already accepting connections -- another "
-            f"process (a dashboard? a leftover game?) holds it. Free it or "
-            f"pick a different --port range."
-        )
+    verdicts = preflight_ports([args.port + i
+                                for i in range(args.instances)])
+    if verdicts:
+        raise SystemExit("\n".join(verdicts))
 
     backup = backup_saves()
     if backup is not None:

@@ -211,14 +211,12 @@ def test_seed_save_dir_seeds_and_refreshes_the_instance_save_clone(tmp_path):
     assert not (clone / "user2.dat").exists()
 
 
-@pytest.mark.skipif(sys.platform != "darwin",
-                    reason="app-clone isolation is macOS-only (cp -c, "
-                           "PlistBuddy); other platforms have none yet")
-def test_prepare_instance_clones_the_app_with_a_per_port_bundle_id(
-        tmp_path, monkeypatch):
-    # A miniature .app bundle standing in for the real 7.5G one; sign=False
-    # because an ad-hoc codesign of a fake bundle fails, and the plist edit
-    # is the part under test.
+def _mini_bundle(tmp_path, monkeypatch):
+    """A miniature .app bundle standing in for the real 7.5G one.
+
+    Builds the bundle + Info.plist + master save dir, and points
+    APP_SUPPORT at the sandbox; returns the clone's binary path.
+    """
     bundle = tmp_path / "game" / "hollow_knight.app"
     (bundle / "Contents" / "MacOS").mkdir(parents=True)
     binary = bundle / "Contents" / "MacOS" / "Hollow Knight"
@@ -237,6 +235,15 @@ def test_prepare_instance_clones_the_app_with_a_per_port_bundle_id(
     master_save.mkdir()
     (master_save / "user1.dat").write_text("save")
     monkeypatch.setattr(launch_instances, "APP_SUPPORT", tmp_path)
+    return binary
+
+
+@pytest.mark.skipif(sys.platform != "darwin",
+                    reason="app-clone isolation is macOS-only (cp -c, "
+                           "PlistBuddy); other platforms have none yet")
+def test_prepare_instance_clones_the_app_with_a_per_port_bundle_id(
+        tmp_path, monkeypatch):
+    binary = _mini_bundle(tmp_path, monkeypatch)
 
     # sign=False (codesigning a fake bundle fails) and prefs=False (the
     # real `defaults` domains must not be touched from a unit test).
@@ -254,6 +261,27 @@ def test_prepare_instance_clones_the_app_with_a_per_port_bundle_id(
     assert got.stdout.strip() == "unity.Team Cherry.Hollow Knight.hkrl9030"
     assert (tmp_path / "unity.Team Cherry.Hollow Knight.hkrl9030" /
             "user1.dat").read_text() == "save"
+
+
+@pytest.mark.skipif(sys.platform != "darwin",
+                    reason="app-clone isolation is macOS-only")
+def test_prepare_instance_bounds_its_subprocesses_and_logs_progress(
+        tmp_path, monkeypatch, capsys):
+    binary = _mini_bundle(tmp_path, monkeypatch)
+    real_run = subprocess.run
+    calls = []
+
+    def recording_run(cmd, **kw):
+        calls.append((cmd[0], kw.get("timeout")))
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(launch_instances.subprocess, "run", recording_run)
+    launch_instances.prepare_instance(9032, app=binary,
+                                      root=tmp_path / "instances",
+                                      sign=False, prefs=False)
+    assert calls, "expected subprocess activity (cp, PlistBuddy)"
+    assert all(t is not None for _, t in calls), calls
+    assert "cloning app for port 9032" in capsys.readouterr().out
 
 
 def test_backup_saves_snapshots_the_master_save(tmp_path):
@@ -290,28 +318,46 @@ def test_backup_saves_is_a_noop_without_a_master_save_dir(tmp_path):
     assert not (tmp_path / "hkrl" / "save-backups").exists()
 
 
+def test_port_squatter_verdict_names_the_holder():
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        verdict = launch_instances.port_squatter_verdict(port)
+        assert verdict is not None
+        assert str(port) in verdict
+        if sys.platform == "darwin":
+            # lsof resolves the squatter -- here, this test process.
+            assert f"pid {os.getpid()}" in verdict
+            assert f"kill -9 {os.getpid()}" in verdict
+
+
+def test_port_squatter_verdict_is_none_on_a_free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    assert launch_instances.port_squatter_verdict(port) is None
+
+
+def test_preflight_ports_reports_every_squatted_port():
+    with socket.socket() as a, socket.socket() as b:
+        for s in (a, b):
+            s.bind(("127.0.0.1", 0))
+            s.listen(1)
+        ports = [a.getsockname()[1], b.getsockname()[1]]
+        verdicts = launch_instances.preflight_ports(ports)
+        assert len(verdicts) == 2
+        assert str(ports[0]) in verdicts[0] and str(ports[1]) in verdicts[1]
+
+
 @pytest.mark.skipif(sys.platform != "darwin",
                     reason="app-clone isolation is macOS-only")
 def test_prepare_instance_strips_foreign_profiles_from_the_clone(tmp_path,
                                                                  monkeypatch):
-    bundle = tmp_path / "game" / "hollow_knight.app"
-    (bundle / "Contents" / "MacOS").mkdir(parents=True)
-    binary = bundle / "Contents" / "MacOS" / "Hollow Knight"
-    binary.write_text("#!/bin/sh\n")
-    (bundle / "Contents" / "Info.plist").write_text(
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
-        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-        '<plist version="1.0"><dict>'
-        "<key>CFBundleIdentifier</key>"
-        "<string>unity.Team Cherry.Hollow Knight</string>"
-        "</dict></plist>\n")
-
+    binary = _mini_bundle(tmp_path, monkeypatch)
     master_save = tmp_path / "unity.Team Cherry.Hollow Knight"
-    master_save.mkdir()
-    (master_save / "user1.dat").write_text("godhome")
     (master_save / "user4.dat").write_text("foreign profile")
-    monkeypatch.setattr(launch_instances, "APP_SUPPORT", tmp_path)
 
     launch_instances.prepare_instance(9031, app=binary,
                                       root=tmp_path / "instances",

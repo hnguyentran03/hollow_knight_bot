@@ -51,6 +51,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/launcher":
             self._json({
                 "active": launcher.status(self.server.root),
+                "last_exit": launcher.last_exit(self.server.root),
                 # Mirrors train.py's own defaults so the form and the CLI
                 # start from the same place.
                 "defaults": {
@@ -133,6 +134,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json({"trashed":
                             launcher.delete(self.server.root,
                                             body.get("run_id"))})
+            elif path == "/api/launcher/dismiss-exit":
+                launcher.dismiss_exit(self.server.root)
+                self._json({"dismissed": True})
             else:
                 self.send_error(404)
         except ValueError as exc:

@@ -13,9 +13,11 @@ reap a wedged game's port.
 import argparse
 import json
 import signal
+import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
 
 from hkrl.bosses import BOSSES, DEFAULT_BOSS, get_boss  # noqa: E402
-from hkrl.game import GameFleet  # noqa: E402
+from hkrl.game import GameFleet, PortInUse  # noqa: E402
 from hkrl.generations import GenerationCallback, latest_checkpoint  # noqa: E402
 from hkrl.masking import MaskedRecurrentPPO  # noqa: E402
 from hkrl.rundata import read_jsonl  # noqa: E402
@@ -33,7 +35,7 @@ from hkrl.vec import RealEpisodeVecMonitor, RealEpisodeVecNormalize  # noqa: E40
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from launch_instances import (  # noqa: E402
     DEFAULT_APP, DEFAULT_PORT, MASTER_BUNDLE_ID, SAVE_ISOLATION_SUPPORTED,
-    backup_saves, prepare_instance, seed_save_dir,
+    backup_saves, prepare_instance, preflight_ports, seed_save_dir,
 )
 from hkrl.cloneprep import prepare_clone_save  # noqa: E402
 
@@ -498,6 +500,34 @@ class StopOnFlag(BaseCallback):
         return not any(self.locals["dones"])
 
 
+def startup_verdict(exc: BaseException) -> str:
+    """Plain language for a known startup failure, printed as `!!!` lines
+    AFTER the traceback -- tail shows the end of the log, so the verdict
+    goes last (and the launcher's failure card scrapes these lines)."""
+    if isinstance(exc, PortInUse):
+        return str(exc)
+    if isinstance(exc, subprocess.TimeoutExpired):
+        cmd = exc.cmd[0] if exc.cmd else "?"
+        return (f"preparing a game copy timed out running {cmd} -- a "
+                f"leftover game may still be running the app being copied; "
+                f"find it with `lsof -nP -iTCP -sTCP:LISTEN`, kill it, "
+                f"relaunch")
+    if isinstance(exc, subprocess.CalledProcessError):
+        cmd = exc.cmd[0] if exc.cmd else "?"
+        return f"preparing a game copy failed ({cmd} exited {exc.returncode})"
+    if isinstance(exc, TimeoutError):
+        return f"a game never opened its bridge port: {exc}"
+    if isinstance(exc, RuntimeError):
+        verdict = f"a game exited before its bridge came up: {exc}"
+        if "code 138" in str(exc):
+            verdict += (" -- exit code 138 usually means an invalid code "
+                        "signature after a mod rebuild; re-sign the app "
+                        "with `codesign --force --deep --sign -` (see the "
+                        "build-mod docs)")
+        return verdict
+    return str(exc)
+
+
 def confirm_ready(auto: bool, boss_display: str) -> None:
     """Gate between "games are up" and "training begins".
 
@@ -650,6 +680,22 @@ def prepare_session(argv=None) -> tuple[argparse.Namespace, Path, tuple | None, 
 def main() -> None:
     args, run_dir, resume, budget, async_resets = prepare_session()
 
+    ports = [args.port + i for i in range(args.instances)]
+    # Fail fast on squatted ports BEFORE the save backup and the clone
+    # work: the PortInUse that used to fire at spawn time arrived after
+    # both, buried under a traceback (observed 2026-08-22 -- three launches
+    # died on leftover games squatting 9021-9023). Dashboard launches are
+    # normally refused even earlier, by launcher._preflight.
+    verdicts = preflight_ports(ports)
+    if verdicts:
+        for v in verdicts:
+            print(f"!!! {v}", file=sys.stderr, flush=True)
+        print(f"!!! nothing was launched. This session is already recorded "
+              f"in {run_dir}; free the port(s), then resume the run (or "
+              f"remove that dir to start it fresh).",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+
     # Unconditional: every clone is seeded FROM the master save (N=1 on
     # save-isolation platforms, the master itself on others), so a quietly
     # corrupt master would propagate. A run must never be the event that
@@ -660,20 +706,32 @@ def main() -> None:
     if resume is None:
         print(session_banner(budget), flush=True)
 
-    ports = [args.port + i for i in range(args.instances)]
-    # Instances must not share the game's save directory: they all autosave
-    # the same slot throughout a run (observed corrupting the master save
-    # live, 2026-07-20 -- see seed_save_dir). Each slot gets its own app
-    # clone with a per-port bundle id (own save dir, own ModLog), refreshed
-    # from the master app and save at every start -- see build_apps.
-    apps = build_apps(ports, args.app, args.root / "instances")
-    game = GameFleet(ports, app=args.app, apps=apps,
-                     prepares=build_prepares(ports),
-                     headless=args.headless, timescale=args.timescale)
     env = None
+    game = None
     exit_code = 0
     try:
-        game.start()
+        try:
+            # Instances must not share the game's save directory: they all
+            # autosave the same slot throughout a run (observed corrupting
+            # the master save live, 2026-07-20 -- see seed_save_dir). Each
+            # slot gets its own app clone with a per-port bundle id (own
+            # save dir, own ModLog), refreshed from the master app and save
+            # at every start -- see build_apps.
+            apps = build_apps(ports, args.app, args.root / "instances")
+            game = GameFleet(ports, app=args.app, apps=apps,
+                             prepares=build_prepares(ports),
+                             headless=args.headless,
+                             timescale=args.timescale)
+            game.start()
+        except (PortInUse, TimeoutError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired, RuntimeError) as exc:
+            traceback.print_exc()
+            for line in startup_verdict(exc).splitlines():
+                print(f"!!! {line}", file=sys.stderr, flush=True)
+            print("!!! startup failed before any training happened; fix the "
+                  "cause above, then resume the run",
+                  file=sys.stderr, flush=True)
+            sys.exit(1)
         print(f"game(s) up on port(s) {', '.join(map(str, game.ports))}",
               flush=True)
         if args.headless:
@@ -775,7 +833,8 @@ def main() -> None:
         # was pressed during start(), the startup prints, or the input() prompt.
         if env is not None:
             env.close()
-        game.stop()
+        if game is not None:
+            game.stop()
     sys.exit(exit_code)
 
 
