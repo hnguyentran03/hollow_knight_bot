@@ -97,8 +97,7 @@ bot saw and why, one gzipped JSONL file per invocation under
 line, then a `step` line per decision (raw obs, the full action distribution,
 V(s), log-prob, entropy, and itemized reward) and an `episode` summary line
 after each fight. Composes with `--stochastic`, `--auto`, `--headless`, and
-`--timescale`. Full schema:
-`docs/superpowers/specs/2026-08-22-behavior-capture-design.md`.
+`--timescale`; the header line documents the format.
 
 **Play a bot in-game with F9** — drops a trained bot into *your* game for exactly one fight. Export a generation (the Export button on any generation row in the dashboard, or `scripts/export_gen.py --run-dir ~/hkrl/runs/my-run`), start the playback daemon (`./.venv/bin/python scripts/play.py`) and the game in either order, pick the bot under **Options → Mods → HKRLBotMod**, stand in the Hall of Gods, and press **F9**. The daemon walks the Knight to the right statue, fights one episode, and hands control back; the F1 HUD's BOT chip shows its state.
 
