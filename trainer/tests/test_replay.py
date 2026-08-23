@@ -141,3 +141,99 @@ def test_run_boss_reads_config_and_defaults_to_hornet1(tmp_path):
     (tmp_path / "config.jsonl").write_text(
         json.dumps({"boss": "gruz_mother"}) + "\n")
     assert replay.run_boss(tmp_path) == "gruz_mother"
+
+
+from hkrl.recording import RecordingWriter, read_recording
+
+
+def _predict_actions(model, env, episodes):
+    """The stock predict() loop, actions collected: the recorder must make
+    identical deterministic choices or its state threading is wrong."""
+    import numpy as np
+    actions, obs = [], env.reset()
+    lstm_states = None
+    episode_starts = np.ones((env.num_envs,), dtype=bool)
+    for _ in range(episodes):
+        done = False
+        while not done:
+            action, lstm_states = model.predict(
+                obs, state=lstm_states, episode_start=episode_starts,
+                deterministic=True)
+            actions.append(int(action[0]))
+            obs, _, dones, _ = env.step(action)
+            episode_starts = dones
+            done = bool(dones[0])
+    return actions
+
+
+def _record(tmp_path, weights, vecnorm, scripts, episodes):
+    with FakeGame([list(ep) for ep in scripts]) as fg:
+        model, env = replay.load_policy(weights, vecnorm, port=fg.port,
+                                        run_dir=tmp_path, capture=True)
+        writer = RecordingWriter(tmp_path / "rec.jsonl.gz")
+        try:
+            summaries = replay.record_replay(model, env, episodes=episodes,
+                                             writer=writer)
+        finally:
+            writer.close()
+            env.close()
+    return summaries, read_recording(tmp_path / "rec.jsonl.gz")
+
+
+def test_record_replay_actions_match_model_predict(tmp_path):
+    weights, vecnorm = _make_checkpoint(tmp_path)
+    scripts = [_scripted(win=True), _scripted(win=False), _scripted(win=False)]
+    with FakeGame([list(ep) for ep in scripts]) as fg:
+        model, env = replay.load_policy(weights, vecnorm, port=fg.port,
+                                        run_dir=tmp_path)
+        try:
+            expected = _predict_actions(model, env, episodes=2)
+        finally:
+            env.close()
+    _, rows = _record(tmp_path, weights, vecnorm, scripts, episodes=2)
+    steps = [r for r in rows if r["type"] == "step"]
+    assert [r["a"] for r in steps] == expected
+
+
+def test_record_replay_row_structure(tmp_path):
+    import numpy as np
+    weights, vecnorm = _make_checkpoint(tmp_path)
+    scripts = [_scripted(win=True), _scripted(win=False), _scripted(win=False)]
+    summaries, rows = _record(tmp_path, weights, vecnorm, scripts, episodes=2)
+    steps = [r for r in rows if r["type"] == "step"]
+    episodes = [r for r in rows if r["type"] == "episode"]
+    # Interleaving: no header here (task 5 wires it); step counts match the
+    # summaries; one episode line per episode, after its last step.
+    assert len(episodes) == 2
+    assert [e["steps"] for e in episodes] == [s["steps"] for s in summaries]
+    assert len(steps) == sum(s["steps"] for s in summaries)
+    assert rows[-1]["type"] == "episode"
+    for r in steps:
+        assert len(r["pi"]) == 21
+        assert abs(sum(r["pi"]) - 1.0) < 1e-3          # 5-sig-digit rounding
+        assert r["a"] == int(np.argmax(r["pi"]))       # deterministic mode
+        assert set(r["obs"]) >= {"kx", "khp", "bhp", "boss_state"}
+        # Loose tolerance on purpose: r rides DummyVecEnv's float32 reward
+        # buffer while the term sum is float64, so a ~46.0 terminal reward
+        # legitimately differs by ~3e-6. NOT a state-threading bug.
+        assert sum(r["r_terms"].values()) == pytest.approx(r["r"], abs=1e-4)
+        assert isinstance(r["v"], float) and isinstance(r["ent"], float)
+    # Outcome flags live on each episode's last row.
+    assert steps[-1]["done"] or steps[-1]["trunc"]
+    assert episodes[0]["result"] == "WIN" and episodes[1]["result"] == "loss"
+    assert episodes[0]["boss_damage_frac"] == pytest.approx(1.0)
+
+
+def test_record_replay_episode_boundary_obs_pairing(tmp_path):
+    # The autoreset trap (spec 4.5): episode 2's first row must hold the
+    # fresh fight's frame from reset_infos, not episode 1's death frame.
+    weights, vecnorm = _make_checkpoint(tmp_path)
+    scripts = [_scripted(win=False), _scripted(win=True), _scripted(win=False)]
+    _, rows = _record(tmp_path, weights, vecnorm, scripts, episodes=2)
+    steps = [r for r in rows if r["type"] == "step"]
+    ep1_last = [r for r in steps if r["ep"] == 1][-1]
+    ep2_first = [r for r in steps if r["ep"] == 2][0]
+    assert ep1_last["done"] and ep1_last["won"] is False
+    assert ep2_first["i"] == 0
+    assert ep2_first["obs"]["khp"] == 9      # fresh fight, not the khp=0 death frame
+    assert ep2_first["obs"]["bhp"] == 900

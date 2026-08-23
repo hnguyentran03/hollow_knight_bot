@@ -18,13 +18,16 @@ import argparse
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
+import torch as th
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sb3_contrib import RecurrentPPO  # noqa: E402
+from sb3_contrib.common.recurrent.type_aliases import RNNStates  # noqa: E402
 from stable_baselines3.common.vec_env import (  # noqa: E402
     DummyVecEnv, VecNormalize,
 )
@@ -42,7 +45,7 @@ from launch_instances import (  # noqa: E402
 
 
 def load_policy(weights: Path, vecnorm: Path, port: int, run_dir: Path,
-                 host: str = "127.0.0.1"):
+                 host: str = "127.0.0.1", capture: bool = False):
     """The training pipeline minus training: one env, normalized.
 
     Mirrors scripts/train.py's build_env exactly (SupervisedVecEnv there,
@@ -53,7 +56,8 @@ def load_policy(weights: Path, vecnorm: Path, port: int, run_dir: Path,
     DummyVecEnv rather than Subproc: with a single env there are no parallel
     socket waits to overlap, so a subprocess would add IPC for nothing.
     """
-    venv = DummyVecEnv([make_env(port, host=host, boss=run_boss(run_dir))])
+    venv = DummyVecEnv([make_env(port, host=host, boss=run_boss(run_dir),
+                                 capture=capture)])
     env = VecNormalize.load(str(vecnorm), venv)
     env.training = False     # statistics are a checkpoint artifact, frozen here
     env.norm_reward = False  # report the env's real rewards, not scaled ones
@@ -106,6 +110,100 @@ def replay(model, env, episodes: int, out=None, deterministic: bool = True,
                        boss_damage_frac=float(info.get("boss_damage_frac", 0.0)),
                        attempt=info.get("attempt"))
         summaries.append(summary)
+        print(f"episode {ep:3d} (attempt {info.get('attempt')}): "
+              f"result={result:7s} steps={steps:4d} reward={total:8.2f} "
+              f"boss_dmg={summary['boss_damage_frac'] * 100:5.1f}%",
+              file=out, flush=True)
+    return summaries
+
+
+def record_replay(model, env, episodes: int, writer,
+                  deterministic: bool = True, out=None,
+                  stop: threading.Event | None = None):
+    """replay(), instrumented: same episode loop, printing, and summaries,
+    but each step runs policy.forward() directly -- the one exposed call
+    that returns V(s) with BOTH updated LSTM state pairs (model.predict()
+    advances only the actor's; the default policy gives the critic its own
+    LSTM, so V under predict()-style threading would be computed from
+    frozen critic memory). A second get_distribution() pass on identical
+    inputs exposes the full 21-way pi the chosen action came from.
+
+    Requires an env built with capture=True (load_policy(capture=True)):
+    each row's obs is the raw frame the action was chosen FROM, carried
+    from the previous step's info["raw_obs"] -- and, at episode starts,
+    from the inner DummyVecEnv's reset_infos (env.venv.reset_infos, not
+    env.reset_infos -- VecNormalize's own copy is never updated, see the
+    comment below), because an autoreset step's own info holds the
+    TERMINAL frame (spec 4.5's off-by-one trap)."""
+    if out is None:
+        out = sys.stdout
+    policy = model.policy
+    policy.set_training_mode(False)
+    n_envs = env.num_envs
+    n_layers, _, hidden = policy.lstm_hidden_state_shape
+
+    def zeros():
+        return th.zeros((n_layers, n_envs, hidden), dtype=th.float32,
+                        device=policy.device)
+
+    states = RNNStates((zeros(), zeros()), (zeros(), zeros()))
+    episode_starts = th.ones((n_envs,), dtype=th.float32,
+                             device=policy.device)
+    obs = env.reset()
+    # Read through .venv: VecEnvWrapper's own __init__ (VecEnv.__init__)
+    # gives VecNormalize its own never-updated reset_infos = [{}...], which
+    # shadows __getattr__ delegation to the wrapped DummyVecEnv (SB3 2.9.0)
+    # -- env.reset_infos here would always be empty.
+    raw = env.venv.reset_infos[0]["raw_obs"]
+    summaries = []
+    for ep in range(1, episodes + 1):
+        if stop is not None and stop.is_set():
+            break
+        total, steps, done, info = 0.0, 0, False, {}
+        started = time.monotonic()
+        while not done:
+            obs_t, _ = policy.obs_to_tensor(obs)
+            with th.no_grad():
+                dist, _ = policy.get_distribution(obs_t, states.pi,
+                                                  episode_starts)
+                actions, values, log_prob, states = policy.forward(
+                    obs_t, states, episode_starts,
+                    deterministic=deterministic)
+            action = int(actions.cpu().numpy().reshape(-1)[0])
+            pi = dist.distribution.probs.detach().cpu().numpy().reshape(-1)
+            obs, rewards, dones, infos = env.step(np.array([action]))
+            episode_starts = th.as_tensor(dones, dtype=th.float32,
+                                          device=policy.device)
+            info = infos[0]
+            done = bool(dones[0])
+            truncated = bool(info.get("TimeLimit.truncated", False))
+            r = float(rewards[0])
+            writer.step(
+                ep=ep, i=steps, obs=raw, a=action,
+                pi=[float(f"{p:.5g}") for p in pi],
+                v=float(values.cpu().numpy().reshape(-1)[0]),
+                logp=float(log_prob.cpu().numpy().reshape(-1)[0]),
+                ent=float(dist.entropy().cpu().numpy().reshape(-1)[0]),
+                h_norm=float(th.linalg.vector_norm(states.pi[0]).cpu()),
+                r=r, r_terms=info.get("reward_terms", {}),
+                done=done and not truncated, trunc=truncated,
+                won=bool(info.get("won", False)))
+            total += r
+            steps += 1
+            raw = (env.venv.reset_infos[0]["raw_obs"] if done
+                   else info["raw_obs"])
+        won = bool(info.get("won", False))
+        truncated = bool(info.get("TimeLimit.truncated", False))
+        result = "WIN" if won else ("TIMEOUT" if truncated else "loss")
+        summary = dict(episode=ep, result=result, steps=steps, reward=total,
+                       won=won,
+                       boss_damage_frac=float(info.get("boss_damage_frac", 0.0)),
+                       attempt=info.get("attempt"))
+        summaries.append(summary)
+        writer.episode(ep=ep, result=result, steps=steps, reward=total,
+                       boss_damage_frac=summary["boss_damage_frac"],
+                       attempt=summary["attempt"],
+                       wall_s=round(time.monotonic() - started, 3))
         print(f"episode {ep:3d} (attempt {info.get('attempt')}): "
               f"result={result:7s} steps={steps:4d} reward={total:8.2f} "
               f"boss_dmg={summary['boss_damage_frac'] * 100:5.1f}%",
