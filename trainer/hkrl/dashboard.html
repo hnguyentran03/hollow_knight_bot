@@ -746,35 +746,37 @@ function drawChart(card, opts) {
         if (d2 <= bestD2) { bestD2 = d2; bestDot = d; }
       }
       if (bestDot) {
-        if (hovered !== bestDot) {
-          clearHover();
-          hovered = bestDot;
-          bestDot.circle.setAttribute("r", 4.5);
-          bestDot.circle.setAttribute("stroke", css("--s1"));
-          bestDot.circle.setAttribute("stroke-width", 2);
-          // Dots render before the rolling-mean path; re-append so the
-          // enlarged dot sits above the line, not under it.
-          svg.appendChild(bestDot.circle);
-        }
-        cross.setAttribute("visibility", "hidden");
         const t = opts.dotTip(bestDot.point.meta, bestDot.point);
-        tip.replaceChildren();
-        const tx = document.createElement("div");
-        tx.className = "tx";
-        tx.textContent = t.title;
-        tip.appendChild(tx);
-        for (const line of t.lines) {
-          const row = document.createElement("div");
-          row.className = "tx";
-          row.textContent = line;
-          tip.appendChild(row);
+        if (t) {
+          if (hovered !== bestDot) {
+            clearHover();
+            hovered = bestDot;
+            bestDot.circle.setAttribute("r", 4.5);
+            bestDot.circle.setAttribute("stroke", css("--s1"));
+            bestDot.circle.setAttribute("stroke-width", 2);
+            // Dots render before the rolling-mean path; re-append so the
+            // enlarged dot sits above the line, not under it.
+            svg.appendChild(bestDot.circle);
+          }
+          cross.setAttribute("visibility", "hidden");
+          tip.replaceChildren();
+          const tx = document.createElement("div");
+          tx.className = "tx";
+          tx.textContent = t.title;
+          tip.appendChild(tx);
+          for (const line of t.lines || []) {
+            const row = document.createElement("div");
+            row.className = "tx";
+            row.textContent = line;
+            tip.appendChild(row);
+          }
+          const cardRect = card.getBoundingClientRect();
+          const px = bestDot.px / W * rect.width + rect.left - cardRect.left;
+          tip.style.display = "block";
+          tip.style.left = Math.min(px + 12, cardRect.width - tip.offsetWidth - 8) + "px";
+          tip.style.top = (rect.top - cardRect.top + 10) + "px";
+          return;
         }
-        const cardRect = card.getBoundingClientRect();
-        const px = bestDot.px / W * rect.width + rect.left - cardRect.left;
-        tip.style.display = "block";
-        tip.style.left = Math.min(px + 12, cardRect.width - tip.offsetWidth - 8) + "px";
-        tip.style.top = (rect.top - cardRect.top + 10) + "px";
-        return;
       }
       clearHover();
     }
