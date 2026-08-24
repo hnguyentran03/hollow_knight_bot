@@ -196,6 +196,16 @@
 
   .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 760px) { .charts { grid-template-columns: 1fr; } }
+  /* Behavior recordings: one collapsible row per recording; the matrix PNG
+     is a matplotlib figure with its own white ground, framed as a plate. */
+  .recording { border-top: 1px solid var(--border); }
+  .recording:first-of-type { border-top: none; }
+  .recording summary { cursor: pointer; padding: 8px 0; color: var(--ink-2); font-size: 13px; list-style: none; }
+  .recording summary::-webkit-details-marker { display: none; }
+  .recording summary::before { content: "▸ "; color: var(--muted); }
+  .recording[open] summary::before { content: "▾ "; }
+  .recording img { display: block; max-width: 100%; margin: 4px 0 12px; border-radius: 4px; }
+  .recording .matrix-note { color: var(--muted); font-size: 12px; padding: 4px 0 12px; }
   .card { padding: 12px 12px 8px; }
   .card.wide { grid-column: 1 / -1; }
   .card h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 0; }
@@ -316,10 +326,11 @@
   #resume-dialog form, #delete-dialog form, #replay-dialog form { display: flex; flex-direction: column; align-items: stretch; }
   #resume-dialog h2, #delete-dialog h2, #replay-dialog h2 { font-family: var(--display); font-size: 17px; font-weight: 400; letter-spacing: 0.04em; text-transform: none; margin: 0 0 6px; }
   #resume-dialog .resume-facts, #delete-dialog .resume-facts, #replay-dialog .resume-facts { color: var(--ink-2); font-size: 13px; margin: 0 0 14px; }
-  #replay-dialog label { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+  #replay-dialog label:not(.check-hint) { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
   #replay-dialog #replay-episodes {
     width: 120px; font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+    margin: 0 0 12px;
   }
   /* Overrides row: prefilled with the run's recorded shape; a value is
      sent only when changed, so untouched fields keep resume inheritance. */
@@ -474,6 +485,8 @@
       <label for="replay-episodes">Episodes</label>
       <input type="number" id="replay-episodes" min="1" value="3"
              aria-label="Episodes to play">
+      <label for="replay-record">Record</label>
+      <div class="check-row"><input id="replay-record" type="checkbox"><label class="check-hint" for="replay-record">capture behavior for the matrix view</label></div>
       <div class="dialog-actions">
         <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
         <button type="submit" class="btn" value="replay">Replay</button>
@@ -518,6 +531,14 @@
       <div class="card panel wide" id="chart-episodes">
         <h2>Reward per episode</h2>
         <div class="subtitle">Every fight, over wall-clock time — the heartbeat between checkpoints</div>
+      </div>
+    </div>
+
+    <div class="charts" id="recordings-wrap" hidden>
+      <div class="card panel wide">
+        <h2>Behavior recordings</h2>
+        <div class="subtitle">Replays captured with Record — open one for its action × boss-state matrix (cell = mean π, dot = most-chosen action)</div>
+        <div id="recordings"></div>
       </div>
     </div>
 
@@ -1012,6 +1033,8 @@ function render() {
     },
   });
 
+  renderRecordings(run.recordings || []);
+
   const config = document.getElementById("config");
   config.replaceChildren();
   if (run.config) {
@@ -1027,6 +1050,54 @@ function render() {
       tr.append(td1, td2);
       config.appendChild(tr);
     }
+  }
+}
+
+/* Behavior recordings: rebuilt only when the list itself changes (the 2s
+   poll must not collapse an open matrix), with open rows remembered so a
+   rebuild -- e.g. a new recording landing -- restores them. The matrix
+   <img> is created on first open; its first request makes the server
+   render the PNG, hence the interim note. */
+let recSig = null;
+const openRecs = new Set();
+function renderRecordings(recs) {
+  document.getElementById("recordings-wrap").hidden = !recs.length;
+  const sig = state.runId + "|" + recs.map(r => r.file + ":" + r.mtime).join(",");
+  if (sig === recSig) return;
+  if (recSig !== null && recSig.split("|")[0] !== state.runId) openRecs.clear();
+  recSig = sig;
+  const list = document.getElementById("recordings");
+  list.replaceChildren();
+  for (const r of recs) {
+    const det = document.createElement("details");
+    det.className = "recording";
+    const sum = document.createElement("summary");
+    sum.textContent = (r.gen != null ? "generation " + r.gen : "unknown gen")
+      + " · " + fmtDate(r.mtime) + " " + fmtClock(r.mtime)
+      + " · " + Math.max(1, Math.round(r.size / 1024)) + " KB";
+    det.appendChild(sum);
+    const holder = document.createElement("div");
+    det.appendChild(holder);
+    det.addEventListener("toggle", () => {
+      if (!det.open) { openRecs.delete(r.file); return; }
+      openRecs.add(r.file);
+      if (holder.childElementCount) return;  // image already requested
+      const note = document.createElement("div");
+      note.className = "matrix-note";
+      note.textContent = "rendering matrix…";
+      holder.appendChild(note);
+      const img = document.createElement("img");
+      img.alt = "action × boss-state matrix for " + r.file;
+      img.src = "/api/run/" + encodeURIComponent(state.runId)
+        + "/recording/" + encodeURIComponent(r.file) + "/matrix.png";
+      img.addEventListener("load", () => { note.replaceWith(img); });
+      img.addEventListener("error", () => {
+        note.textContent = "matrix render failed — try scripts/analyze_steps.py on "
+          + r.file;
+      });
+    });
+    if (openRecs.has(r.file)) det.open = true;  // after listener: re-request
+    list.appendChild(det);
   }
 }
 
@@ -1586,6 +1657,7 @@ function openReplayDialog(runId, gen) {
     "Plays this checkpoint against a live game window. It occupies the "
     + "training slot until it finishes or you stop it.";
   document.getElementById("replay-episodes").value = "3";  // fresh per open
+  document.getElementById("replay-record").checked = false;
   replayDialog.showModal();
 }
 
@@ -1598,9 +1670,10 @@ replayDialog.addEventListener("close", async () => {
     launchError("episodes must be a positive number");
     return;
   }
+  const record = document.getElementById("replay-record").checked;
   launchError("");
   try {
-    await postJSON("/api/replay", { run_id: t.runId, gen: t.gen, episodes });
+    await postJSON("/api/replay", { run_id: t.runId, gen: t.gen, episodes, record });
     refreshLauncher();  // the active-run card takes over
   } catch (err) { launchError(err.message); }
 });

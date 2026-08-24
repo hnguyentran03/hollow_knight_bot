@@ -7,6 +7,9 @@ Run directories themselves are still only ever written by train.py, and
 the server binds 127.0.0.1 only.
 """
 import json
+import re
+import subprocess
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,6 +21,11 @@ from hkrl.exports import exported_generations
 from hkrl.rundata import load_run, read_jsonl, scan_runs
 
 PAGE = Path(__file__).with_name("dashboard.html")
+# The matrix render shells out to the CLI renderer rather than importing it:
+# matplotlib stays out of the server process, and the PNG cache it leaves
+# next to the recording is byte-identical to what the CLI would produce.
+ANALYZE_SCRIPT = (Path(__file__).resolve().parents[1] / "scripts"
+                  / "analyze_steps.py")
 
 # The subset of a config.jsonl record the summon page's active-run card
 # states -- the run's shape, not its full provenance (the dashboard proper's
@@ -63,7 +71,12 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/runs":
             self._json(scan_runs(self.server.root))
         elif path.startswith("/api/run/"):
-            self._run(path[len("/api/run/"):])
+            rest = path[len("/api/run/"):]
+            if "/recording/" in rest and rest.endswith("/matrix.png"):
+                run_id, _, tail = rest.partition("/recording/")
+                self._matrix(run_id, tail[:-len("/matrix.png")])
+            else:
+                self._run(rest)
         elif path == "/api/launcher":
             active = launcher.status(self.server.root)
             if active is not None and active.get("run_id"):
@@ -141,7 +154,8 @@ class _Handler(BaseHTTPRequestHandler):
                 # so the page can label the active-run card without a re-fetch.
                 run_id = launcher.replay(self.server.root, body.get("run_id"),
                                          body.get("gen"),
-                                         body.get("episodes", 3))
+                                         body.get("episodes", 3),
+                                         bool(body.get("record", False)))
                 self._json({"replaying": run_id, "gen": body.get("gen")})
             elif path == "/api/export":
                 # A synchronous file copy (launcher.export), so unlike
@@ -182,7 +196,45 @@ class _Handler(BaseHTTPRequestHandler):
         exported = exported_generations(self.server.root, run_id)
         for g in detail.get("generations", []):
             g["exported"] = g.get("gen") in exported
+        # Filename metadata only -- no gzip reads, so a run with many
+        # recordings costs the same as one with none.
+        detail["recordings"] = [
+            {"file": p.name,
+             "gen": (int(m.group(1))
+                     if (m := re.search(r"_gen(\d+)\.jsonl\.gz$", p.name))
+                     else None),
+             "size": p.stat().st_size,
+             "mtime": p.stat().st_mtime}
+            for p in sorted((run_dir / "replays").glob("*.jsonl.gz"),
+                            key=lambda p: p.name, reverse=True)]
         self._json(detail)
+
+    def _matrix(self, run_id, name):
+        """Serve the action-matrix PNG for one recording, rendering it on
+        first request (or when the recording is newer than the cache)."""
+        for part in (run_id, name):
+            if (not part or "/" in part or "\\" in part
+                    or part in (".", "..")):
+                self.send_error(404)
+                return
+        if not name.endswith(".jsonl.gz"):
+            self.send_error(404)
+            return
+        rec = Path(self.server.root) / "runs" / run_id / "replays" / name
+        if not rec.is_file():
+            self.send_error(404)
+            return
+        png = rec.with_name(name[:-len(".jsonl.gz")] + ".action_matrix.png")
+        if not png.exists() or png.stat().st_mtime < rec.stat().st_mtime:
+            proc = subprocess.run(
+                [sys.executable, str(ANALYZE_SCRIPT), str(rec),
+                 "--out", str(png)],
+                capture_output=True, text=True, timeout=120)
+            if proc.returncode != 0 or not png.exists():
+                self.send_error(500, "matrix render failed",
+                                proc.stderr.strip()[-500:] or None)
+                return
+        self._send(200, "image/png", png.read_bytes())
 
     def _json(self, payload, status: int = 200):
         self._send(status, "application/json",
