@@ -196,16 +196,38 @@
 
   .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 760px) { .charts { grid-template-columns: 1fr; } }
-  /* Behavior recordings: one collapsible row per recording; the matrix PNG
-     is a matplotlib figure with its own white ground, framed as a plate. */
+  /* Behavior recordings: one collapsible row per recording, opening to an
+     interactive action × boss-state heatmap. Sequential single-hue ramp of
+     the soul blue on the dark surface (dark = low, bright = high); hover a
+     cell for exact numbers, ring = the action actually chosen most. */
   .recording { border-top: 1px solid var(--border); }
   .recording:first-of-type { border-top: none; }
   .recording summary { cursor: pointer; padding: 8px 0; color: var(--ink-2); font-size: 13px; list-style: none; }
   .recording summary::-webkit-details-marker { display: none; }
   .recording summary::before { content: "▸ "; color: var(--muted); }
   .recording[open] summary::before { content: "▾ "; }
-  .recording img { display: block; max-width: 100%; margin: 4px 0 12px; border-radius: 4px; }
   .recording .matrix-note { color: var(--muted); font-size: 12px; padding: 4px 0 12px; }
+  .matrix-wrap { position: relative; overflow-x: auto; padding: 4px 0 12px; }
+  .matrix { display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+  .m-col, .m-rowlab { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+  .m-col { align-self: end; justify-self: center; padding-bottom: 3px; }
+  .m-rowlab { align-self: center; justify-self: end; padding-right: 8px; }
+  .m-col.hl, .m-rowlab.hl { color: var(--ink); }
+  .m-cell { position: relative; height: 22px; min-width: 34px; border-radius: 2px; cursor: default; }
+  .m-cell:hover { outline: 1px solid var(--tick); outline-offset: -1px; }
+  .m-val {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; font-size: 9.5px; pointer-events: none;
+  }
+  .m-dot {
+    position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
+    transform: translate(-50%, -50%); border-radius: 50%;
+    background: #12314e; border: 1.5px solid rgba(233, 230, 218, 0.9);
+    pointer-events: none;
+  }
+  .matrix-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+  .matrix-legend .ramp { width: 120px; height: 8px; border-radius: 4px; border: 1px solid var(--border); }
+  .matrix-foot { color: var(--muted); font-size: 11px; margin-top: 6px; }
   .card { padding: 12px 12px 8px; }
   .card.wide { grid-column: 1 / -1; }
   .card h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 0; }
@@ -1053,11 +1075,128 @@ function render() {
   }
 }
 
+/* The matrix heatmap: sequential single-hue ramp (soul blue, dark = low,
+   bright = high) with a gray-blue near-surface floor so a 0 cell reads
+   "empty" on the dark card. */
+const MATRIX_RAMP = [[0x12, 0x1a, 0x2b], [0x2f, 0x6f, 0xc4], [0xa8, 0xd4, 0xff]];
+function rampColor(v) {
+  const t = Math.max(0, Math.min(1, v)) * 2;
+  const [a, b, f] = t <= 1 ? [MATRIX_RAMP[0], MATRIX_RAMP[1], t]
+                           : [MATRIX_RAMP[1], MATRIX_RAMP[2], t - 1];
+  return "rgb(" + a.map((x, i) => Math.round(x + (b[i] - x) * f)).join(",") + ")";
+}
+
+/* One interactive action × boss-state heatmap. Rows are observed states
+   (most-visited first, as served), columns the 21 actions; cell shade is
+   the mean recorded π, the ring the action actually CHOSEN most in that
+   state, and in-cell percents appear only on cells with real mass (the
+   ringed cell skips its number — the dot already marks it, hover has the
+   exact value). Hover any cell for the full numbers and a row+column
+   label highlight. */
+function renderMatrix(holder, data) {
+  const wrap = document.createElement("div");
+  wrap.className = "matrix-wrap";
+  const grid = document.createElement("div");
+  grid.className = "matrix";
+  grid.style.gridTemplateColumns =
+    "max-content repeat(" + data.actions.length + ", minmax(34px, 1fr))";
+  grid.appendChild(document.createElement("div"));  // corner spacer
+  const colLabs = data.actions.map(a => {
+    const el = document.createElement("div");
+    el.className = "m-col";
+    el.textContent = a;
+    grid.appendChild(el);
+    return el;
+  });
+  const rowLabs = [];
+  data.states.forEach((s, ri) => {
+    const lab = document.createElement("div");
+    lab.className = "m-rowlab";
+    lab.textContent = s + " (n=" + data.counts[ri] + ")";
+    grid.appendChild(lab);
+    rowLabs.push(lab);
+    data.matrix[ri].forEach((v, ci) => {
+      const cell = document.createElement("div");
+      cell.className = "m-cell";
+      cell.style.background = rampColor(v);
+      cell.dataset.r = ri;
+      cell.dataset.c = ci;
+      if (ci === data.modal[ri]) {
+        cell.appendChild(Object.assign(document.createElement("span"),
+                                       { className: "m-dot" }));
+      } else if (v >= 0.15) {
+        const val = document.createElement("span");
+        val.className = "m-val";
+        val.textContent = Math.round(v * 100);
+        val.style.color = v > 0.55 ? "#0d1b2e" : "#cfe4ff";
+        cell.appendChild(val);
+      }
+      grid.appendChild(cell);
+    });
+  });
+
+  const tip = document.createElement("div");
+  tip.className = "tooltip";
+  let hl = null;  // [rowLab, colLab] currently highlighted
+  grid.addEventListener("mouseover", ev => {
+    const cell = ev.target.closest(".m-cell");
+    if (!cell) return;
+    const ri = +cell.dataset.r, ci = +cell.dataset.c;
+    if (hl) hl.forEach(el => el.classList.remove("hl"));
+    hl = [rowLabs[ri], colLabs[ci]];
+    hl.forEach(el => el.classList.add("hl"));
+    const v = data.matrix[ri][ci];
+    tip.replaceChildren();
+    const tx = document.createElement("div");
+    tx.className = "tx";
+    tx.textContent = data.states[ri] + " · " + data.actions[ci];
+    tip.appendChild(tx);
+    const mean = document.createElement("div");
+    mean.innerHTML = "mean π <span class=\"tval\"></span>";
+    mean.querySelector(".tval").textContent = (v * 100).toFixed(1) + "%";
+    tip.appendChild(mean);
+    const chosen = document.createElement("div");
+    chosen.className = "tname";
+    chosen.textContent = ci === data.modal[ri]
+      ? "most-chosen of " + data.counts[ri] + " steps"
+      : data.counts[ri] + " steps in this state";
+    tip.appendChild(chosen);
+    tip.style.display = "block";
+    const wr = wrap.getBoundingClientRect(), cr = cell.getBoundingClientRect();
+    tip.style.left = Math.min(cr.left - wr.left + wrap.scrollLeft + 14,
+                              wrap.scrollWidth - 170) + "px";
+    tip.style.top = (cr.bottom - wr.top + 6) + "px";
+  });
+  grid.addEventListener("mouseleave", () => {
+    tip.style.display = "none";
+    if (hl) { hl.forEach(el => el.classList.remove("hl")); hl = null; }
+  });
+
+  const legend = document.createElement("div");
+  legend.className = "matrix-legend";
+  const ramp = document.createElement("div");
+  ramp.className = "ramp";
+  ramp.style.background = "linear-gradient(90deg, " + rampColor(0) + ", "
+    + rampColor(0.5) + ", " + rampColor(1) + ")";
+  legend.append("0%", ramp, "100% mean π(action | state) · ring = most-chosen · "
+    + data.episodes + " episode" + (data.episodes === 1 ? "" : "s") + ", "
+    + data.steps + " steps" + (data.deterministic ? " · deterministic" : ""));
+  wrap.append(grid, tip, legend);
+  if (data.dropped.length) {
+    const foot = document.createElement("div");
+    foot.className = "matrix-foot";
+    foot.textContent = "below min-steps, not shown: "
+      + data.dropped.map(d => d[0] + " (" + d[1] + ")").join(", ");
+    wrap.appendChild(foot);
+  }
+  holder.appendChild(wrap);
+}
+
 /* Behavior recordings: rebuilt only when the list itself changes (the 10s
    poll must not collapse an open matrix), with open rows remembered so a
-   rebuild -- e.g. a new recording landing -- restores them. The matrix
-   <img> is created on first open; its first request makes the server
-   render the PNG, hence the interim note. */
+   rebuild -- e.g. a new recording landing -- restores them. The matrix is
+   fetched on first open; the interim note covers the server-side
+   aggregation of the recording. */
 let recSig = null;
 const openRecs = new Set();
 function renderRecordings(recs) {
@@ -1078,23 +1217,24 @@ function renderRecordings(recs) {
     det.appendChild(sum);
     const holder = document.createElement("div");
     det.appendChild(holder);
-    det.addEventListener("toggle", () => {
+    det.addEventListener("toggle", async () => {
       if (!det.open) { openRecs.delete(r.file); return; }
       openRecs.add(r.file);
-      if (holder.childElementCount) return;  // image already requested
+      if (holder.childElementCount) return;  // matrix already requested
       const note = document.createElement("div");
       note.className = "matrix-note";
-      note.textContent = "rendering matrix…";
+      note.textContent = "aggregating recording…";
       holder.appendChild(note);
-      const img = document.createElement("img");
-      img.alt = "action × boss-state matrix for " + r.file;
-      img.src = "/api/run/" + encodeURIComponent(state.runId)
-        + "/recording/" + encodeURIComponent(r.file) + "/matrix.png";
-      img.addEventListener("load", () => { note.replaceWith(img); });
-      img.addEventListener("error", () => {
-        note.textContent = "matrix render failed — try scripts/analyze_steps.py on "
-          + r.file;
-      });
+      try {
+        const resp = await fetch("/api/run/" + encodeURIComponent(state.runId)
+          + "/recording/" + encodeURIComponent(r.file) + "/matrix.json");
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        renderMatrix(holder, await resp.json());
+        note.remove();
+      } catch (err) {
+        note.textContent = "matrix failed (" + err.message
+          + ") — try scripts/analyze_steps.py on " + r.file;
+      }
     });
     if (openRecs.has(r.file)) det.open = true;  // after listener: re-request
     list.appendChild(det);

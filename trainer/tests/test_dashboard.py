@@ -120,22 +120,24 @@ def test_api_run_without_replays_dir_has_empty_recordings(base_url):
     assert json.loads(body)["recordings"] == []
 
 
-def test_matrix_endpoint_renders_and_serves_a_png(base_url, tmp_path):
+def test_matrix_endpoint_serves_the_aggregated_json(base_url, tmp_path):
     name = "20260823-070000_gen0007.jsonl.gz"
-    replays = tmp_path / "runs" / "r1" / "replays"
-    _write_recording(replays / name)
+    _write_recording(tmp_path / "runs" / "r1" / "replays" / name, steps=6)
     status, ctype, body = _get(
-        base_url + f"/api/run/r1/recording/{name}/matrix.png")
+        base_url + f"/api/run/r1/recording/{name}/matrix.json")
     assert status == 200
-    assert ctype == "image/png"
-    assert body.startswith(b"\x89PNG")
-    # The render is cached next to the recording, CLI-compatible name.
-    png = replays / "20260823-070000_gen0007.action_matrix.png"
-    assert png.exists()
-    # A second request serves the cache instead of re-rendering.
-    before = png.stat().st_mtime_ns
-    _get(base_url + f"/api/run/r1/recording/{name}/matrix.png")
-    assert png.stat().st_mtime_ns == before
+    assert ctype.startswith("application/json")
+    data = json.loads(body)
+    assert data["run_id"] == "r1" and data["gen"] == 7
+    assert data["boss"] == "Gorb"
+    assert data["episodes"] == 1 and data["steps"] == 6
+    # 21 compact action labels straight from the frozen header.
+    assert len(data["actions"]) == 21 and data["actions"][0] == "·"
+    # All six steps sat in Antic choosing action 5 with pi peaked there.
+    assert data["states"] == ["Antic"] and data["counts"] == [6]
+    assert data["modal"] == [5]
+    assert data["matrix"][0][5] == pytest.approx(1.0)
+    assert data["dropped"] == []
 
 
 def test_matrix_endpoint_rejects_bad_names(base_url, tmp_path):
@@ -145,7 +147,7 @@ def test_matrix_endpoint_rejects_bad_names(base_url, tmp_path):
                 "%2e%2e%2fsecret.jsonl.gz",   # traversal out of replays/
                 "20260823-070000_gen0007"]:   # wrong extension
         with pytest.raises(urllib.error.HTTPError) as err:
-            _get(base_url + f"/api/run/r1/recording/{bad}/matrix.png")
+            _get(base_url + f"/api/run/r1/recording/{bad}/matrix.json")
         assert err.value.code == 404
 
 

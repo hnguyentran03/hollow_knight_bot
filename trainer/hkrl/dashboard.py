@@ -8,24 +8,19 @@ the server binds 127.0.0.1 only.
 """
 import json
 import re
-import subprocess
-import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from hkrl import launcher
+from hkrl.analysis import action_labels, aggregate, merge_recordings
 from hkrl.bosses import BOSSES
 from hkrl.exports import exported_generations
+from hkrl.recording import read_recording
 from hkrl.rundata import load_run, read_jsonl, scan_runs
 
 PAGE = Path(__file__).with_name("dashboard.html")
-# The matrix render shells out to the CLI renderer rather than importing it:
-# matplotlib stays out of the server process, and the PNG cache it leaves
-# next to the recording is byte-identical to what the CLI would produce.
-ANALYZE_SCRIPT = (Path(__file__).resolve().parents[1] / "scripts"
-                  / "analyze_steps.py")
 
 # The subset of a config.jsonl record the summon page's active-run card
 # states -- the run's shape, not its full provenance (the dashboard proper's
@@ -72,9 +67,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(scan_runs(self.server.root))
         elif path.startswith("/api/run/"):
             rest = path[len("/api/run/"):]
-            if "/recording/" in rest and rest.endswith("/matrix.png"):
+            if "/recording/" in rest and rest.endswith("/matrix.json"):
                 run_id, _, tail = rest.partition("/recording/")
-                self._matrix(run_id, tail[:-len("/matrix.png")])
+                self._matrix(run_id, tail[:-len("/matrix.json")])
             else:
                 self._run(rest)
         elif path == "/api/launcher":
@@ -210,8 +205,9 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(detail)
 
     def _matrix(self, run_id, name):
-        """Serve the action-matrix PNG for one recording, rendering it on
-        first request (or when the recording is newer than the cache)."""
+        """Serve one recording's aggregated action x boss-state matrix as
+        JSON; the page renders it interactively. Same numbers as the CLI
+        renderer -- both sit on hkrl.analysis."""
         for part in (run_id, name):
             if (not part or "/" in part or "\\" in part
                     or part in (".", "..")):
@@ -224,17 +220,27 @@ class _Handler(BaseHTTPRequestHandler):
         if not rec.is_file():
             self.send_error(404)
             return
-        png = rec.with_name(name[:-len(".jsonl.gz")] + ".action_matrix.png")
-        if not png.exists() or png.stat().st_mtime < rec.stat().st_mtime:
-            proc = subprocess.run(
-                [sys.executable, str(ANALYZE_SCRIPT), str(rec),
-                 "--out", str(png)],
-                capture_output=True, text=True, timeout=120)
-            if proc.returncode != 0 or not png.exists():
-                self.send_error(500, "matrix render failed",
-                                proc.stderr.strip()[-500:] or None)
-                return
-        self._send(200, "image/png", png.read_bytes())
+        try:
+            header, steps, episodes = merge_recordings([read_recording(rec)])
+            agg = aggregate(steps)
+        except (ValueError, KeyError, OSError) as exc:
+            self.send_error(500, "unreadable recording", str(exc)[:500])
+            return
+        self._json({
+            "run_id": header.get("run_id"),
+            "gen": header.get("gen"),
+            "boss": header.get("boss_spec", {}).get("display_name",
+                                                    header.get("boss")),
+            "deterministic": header.get("deterministic"),
+            "episodes": episodes,
+            "steps": sum(agg.counts),
+            "actions": action_labels(header["actions"]),
+            "states": agg.states,
+            "counts": agg.counts,
+            "matrix": agg.matrix,
+            "modal": agg.modal,
+            "dropped": agg.dropped,
+        })
 
     def _json(self, payload, status: int = 200):
         self._send(status, "application/json",
