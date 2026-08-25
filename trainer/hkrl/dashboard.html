@@ -199,7 +199,8 @@
   /* Behavior recordings: one collapsible row per recording, opening to an
      interactive action × boss-state heatmap. Sequential single-hue ramp of
      the soul blue on the dark surface (dark = low, bright = high); hover a
-     cell for exact numbers, ring = the action actually chosen most. */
+     cell for exact numbers, outlined cell = the action actually chosen
+     most. */
   .recording { border-top: 1px solid var(--border); }
   .recording:first-of-type { border-top: none; }
   .recording summary { cursor: pointer; padding: 8px 0; color: var(--ink-2); font-size: 13px; list-style: none; }
@@ -219,12 +220,7 @@
     position: absolute; inset: 0; display: flex; align-items: center;
     justify-content: center; font-size: 9.5px; pointer-events: none;
   }
-  .m-dot {
-    position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
-    transform: translate(-50%, -50%); border-radius: 50%;
-    background: #12314e; border: 1.5px solid rgba(233, 230, 218, 0.9);
-    pointer-events: none;
-  }
+  .m-cell.m-modal { box-shadow: inset 0 0 0 1.5px rgba(233, 230, 218, 0.85); }
   .matrix-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 11px; color: var(--muted); }
   .matrix-legend .ramp { width: 120px; height: 8px; border-radius: 4px; border: 1px solid var(--border); }
   .card { padding: 12px 12px 8px; }
@@ -1087,11 +1083,10 @@ function rampColor(v) {
 
 /* One interactive action × boss-state heatmap. Rows are observed states
    (most-visited first, as served), columns the 21 actions; cell shade is
-   the mean recorded π, the ring the action actually CHOSEN most in that
-   state, and in-cell percents appear only on cells with real mass (the
-   ringed cell skips its number — the dot already marks it, hover has the
-   exact value). Hover any cell for the full numbers and a row+column
-   label highlight. */
+   the mean recorded π, the outlined cell the action actually CHOSEN most
+   in that state, and in-cell percents appear on cells with real mass plus
+   the outlined cell (always numbered, however small its mean π). Hover
+   any cell for the full numbers and a row+column label highlight. */
 function renderMatrix(holder, data) {
   const wrap = document.createElement("div");
   wrap.className = "matrix-wrap";
@@ -1120,10 +1115,9 @@ function renderMatrix(holder, data) {
       cell.style.background = rampColor(v);
       cell.dataset.r = ri;
       cell.dataset.c = ci;
-      if (ci === data.modal[ri]) {
-        cell.appendChild(Object.assign(document.createElement("span"),
-                                       { className: "m-dot" }));
-      } else if (v >= 0.15) {
+      const isModal = ci === data.modal[ri];
+      if (isModal) cell.classList.add("m-modal");
+      if (v >= 0.15 || isModal) {
         const val = document.createElement("span");
         val.className = "m-val";
         val.textContent = Math.round(v * 100);
@@ -1177,7 +1171,7 @@ function renderMatrix(holder, data) {
   ramp.className = "ramp";
   ramp.style.background = "linear-gradient(90deg, " + rampColor(0) + ", "
     + rampColor(0.5) + ", " + rampColor(1) + ")";
-  legend.append("0%", ramp, "100% mean π(action | state) · ring = most-chosen · "
+  legend.append("0%", ramp, "100% mean π(action | state) · outlined = most-chosen · "
     + data.episodes + " episode" + (data.episodes === 1 ? "" : "s") + ", "
     + data.steps + " steps" + (data.deterministic ? " · deterministic" : ""));
   wrap.append(grid, tip, legend);
