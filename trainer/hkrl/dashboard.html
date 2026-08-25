@@ -201,9 +201,13 @@
      the soul blue on the dark surface (dark = low, bright = high); hover a
      cell for exact numbers, outlined cell = the action actually chosen
      most. */
-  .recording { border-top: 1px solid var(--border); }
+  #recordings-wrap { margin-top: 12px; }  /* match the chart grid's own gap */
+  /* .recording rows are <details>, so the page-wide details/summary rules
+     (20px top margin, uppercase display face) reach them; reset both --
+     these are data rows inside a card, not a page section. */
+  .recording { border-top: 1px solid var(--border); margin-top: 0; }
   .recording:first-of-type { border-top: none; }
-  .recording summary { cursor: pointer; padding: 8px 0; color: var(--ink-2); font-size: 13px; list-style: none; }
+  .recording summary { cursor: pointer; padding: 8px 0; color: var(--ink-2); font-size: 13px; list-style: none; font-family: var(--body); letter-spacing: normal; text-transform: none; }
   .recording summary::-webkit-details-marker { display: none; }
   .recording summary::before { content: "▸ "; color: var(--muted); }
   .recording[open] summary::before { content: "▾ "; }
@@ -554,7 +558,7 @@
     <div class="charts" id="recordings-wrap" hidden>
       <div class="card panel wide">
         <h2>Behavior recordings</h2>
-        <div class="subtitle">Replays captured with Record — open one for its action × boss-state matrix (cell = mean π, dot = most-chosen action)</div>
+        <div class="subtitle">Replays captured with Record — open one for its action × boss-state matrix (cell = mean π, outlined = most-chosen action)</div>
         <div id="recordings"></div>
       </div>
     </div>
