@@ -82,12 +82,15 @@ def test_api_run_flags_exported_generations(base_url, tmp_path):
     assert [g["exported"] for g in run["generations"]] == [True]
 
 
-def _write_recording(path, gen=7, steps=3):
+def _write_recording(path, gen=7, steps=3, rare_state=None):
     """A minimal real schema-v1 recording so the endpoints exercise the
-    actual reader/renderer, not a stand-in format."""
+    actual reader/renderer, not a stand-in format. `rare_state` appends one
+    single step in that state (a state the CLI's min-steps default drops)."""
     from hkrl.env import ACTIONS
     from hkrl.recording import RecordingWriter
     path.parent.mkdir(parents=True, exist_ok=True)
+    pi = [0.0] * len(ACTIONS)
+    pi[5] = 1.0
     with RecordingWriter(path) as w:
         w.header(run_id="r1", gen=gen, boss="gorb",
                  boss_spec={"id": "gorb", "display_name": "Gorb",
@@ -95,10 +98,12 @@ def _write_recording(path, gen=7, steps=3):
                  actions=ACTIONS, obs_keys=["kx"], deterministic=True,
                  episodes_requested=1)
         for i in range(steps):
-            pi = [0.0] * len(ACTIONS)
-            pi[5] = 1.0
             w.step(ep=1, i=i, obs={"boss_state": "Antic"}, a=5, pi=pi,
                    r=0.0, r_terms={}, done=False, trunc=False, won=False)
+        if rare_state is not None:
+            w.step(ep=1, i=steps, obs={"boss_state": rare_state}, a=5,
+                   pi=pi, r=0.0, r_terms={}, done=False, trunc=False,
+                   won=False)
         w.episode(ep=1, result="loss", steps=steps, reward=0.0,
                   boss_damage_frac=0.0, attempt=1, wall_s=1.0)
 
@@ -122,7 +127,8 @@ def test_api_run_without_replays_dir_has_empty_recordings(base_url):
 
 def test_matrix_endpoint_serves_the_aggregated_json(base_url, tmp_path):
     name = "20260823-070000_gen0007.jsonl.gz"
-    _write_recording(tmp_path / "runs" / "r1" / "replays" / name, steps=6)
+    _write_recording(tmp_path / "runs" / "r1" / "replays" / name, steps=6,
+                     rare_state="Wait")
     status, ctype, body = _get(
         base_url + f"/api/run/r1/recording/{name}/matrix.json")
     assert status == 200
@@ -130,14 +136,17 @@ def test_matrix_endpoint_serves_the_aggregated_json(base_url, tmp_path):
     data = json.loads(body)
     assert data["run_id"] == "r1" and data["gen"] == 7
     assert data["boss"] == "Gorb"
-    assert data["episodes"] == 1 and data["steps"] == 6
+    assert data["episodes"] == 1 and data["steps"] == 7
     # 21 compact action labels straight from the frozen header.
     assert len(data["actions"]) == 21 and data["actions"][0] == "·"
-    # All six steps sat in Antic choosing action 5 with pi peaked there.
-    assert data["states"] == ["Antic"] and data["counts"] == [6]
-    assert data["modal"] == [5]
+    # Six steps in Antic choosing action 5 with pi peaked there -- and the
+    # single Wait step is a row too: the dashboard shows every observed
+    # state (no min-steps drop; that filter is a CLI concern).
+    assert data["states"] == ["Antic", "Wait"]
+    assert data["counts"] == [6, 1]
+    assert data["modal"] == [5, 5]
     assert data["matrix"][0][5] == pytest.approx(1.0)
-    assert data["dropped"] == []
+    assert "dropped" not in data  # nothing is ever dropped, so no field
 
 
 def test_matrix_endpoint_rejects_bad_names(base_url, tmp_path):

@@ -227,7 +227,6 @@
   }
   .matrix-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 11px; color: var(--muted); }
   .matrix-legend .ramp { width: 120px; height: 8px; border-radius: 4px; border: 1px solid var(--border); }
-  .matrix-foot { color: var(--muted); font-size: 11px; margin-top: 6px; }
   .card { padding: 12px 12px 8px; }
   .card.wide { grid-column: 1 / -1; }
   .card h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 0; }
@@ -1112,7 +1111,7 @@ function renderMatrix(holder, data) {
   data.states.forEach((s, ri) => {
     const lab = document.createElement("div");
     lab.className = "m-rowlab";
-    lab.textContent = s + " (n=" + data.counts[ri] + ")";
+    lab.textContent = s + " (" + data.counts[ri] + ")";
     grid.appendChild(lab);
     rowLabs.push(lab);
     data.matrix[ri].forEach((v, ci) => {
@@ -1182,13 +1181,6 @@ function renderMatrix(holder, data) {
     + data.episodes + " episode" + (data.episodes === 1 ? "" : "s") + ", "
     + data.steps + " steps" + (data.deterministic ? " · deterministic" : ""));
   wrap.append(grid, tip, legend);
-  if (data.dropped.length) {
-    const foot = document.createElement("div");
-    foot.className = "matrix-foot";
-    foot.textContent = "below min-steps, not shown: "
-      + data.dropped.map(d => d[0] + " (" + d[1] + ")").join(", ");
-    wrap.appendChild(foot);
-  }
   holder.appendChild(wrap);
 }
 

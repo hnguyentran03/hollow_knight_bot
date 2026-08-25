@@ -222,7 +222,10 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             header, steps, episodes = merge_recordings([read_recording(rec)])
-            agg = aggregate(steps)
+            # Every observed state gets a row; min-steps is a CLI concern
+            # (the interactive view can afford the extra rows -- hover
+            # carries the counts).
+            agg = aggregate(steps, min_steps=1)
         except (ValueError, KeyError, OSError) as exc:
             self.send_error(500, "unreadable recording", str(exc)[:500])
             return
@@ -239,7 +242,6 @@ class _Handler(BaseHTTPRequestHandler):
             "counts": agg.counts,
             "matrix": agg.matrix,
             "modal": agg.modal,
-            "dropped": agg.dropped,
         })
 
     def _json(self, payload, status: int = 200):
