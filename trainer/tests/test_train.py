@@ -674,13 +674,19 @@ def test_timescale_missing_from_config_stays_unset():
     assert args.timescale is None
 
 
-def test_resolve_timescale_defaults_and_validates():
+def test_resolve_timescale_is_disabled():
     assert train.resolve_timescale(None) == 1.0
-    assert train.resolve_timescale(2.5) == 2.5
+    assert train.resolve_timescale(1.0) == 1.0
+    assert train.resolve_timescale(1.0, typed=True) == 1.0
+    # A typed --timescale above 1 fails loudly instead of silently
+    # training at 1x.
     with pytest.raises(SystemExit):
-        train.resolve_timescale(0.5)
+        train.resolve_timescale(2.5, typed=True)
     with pytest.raises(SystemExit):
-        train.resolve_timescale(11.0)
+        train.resolve_timescale(0.5, typed=True)
+    # An inherited recorded speed (hornet-3 recorded 2.0) must not brick
+    # resumes: it is overridden to 1x, not refused.
+    assert train.resolve_timescale(2.0) == 1.0
 
 
 def test_apply_recorded_config_inherits_untyped_flags():

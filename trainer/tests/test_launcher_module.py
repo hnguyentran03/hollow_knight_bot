@@ -833,42 +833,26 @@ def test_restart_params_omits_headless_recorded_false(tmp_path):
     assert "headless" not in params
 
 
-def test_command_forwards_timescale_in_both_modes(tmp_path, stub_trainer):
-    cmd = launcher.command(tmp_path, {"run_id": "r1", "timescale": 2},
-                           platform="linux")
-    assert "--timescale" in cmd and "2.0" in cmd
-    cmd = launcher.command(
-        tmp_path, {"mode": "resume", "run_id": "old", "timescale": 2},
-        platform="linux")
-    assert "--timescale" in cmd
-
-
-def test_command_omits_unset_timescale(tmp_path, stub_trainer):
-    # Unset stays unset so a resume inherits the recorded value.
+def test_command_never_forwards_timescale(tmp_path, stub_trainer):
+    # Timescale training is disabled: the launcher drops the param
+    # entirely in every mode, so train.py always runs at 1x.
     for params in ({"run_id": "r1"},
-                   {"mode": "resume", "run_id": "old"},
+                   {"run_id": "r1", "timescale": 2},
+                   {"mode": "resume", "run_id": "old", "timescale": 2},
                    {"run_id": "r1", "timescale": ""}):
         assert "--timescale" not in launcher.command(tmp_path, dict(params),
                                                      platform="linux")
 
 
-def test_validate_rejects_out_of_range_timescale(tmp_path, stub_trainer):
-    for bad in (0, 0.5, 11, -1):
-        with pytest.raises(ValueError):
-            launcher.command(tmp_path, {"run_id": "r1", "timescale": bad},
-                             platform="linux")
-
-
-def test_restart_params_carries_recorded_timescale(tmp_path):
-    # Checkpoint-less restarts run in 'new' mode outside resume
-    # inheritance, so the recorded value must ride along (same rule as
-    # headless).
+def test_restart_params_drops_recorded_timescale(tmp_path):
+    # A run recorded at 2x (pre-disable) restarts without the param;
+    # train.py forces 1x either way.
     run = tmp_path / "runs" / "r1"
     run.mkdir(parents=True)
     (run / "config.jsonl").write_text(
         json.dumps({"timesteps": 1000, "timescale": 2.0}) + "\n")
     params = launcher._restart_params(run, {"mode": "resume", "run_id": "r1"})
-    assert params["timescale"] == 2.0
+    assert "timescale" not in params
 
 
 FAIL_STUB = """\
