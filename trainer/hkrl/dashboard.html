@@ -1111,7 +1111,7 @@ function renderMatrix(holder, data) {
   data.states.forEach((s, ri) => {
     const lab = document.createElement("div");
     lab.className = "m-rowlab";
-    lab.textContent = s + " (" + data.counts[ri] + ")";
+    lab.textContent = s + " (n=" + data.counts[ri] + ")";
     grid.appendChild(lab);
     rowLabs.push(lab);
     data.matrix[ri].forEach((v, ci) => {
