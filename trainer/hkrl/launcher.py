@@ -461,7 +461,7 @@ def launch(root, params: dict) -> str:
         return p["run_id"]
 
 
-def replay(root, run_id, gen, episodes: int = 3,
+def replay(root, run_id, gen, episodes: int = 3, record: bool = False,
            platform: str = sys.platform) -> str:
     """Spawn a detached replay of one generation; returns its run id.
 
@@ -523,7 +523,8 @@ def replay(root, run_id, gen, episodes: int = 3,
             [sys.executable, str(REPLAY_SCRIPT), "--auto",
              "--root", str(root), "--run-dir", str(run_dir),
              "--gen", str(gen), "--episodes", str(episodes),
-             "--port", str(DEFAULT_PORT)],
+             "--port", str(DEFAULT_PORT)]
+            + (["--record"] if record else []),
             platform)
         d = _dir(root)
         log_path = d / f"{run_id}.log"

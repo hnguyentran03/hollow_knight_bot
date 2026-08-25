@@ -196,6 +196,37 @@
 
   .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 760px) { .charts { grid-template-columns: 1fr; } }
+  /* Behavior recordings: one collapsible row per recording, opening to an
+     interactive action × boss-state heatmap. Sequential single-hue ramp of
+     the soul blue on the dark surface (dark = low, bright = high); hover a
+     cell for exact numbers, outlined cell = the action actually chosen
+     most. */
+  #recordings-wrap { margin-top: 12px; }  /* match the chart grid's own gap */
+  /* .recording rows are <details>, so the page-wide details/summary rules
+     (20px top margin, uppercase display face) reach them; reset both --
+     these are data rows inside a card, not a page section. */
+  .recording { border-top: 1px solid var(--border); margin-top: 0; }
+  .recording:first-of-type { border-top: none; }
+  .recording summary { cursor: pointer; padding: 8px 0; color: var(--ink-2); font-size: 13px; list-style: none; font-family: var(--body); letter-spacing: normal; text-transform: none; }
+  .recording summary::-webkit-details-marker { display: none; }
+  .recording summary::before { content: "▸ "; color: var(--muted); }
+  .recording[open] summary::before { content: "▾ "; }
+  .recording .matrix-note { color: var(--muted); font-size: 12px; padding: 4px 0 12px; }
+  .matrix-wrap { position: relative; overflow-x: auto; padding: 4px 0 12px; }
+  .matrix { display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+  .m-col, .m-rowlab { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+  .m-col { align-self: end; justify-self: center; padding-bottom: 3px; }
+  .m-rowlab { align-self: center; justify-self: end; padding-right: 8px; }
+  .m-col.hl, .m-rowlab.hl { color: var(--ink); }
+  .m-cell { position: relative; height: 22px; min-width: 34px; border-radius: 2px; cursor: default; }
+  .m-cell:hover { outline: 1px solid var(--tick); outline-offset: -1px; }
+  .m-val {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; font-size: 9.5px; pointer-events: none;
+  }
+  .m-cell.m-modal { box-shadow: inset 0 0 0 1.5px rgba(233, 230, 218, 0.85); }
+  .matrix-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+  .matrix-legend .ramp { width: 120px; height: 8px; border-radius: 4px; border: 1px solid var(--border); }
   .card { padding: 12px 12px 8px; }
   .card.wide { grid-column: 1 / -1; }
   .card h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 0; }
@@ -316,10 +347,11 @@
   #resume-dialog form, #delete-dialog form, #replay-dialog form { display: flex; flex-direction: column; align-items: stretch; }
   #resume-dialog h2, #delete-dialog h2, #replay-dialog h2 { font-family: var(--display); font-size: 17px; font-weight: 400; letter-spacing: 0.04em; text-transform: none; margin: 0 0 6px; }
   #resume-dialog .resume-facts, #delete-dialog .resume-facts, #replay-dialog .resume-facts { color: var(--ink-2); font-size: 13px; margin: 0 0 14px; }
-  #replay-dialog label { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+  #replay-dialog label:not(.check-hint) { display: block; font-family: var(--display); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
   #replay-dialog #replay-episodes {
     width: 120px; font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+    margin: 0 0 12px;
   }
   /* Overrides row: prefilled with the run's recorded shape; a value is
      sent only when changed, so untouched fields keep resume inheritance. */
@@ -474,6 +506,8 @@
       <label for="replay-episodes">Episodes</label>
       <input type="number" id="replay-episodes" min="1" value="3"
              aria-label="Episodes to play">
+      <label for="replay-record">Record</label>
+      <div class="check-row"><input id="replay-record" type="checkbox"><label class="check-hint" for="replay-record">capture behavior for the matrix view</label></div>
       <div class="dialog-actions">
         <button type="submit" class="btn" value="cancel" formnovalidate autofocus>Cancel</button>
         <button type="submit" class="btn" value="replay">Replay</button>
@@ -518,6 +552,14 @@
       <div class="card panel wide" id="chart-episodes">
         <h2>Reward per episode</h2>
         <div class="subtitle">Every fight, over wall-clock time — the heartbeat between checkpoints</div>
+      </div>
+    </div>
+
+    <div class="charts" id="recordings-wrap" hidden>
+      <div class="card panel wide">
+        <h2>Behavior recordings</h2>
+        <div class="subtitle">Replays captured with Record — open one for its action × boss-state matrix (cell = mean π, outlined = most-chosen action)</div>
+        <div id="recordings"></div>
       </div>
     </div>
 
@@ -1012,6 +1054,8 @@ function render() {
     },
   });
 
+  renderRecordings(run.recordings || []);
+
   const config = document.getElementById("config");
   config.replaceChildren();
   if (run.config) {
@@ -1027,6 +1071,163 @@ function render() {
       tr.append(td1, td2);
       config.appendChild(tr);
     }
+  }
+}
+
+/* The matrix heatmap: sequential single-hue ramp (soul blue, dark = low,
+   bright = high) with a gray-blue near-surface floor so a 0 cell reads
+   "empty" on the dark card. */
+const MATRIX_RAMP = [[0x12, 0x1a, 0x2b], [0x2f, 0x6f, 0xc4], [0xa8, 0xd4, 0xff]];
+function rampColor(v) {
+  const t = Math.max(0, Math.min(1, v)) * 2;
+  const [a, b, f] = t <= 1 ? [MATRIX_RAMP[0], MATRIX_RAMP[1], t]
+                           : [MATRIX_RAMP[1], MATRIX_RAMP[2], t - 1];
+  return "rgb(" + a.map((x, i) => Math.round(x + (b[i] - x) * f)).join(",") + ")";
+}
+
+/* One interactive action × boss-state heatmap. Rows are observed states
+   (most-visited first, as served), columns the 21 actions; cell shade is
+   the mean recorded π, the outlined cell the action actually CHOSEN most
+   in that state, and in-cell percents appear on cells with real mass plus
+   the outlined cell (always numbered, however small its mean π). Hover
+   any cell for the full numbers and a row+column label highlight. */
+function renderMatrix(holder, data) {
+  const wrap = document.createElement("div");
+  wrap.className = "matrix-wrap";
+  const grid = document.createElement("div");
+  grid.className = "matrix";
+  grid.style.gridTemplateColumns =
+    "max-content repeat(" + data.actions.length + ", minmax(34px, 1fr))";
+  grid.appendChild(document.createElement("div"));  // corner spacer
+  const colLabs = data.actions.map(a => {
+    const el = document.createElement("div");
+    el.className = "m-col";
+    el.textContent = a;
+    grid.appendChild(el);
+    return el;
+  });
+  const rowLabs = [];
+  data.states.forEach((s, ri) => {
+    const lab = document.createElement("div");
+    lab.className = "m-rowlab";
+    lab.textContent = s + " (n=" + data.counts[ri] + ")";
+    grid.appendChild(lab);
+    rowLabs.push(lab);
+    data.matrix[ri].forEach((v, ci) => {
+      const cell = document.createElement("div");
+      cell.className = "m-cell";
+      cell.style.background = rampColor(v);
+      cell.dataset.r = ri;
+      cell.dataset.c = ci;
+      const isModal = ci === data.modal[ri];
+      if (isModal) cell.classList.add("m-modal");
+      if (v >= 0.15 || isModal) {
+        const val = document.createElement("span");
+        val.className = "m-val";
+        val.textContent = Math.round(v * 100);
+        val.style.color = v > 0.55 ? "#0d1b2e" : "#cfe4ff";
+        cell.appendChild(val);
+      }
+      grid.appendChild(cell);
+    });
+  });
+
+  const tip = document.createElement("div");
+  tip.className = "tooltip";
+  let hl = null;  // [rowLab, colLab] currently highlighted
+  grid.addEventListener("mouseover", ev => {
+    const cell = ev.target.closest(".m-cell");
+    if (!cell) return;
+    const ri = +cell.dataset.r, ci = +cell.dataset.c;
+    if (hl) hl.forEach(el => el.classList.remove("hl"));
+    hl = [rowLabs[ri], colLabs[ci]];
+    hl.forEach(el => el.classList.add("hl"));
+    const v = data.matrix[ri][ci];
+    tip.replaceChildren();
+    const tx = document.createElement("div");
+    tx.className = "tx";
+    tx.textContent = data.states[ri] + " · " + data.actions[ci];
+    tip.appendChild(tx);
+    const mean = document.createElement("div");
+    mean.innerHTML = "mean π <span class=\"tval\"></span>";
+    mean.querySelector(".tval").textContent = (v * 100).toFixed(1) + "%";
+    tip.appendChild(mean);
+    const chosen = document.createElement("div");
+    chosen.className = "tname";
+    chosen.textContent = ci === data.modal[ri]
+      ? "most-chosen of " + data.counts[ri] + " steps"
+      : data.counts[ri] + " steps in this state";
+    tip.appendChild(chosen);
+    tip.style.display = "block";
+    const wr = wrap.getBoundingClientRect(), cr = cell.getBoundingClientRect();
+    tip.style.left = Math.min(cr.left - wr.left + wrap.scrollLeft + 14,
+                              wrap.scrollWidth - 170) + "px";
+    tip.style.top = (cr.bottom - wr.top + 6) + "px";
+  });
+  grid.addEventListener("mouseleave", () => {
+    tip.style.display = "none";
+    if (hl) { hl.forEach(el => el.classList.remove("hl")); hl = null; }
+  });
+
+  const legend = document.createElement("div");
+  legend.className = "matrix-legend";
+  const ramp = document.createElement("div");
+  ramp.className = "ramp";
+  ramp.style.background = "linear-gradient(90deg, " + rampColor(0) + ", "
+    + rampColor(0.5) + ", " + rampColor(1) + ")";
+  legend.append("0%", ramp, "100% mean π(action | state) · outlined = most-chosen · "
+    + data.episodes + " episode" + (data.episodes === 1 ? "" : "s") + ", "
+    + data.steps + " steps" + (data.deterministic ? " · deterministic" : ""));
+  wrap.append(grid, tip, legend);
+  holder.appendChild(wrap);
+}
+
+/* Behavior recordings: rebuilt only when the list itself changes (the 10s
+   poll must not collapse an open matrix), with open rows remembered so a
+   rebuild -- e.g. a new recording landing -- restores them. The matrix is
+   fetched on first open; the interim note covers the server-side
+   aggregation of the recording. */
+let recSig = null;
+const openRecs = new Set();
+function renderRecordings(recs) {
+  document.getElementById("recordings-wrap").hidden = !recs.length;
+  const sig = state.runId + "|" + recs.map(r => r.file + ":" + r.mtime).join(",");
+  if (sig === recSig) return;
+  if (recSig !== null && recSig.split("|")[0] !== state.runId) openRecs.clear();
+  recSig = sig;
+  const list = document.getElementById("recordings");
+  list.replaceChildren();
+  for (const r of recs) {
+    const det = document.createElement("details");
+    det.className = "recording";
+    const sum = document.createElement("summary");
+    sum.textContent = (r.gen != null ? "generation " + r.gen : "unknown gen")
+      + " · " + fmtDate(r.mtime) + " " + fmtClock(r.mtime)
+      + " · " + Math.max(1, Math.round(r.size / 1024)) + " KB";
+    det.appendChild(sum);
+    const holder = document.createElement("div");
+    det.appendChild(holder);
+    det.addEventListener("toggle", async () => {
+      if (!det.open) { openRecs.delete(r.file); return; }
+      openRecs.add(r.file);
+      if (holder.childElementCount) return;  // matrix already requested
+      const note = document.createElement("div");
+      note.className = "matrix-note";
+      note.textContent = "aggregating recording…";
+      holder.appendChild(note);
+      try {
+        const resp = await fetch("/api/run/" + encodeURIComponent(state.runId)
+          + "/recording/" + encodeURIComponent(r.file) + "/matrix.json");
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        renderMatrix(holder, await resp.json());
+        note.remove();
+      } catch (err) {
+        note.textContent = "matrix failed (" + err.message
+          + ") — try scripts/analyze_steps.py on " + r.file;
+      }
+    });
+    if (openRecs.has(r.file)) det.open = true;  // after listener: re-request
+    list.appendChild(det);
   }
 }
 
@@ -1586,6 +1787,7 @@ function openReplayDialog(runId, gen) {
     "Plays this checkpoint against a live game window. It occupies the "
     + "training slot until it finishes or you stop it.";
   document.getElementById("replay-episodes").value = "3";  // fresh per open
+  document.getElementById("replay-record").checked = false;
   replayDialog.showModal();
 }
 
@@ -1598,9 +1800,10 @@ replayDialog.addEventListener("close", async () => {
     launchError("episodes must be a positive number");
     return;
   }
+  const record = document.getElementById("replay-record").checked;
   launchError("");
   try {
-    await postJSON("/api/replay", { run_id: t.runId, gen: t.gen, episodes });
+    await postJSON("/api/replay", { run_id: t.runId, gen: t.gen, episodes, record });
     refreshLauncher();  // the active-run card takes over
   } catch (err) { launchError(err.message); }
 });

@@ -130,13 +130,19 @@ class HKEnv(gym.Env):
     # tests, and non-measurement training pay nothing.
     def __init__(self, host="127.0.0.1", port=9020, reward_config=None,
                  max_steps=2700, timeout=30.0, reset_retries=8,
-                 keepalive=3.0, reset_log_dir=None, boss=DEFAULT_BOSS):
+                 keepalive=3.0, reset_log_dir=None, boss=DEFAULT_BOSS,
+                 capture=False):
         # Resolved before any socket work so an unknown id fails instantly
         # and locally, not after a game connection is already up.
         self.boss = get_boss(boss)
         self.reward = dict(DEFAULT_REWARD, **(reward_config or {}))
         self.max_steps = max_steps
         self.reset_retries = reset_retries
+        # Behavior-capture hook (docs spec 2026-08-22): when true, step()
+        # and reset() attach the raw obs dict and the per-term reward
+        # breakdown to info for a recorder to persist. Default off so the
+        # training path allocates nothing extra.
+        self._capture = capture
         self._reset_log = (reset_log_path(reset_log_dir, port)
                            if reset_log_dir is not None else None)
         self._port = port
@@ -210,22 +216,30 @@ class HKEnv(gym.Env):
                       file=sys.stderr, flush=True)
         return np.asarray(v + onehot, dtype=np.float32)
 
-    def _reward(self, prev, cur, done, won, truncated):
-        r = self.reward["time_penalty"]
+    def _reward_terms(self, prev, cur, done, won, truncated):
+        """The reward, itemized: only terms that fired this step, keyed by
+        their reward-config names (boss_hp_scale's term is "boss_damage").
+        _reward() sums this dict, so the breakdown a recording stores can
+        never disagree with the scalar the policy was trained on."""
+        t = {"time_penalty": self.reward["time_penalty"]}
         if cur["bhp"] < prev["bhp"]:
-            r += (prev["bhp"] - cur["bhp"]) * self.reward["boss_hp_scale"]
+            t["boss_damage"] = (prev["bhp"] - cur["bhp"]) * self.reward["boss_hp_scale"]
         if cur["khp"] < prev["khp"]:
-            r += (prev["khp"] - cur["khp"]) * self.reward["knight_hit"]
+            t["knight_hit"] = (prev["khp"] - cur["khp"]) * self.reward["knight_hit"]
         if done:
             if won:
-                r += self.reward["win"] + cur["khp"] * self.reward["health_bonus"]
+                t["win"] = self.reward["win"]
+                t["health_bonus"] = cur["khp"] * self.reward["health_bonus"]
             else:
-                r += self.reward["death"]
+                t["death"] = self.reward["death"]
         elif truncated:
             # Running out the clock is a loss, not a free exit: without this
             # a timeout undercuts dying and stalling becomes the best play.
-            r += self.reward["death"]
-        return r
+            t["death"] = self.reward["death"]
+        return t
+
+    def _reward(self, prev, cur, done, won, truncated):
+        return sum(self._reward_terms(prev, cur, done, won, truncated).values())
 
     # -- gym API --
 
@@ -305,7 +319,10 @@ class HKEnv(gym.Env):
         self._prev = msg["obs"]
         self._steps = 0
         self._max_bhp = None
-        return self._flatten(msg["obs"]), dict(msg["info"])
+        info = dict(msg["info"])
+        if self._capture:
+            info["raw_obs"] = dict(msg["obs"])
+        return self._flatten(msg["obs"]), info
 
     def abort_reset(self):
         """Abandon an in-flight reset() from another thread (the async-reset
@@ -366,7 +383,13 @@ class HKEnv(gym.Env):
         cur, info = msg["obs"], dict(msg["info"])
         done, won = bool(msg["done"]), bool(info.get("won", False))
         truncated = not done and self._steps + 1 >= self.max_steps
-        reward = self._reward(self._prev, cur, done, won, truncated)
+        if self._capture:
+            terms = self._reward_terms(self._prev, cur, done, won, truncated)
+            reward = sum(terms.values())
+            info["raw_obs"] = dict(cur)
+            info["reward_terms"] = terms
+        else:
+            reward = self._reward(self._prev, cur, done, won, truncated)
         self._prev = cur
         self._steps += 1
         if done or truncated:

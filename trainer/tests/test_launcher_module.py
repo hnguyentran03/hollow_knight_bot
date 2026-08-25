@@ -486,6 +486,16 @@ def test_replay_spawns_with_the_right_argv_and_pidfile(tmp_path, stub_replay):
     assert active["gen"] == 2
     # Detached, exactly like launch(): its own session survives a dashboard exit.
     assert os.getsid(active["pid"]) != os.getsid(os.getpid())
+    # Recording is opt-in: the default replay never writes recordings.
+    assert "--record" not in argv
+
+
+def test_replay_record_flag_appends_record(tmp_path, stub_replay):
+    _make_checkpoint(tmp_path, "r1", gen=1)
+    launcher.replay(tmp_path, "r1", gen=1, record=True)
+    log = _log(tmp_path, "r1")
+    assert wait_for(lambda: "stub trainer:" in log.read_text(errors="replace"))
+    assert "--record" in log.read_text(errors="replace")
 
 
 def test_replay_is_refused_while_a_run_is_active(tmp_path, stub_replay,

@@ -445,3 +445,69 @@ def test_reset_after_set_boss_names_the_new_boss():
             assert fg.reset_bosses == ["gorb"]
         finally:
             env.close()
+
+
+def test_reward_terms_sum_to_the_scalar_reward():
+    # The breakdown and the scalar must share one source of truth: for every
+    # outcome shape, _reward() equals the sum of _reward_terms().
+    episode = [state(obs(bhp=900))]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        cases = [
+            # (prev, cur, done, won, truncated)
+            (obs(bhp=900), obs(bhp=880), False, False, False),          # boss damage
+            (obs(khp=9), obs(khp=7), False, False, False),              # knight hit
+            (obs(), obs(bhp=0, khp=6), True, True, False),              # win + health bonus
+            (obs(), obs(khp=0), True, False, False),                    # death
+            (obs(), obs(), False, False, True),                         # truncation death
+            (obs(bhp=900, khp=9), obs(bhp=850, khp=8), True, True, False),  # everything at once
+        ]
+        for prev, cur, done, won, truncated in cases:
+            terms = env._reward_terms(prev, cur, done, won, truncated)
+            assert sum(terms.values()) == env._reward(prev, cur, done, won, truncated)
+        # Spot-check contents: a win carries win + health_bonus, no death.
+        terms = env._reward_terms(obs(), obs(bhp=0, khp=6), True, True, False)
+        assert terms["win"] == DEFAULT_REWARD["win"]
+        assert terms["health_bonus"] == 6 * DEFAULT_REWARD["health_bonus"]
+        assert "death" not in terms
+        # A quiet mid-episode step carries only the time penalty.
+        assert env._reward_terms(obs(), obs(), False, False, False) == {
+            "time_penalty": DEFAULT_REWARD["time_penalty"]}
+        env.close()
+
+
+def test_capture_attaches_raw_obs_and_reward_terms():
+    first, second = obs(bhp=900), obs(bhp=880)
+    episode = [state(first), state(second)]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, capture=True)
+        _, info = env.reset()
+        assert info["raw_obs"] == first
+        _, r, *_ , info = env.step(0)
+        assert info["raw_obs"] == second
+        assert sum(info["reward_terms"].values()) == r
+        assert info["reward_terms"]["boss_damage"] == pytest.approx(
+            20 * DEFAULT_REWARD["boss_hp_scale"])
+        env.close()
+
+
+def test_capture_reward_terms_include_truncation_death():
+    episode = [state(obs()), state(obs())]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port, capture=True, max_steps=1)
+        env.reset()
+        _, _, terminated, truncated, info = env.step(0)
+        assert truncated and not terminated
+        assert info["reward_terms"]["death"] == DEFAULT_REWARD["death"]
+        env.close()
+
+
+def test_capture_off_by_default_attaches_nothing():
+    episode = [state(obs()), state(obs())]
+    with FakeGame([episode]) as fg:
+        env = HKEnv(port=fg.port)
+        _, info = env.reset()
+        assert "raw_obs" not in info
+        *_, info = env.step(0)
+        assert "raw_obs" not in info and "reward_terms" not in info
+        env.close()

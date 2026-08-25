@@ -82,6 +82,84 @@ def test_api_run_flags_exported_generations(base_url, tmp_path):
     assert [g["exported"] for g in run["generations"]] == [True]
 
 
+def _write_recording(path, gen=7, steps=3, rare_state=None):
+    """A minimal real schema-v1 recording so the endpoints exercise the
+    actual reader/renderer, not a stand-in format. `rare_state` appends one
+    single step in that state (a state the CLI's min-steps default drops)."""
+    from hkrl.env import ACTIONS
+    from hkrl.recording import RecordingWriter
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pi = [0.0] * len(ACTIONS)
+    pi[5] = 1.0
+    with RecordingWriter(path) as w:
+        w.header(run_id="r1", gen=gen, boss="gorb",
+                 boss_spec={"id": "gorb", "display_name": "Gorb",
+                            "fsm_states": ["Wait", "Antic", "UNKNOWN"]},
+                 actions=ACTIONS, obs_keys=["kx"], deterministic=True,
+                 episodes_requested=1)
+        for i in range(steps):
+            w.step(ep=1, i=i, obs={"boss_state": "Antic"}, a=5, pi=pi,
+                   r=0.0, r_terms={}, done=False, trunc=False, won=False)
+        if rare_state is not None:
+            w.step(ep=1, i=steps, obs={"boss_state": rare_state}, a=5,
+                   pi=pi, r=0.0, r_terms={}, done=False, trunc=False,
+                   won=False)
+        w.episode(ep=1, result="loss", steps=steps, reward=0.0,
+                  boss_damage_frac=0.0, attempt=1, wall_s=1.0)
+
+
+def test_api_run_lists_recordings_newest_first(base_url, tmp_path):
+    replays = tmp_path / "runs" / "r1" / "replays"
+    _write_recording(replays / "20260823-070000_gen0007.jsonl.gz", gen=7)
+    _write_recording(replays / "20260824-090000_gen0012.jsonl.gz", gen=12)
+    _, _, body = _get(base_url + "/api/run/r1")
+    recs = json.loads(body)["recordings"]
+    assert [r["file"] for r in recs] == ["20260824-090000_gen0012.jsonl.gz",
+                                        "20260823-070000_gen0007.jsonl.gz"]
+    assert [r["gen"] for r in recs] == [12, 7]
+    assert all(r["size"] > 0 for r in recs)
+
+
+def test_api_run_without_replays_dir_has_empty_recordings(base_url):
+    _, _, body = _get(base_url + "/api/run/r1")
+    assert json.loads(body)["recordings"] == []
+
+
+def test_matrix_endpoint_serves_the_aggregated_json(base_url, tmp_path):
+    name = "20260823-070000_gen0007.jsonl.gz"
+    _write_recording(tmp_path / "runs" / "r1" / "replays" / name, steps=6,
+                     rare_state="Wait")
+    status, ctype, body = _get(
+        base_url + f"/api/run/r1/recording/{name}/matrix.json")
+    assert status == 200
+    assert ctype.startswith("application/json")
+    data = json.loads(body)
+    assert data["run_id"] == "r1" and data["gen"] == 7
+    assert data["boss"] == "Gorb"
+    assert data["episodes"] == 1 and data["steps"] == 7
+    # 21 compact action labels straight from the frozen header.
+    assert len(data["actions"]) == 21 and data["actions"][0] == "·"
+    # Six steps in Antic choosing action 5 with pi peaked there -- and the
+    # single Wait step is a row too: the dashboard shows every observed
+    # state (no min-steps drop; that filter is a CLI concern).
+    assert data["states"] == ["Antic", "Wait"]
+    assert data["counts"] == [6, 1]
+    assert data["modal"] == [5, 5]
+    assert data["matrix"][0][5] == pytest.approx(1.0)
+    assert "dropped" not in data  # nothing is ever dropped, so no field
+
+
+def test_matrix_endpoint_rejects_bad_names(base_url, tmp_path):
+    _write_recording(tmp_path / "runs" / "r1" / "replays"
+                     / "20260823-070000_gen0007.jsonl.gz")
+    for bad in ["nope.jsonl.gz",              # no such recording
+                "%2e%2e%2fsecret.jsonl.gz",   # traversal out of replays/
+                "20260823-070000_gen0007"]:   # wrong extension
+        with pytest.raises(urllib.error.HTTPError) as err:
+            _get(base_url + f"/api/run/r1/recording/{bad}/matrix.json")
+        assert err.value.code == 404
+
+
 def test_unknown_run_and_unknown_path_are_404(base_url):
     for path in ["/api/run/nope", "/favicon.ico"]:
         with pytest.raises(urllib.error.HTTPError) as err:
@@ -276,6 +354,8 @@ def test_page_ships_the_launch_panel_and_summon_links(base_url):
     assert b'id="resume-dialog"' in body
     assert b'id="delete-dialog"' in body
     assert b'id="replay-dialog"' in body
+    assert b'id="replay-record"' in body
+    assert b'id="recordings"' in body
     assert b'id="resume-btn"' not in body
 
 
@@ -289,33 +369,35 @@ def test_summon_serves_the_same_page_as_root(base_url):
 
 def test_post_replay_delegates_and_returns_run_and_gen(base_url, monkeypatch):
     seen = {}
-    def fake_replay(root, run_id, gen, episodes):
-        seen.update(run_id=run_id, gen=gen, episodes=episodes)
+    def fake_replay(root, run_id, gen, episodes, record):
+        seen.update(run_id=run_id, gen=gen, episodes=episodes, record=record)
         return run_id
     monkeypatch.setattr(dash.launcher, "replay", fake_replay)
     status, data = _post(base_url + "/api/replay",
-                         {"run_id": "r1", "gen": 2, "episodes": 5})
+                         {"run_id": "r1", "gen": 2, "episodes": 5,
+                          "record": True})
     assert status == 200 and data == {"replaying": "r1", "gen": 2}
-    assert seen == {"run_id": "r1", "gen": 2, "episodes": 5}
+    assert seen == {"run_id": "r1", "gen": 2, "episodes": 5, "record": True}
 
 
 def test_post_replay_defaults_episodes_and_maps_errors(base_url, monkeypatch):
-    # episodes is optional; the handler defaults it to 3.
+    # episodes and record are optional; the handler defaults them.
     seen = {}
     monkeypatch.setattr(dash.launcher, "replay",
-                        lambda root, run_id, gen, episodes: seen.update(
-                            episodes=episodes) or run_id)
+                        lambda root, run_id, gen, episodes, record: seen.update(
+                            episodes=episodes, record=record) or run_id)
     _post(base_url + "/api/replay", {"run_id": "r1", "gen": 1})
     assert seen["episodes"] == 3
+    assert seen["record"] is False
 
-    def busy(root, run_id, gen, episodes):
+    def busy(root, run_id, gen, episodes, record):
         raise RuntimeError("a launched run is already active")
     monkeypatch.setattr(dash.launcher, "replay", busy)
     with pytest.raises(urllib.error.HTTPError) as err:
         _post(base_url + "/api/replay", {"run_id": "r1", "gen": 1})
     assert err.value.code == 409
 
-    def bad(root, run_id, gen, episodes):
+    def bad(root, run_id, gen, episodes, record):
         raise ValueError("gen must be a positive integer")
     monkeypatch.setattr(dash.launcher, "replay", bad)
     with pytest.raises(urllib.error.HTTPError) as err:

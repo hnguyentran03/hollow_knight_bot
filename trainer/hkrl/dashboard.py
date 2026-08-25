@@ -7,14 +7,17 @@ Run directories themselves are still only ever written by train.py, and
 the server binds 127.0.0.1 only.
 """
 import json
+import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from hkrl import launcher
+from hkrl.analysis import action_labels, aggregate, merge_recordings
 from hkrl.bosses import BOSSES
 from hkrl.exports import exported_generations
+from hkrl.recording import read_recording
 from hkrl.rundata import load_run, read_jsonl, scan_runs
 
 PAGE = Path(__file__).with_name("dashboard.html")
@@ -63,7 +66,12 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/runs":
             self._json(scan_runs(self.server.root))
         elif path.startswith("/api/run/"):
-            self._run(path[len("/api/run/"):])
+            rest = path[len("/api/run/"):]
+            if "/recording/" in rest and rest.endswith("/matrix.json"):
+                run_id, _, tail = rest.partition("/recording/")
+                self._matrix(run_id, tail[:-len("/matrix.json")])
+            else:
+                self._run(rest)
         elif path == "/api/launcher":
             active = launcher.status(self.server.root)
             if active is not None and active.get("run_id"):
@@ -141,7 +149,8 @@ class _Handler(BaseHTTPRequestHandler):
                 # so the page can label the active-run card without a re-fetch.
                 run_id = launcher.replay(self.server.root, body.get("run_id"),
                                          body.get("gen"),
-                                         body.get("episodes", 3))
+                                         body.get("episodes", 3),
+                                         bool(body.get("record", False)))
                 self._json({"replaying": run_id, "gen": body.get("gen")})
             elif path == "/api/export":
                 # A synchronous file copy (launcher.export), so unlike
@@ -182,7 +191,58 @@ class _Handler(BaseHTTPRequestHandler):
         exported = exported_generations(self.server.root, run_id)
         for g in detail.get("generations", []):
             g["exported"] = g.get("gen") in exported
+        # Filename metadata only -- no gzip reads, so a run with many
+        # recordings costs the same as one with none.
+        detail["recordings"] = [
+            {"file": p.name,
+             "gen": (int(m.group(1))
+                     if (m := re.search(r"_gen(\d+)\.jsonl\.gz$", p.name))
+                     else None),
+             "size": p.stat().st_size,
+             "mtime": p.stat().st_mtime}
+            for p in sorted((run_dir / "replays").glob("*.jsonl.gz"),
+                            key=lambda p: p.name, reverse=True)]
         self._json(detail)
+
+    def _matrix(self, run_id, name):
+        """Serve one recording's aggregated action x boss-state matrix as
+        JSON; the page renders it interactively. Same numbers as the CLI
+        renderer -- both sit on hkrl.analysis."""
+        for part in (run_id, name):
+            if (not part or "/" in part or "\\" in part
+                    or part in (".", "..")):
+                self.send_error(404)
+                return
+        if not name.endswith(".jsonl.gz"):
+            self.send_error(404)
+            return
+        rec = Path(self.server.root) / "runs" / run_id / "replays" / name
+        if not rec.is_file():
+            self.send_error(404)
+            return
+        try:
+            header, steps, episodes = merge_recordings([read_recording(rec)])
+            # Every observed state gets a row; min-steps is a CLI concern
+            # (the interactive view can afford the extra rows -- hover
+            # carries the counts).
+            agg = aggregate(steps, min_steps=1)
+        except (ValueError, KeyError, OSError) as exc:
+            self.send_error(500, "unreadable recording", str(exc)[:500])
+            return
+        self._json({
+            "run_id": header.get("run_id"),
+            "gen": header.get("gen"),
+            "boss": header.get("boss_spec", {}).get("display_name",
+                                                    header.get("boss")),
+            "deterministic": header.get("deterministic"),
+            "episodes": episodes,
+            "steps": sum(agg.counts),
+            "actions": action_labels(header["actions"]),
+            "states": agg.states,
+            "counts": agg.counts,
+            "matrix": agg.matrix,
+            "modal": agg.modal,
+        })
 
     def _json(self, payload, status: int = 200):
         self._send(status, "application/json",
