@@ -415,6 +415,9 @@ def test_page_ships_the_recording_views(base_url):
     assert b"ep-pick" in body
     assert b"arena-grid" in body
     assert b"losses incl. timeouts" in body
+    # The trace explains its three series in plain words.
+    assert "probability the policy gave".encode() in body
+    assert "critic's estimate".encode() in body
 
 
 def test_page_ships_the_actionmix_chart(base_url):

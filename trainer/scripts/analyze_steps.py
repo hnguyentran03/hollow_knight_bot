@@ -145,7 +145,13 @@ def render_trace(episodes, header, out: Path) -> None:
     boss = header.get("boss_spec", {}).get("display_name", header.get("boss"))
     fig.suptitle(f"{header.get('run_id')} gen {header.get('gen')} · {boss} "
                  f"· confidence trace", fontsize=10, color="#222")
-    fig.tight_layout(rect=(0, 0, 1, 0.985))
+    fig.text(0.01, 0.005,
+             "π(chosen) = probability the policy gave the action it took "
+             "(1 = certain) · entropy = spread over all 21 actions "
+             "(0 = decisive, 1 = uniformly unsure) · V(s) = the critic's "
+             "estimate of the reward still to come — dips mean it sees "
+             "trouble ahead", fontsize=7, color="#777")
+    fig.tight_layout(rect=(0, 0.012, 1, 0.985))
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
 
