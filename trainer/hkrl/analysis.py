@@ -116,6 +116,49 @@ def confidence_trace(rows: list[dict]) -> list[dict]:
     return out
 
 
+def arena_occupancy(rows: list[dict], nx: int = 24, ny: int = 12) -> dict:
+    """Where the Knight stands, split by outcome. Grids are normalized
+    within each outcome (comparable panels regardless of episode counts);
+    grid[0] is the TOP arena row. Timeouts group with losses (they didn't
+    win) but only true losses mark deaths. Episodes without a summary row
+    (interrupted recording) are excluded entirely."""
+    spec = rows[0]["boss_spec"]
+    x0 = spec["arena_center_x"] - spec["arena_half_w"]
+    x1 = spec["arena_center_x"] + spec["arena_half_w"]
+    y0 = spec["floor_y"]
+    y1 = spec["floor_y"] + spec["arena_height"]
+    results = episode_results(rows)
+
+    def bin_of(obs):
+        ix = min(nx - 1, max(0, int((obs["kx"] - x0) / (x1 - x0) * nx)))
+        iy = min(ny - 1, max(0, int((obs["ky"] - y0) / (y1 - y0) * ny)))
+        return ix, ny - 1 - iy          # row 0 = top of the arena
+
+    panels = {k: {"episodes": 0, "steps": 0,
+                  "grid": [[0] * nx for _ in range(ny)]}
+              for k in ("win", "loss")}
+    deaths = []
+    for ep, steps in _steps_by_episode(rows).items():
+        summary = results.get(ep)
+        if summary is None:
+            continue
+        panel = panels["win" if summary["result"] == "WIN" else "loss"]
+        panel["episodes"] += 1
+        panel["steps"] += len(steps)
+        for s in steps:
+            ix, iy = bin_of(s["obs"])
+            panel["grid"][iy][ix] += 1
+        if summary["result"] == "loss":
+            deaths.append(list(bin_of(steps[-1]["obs"])))
+    for panel in panels.values():
+        total = panel["steps"] or 1
+        panel["grid"] = [[_r4(c / total) for c in row]
+                         for row in panel["grid"]]
+    panels["loss"]["deaths"] = deaths
+    return {"nx": nx, "ny": ny, "x0": x0, "x1": x1, "y0": y0, "y1": y1,
+            **panels}
+
+
 @dataclass
 class Aggregate:
     states: list[str]            # observed states, most-visited first

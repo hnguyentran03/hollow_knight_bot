@@ -179,6 +179,46 @@ def test_confidence_trace_marks_interrupted_and_terminal_kinds(tmp_path):
     assert eps[1]["result"] is None and eps[1]["events"] == []
 
 
+def test_arena_occupancy_bins_splits_and_marks_deaths(tmp_path):
+    from hkrl.analysis import arena_occupancy
+    rec = tmp_path / "r.jsonl.gz"
+    x_left, y_floor = 26.5 - 11.23, 28.41
+    _write_recording(rec, steps=[
+        # ep 1 wins standing at the left-bottom corner.
+        {"i": 0, "obs": {"kx": x_left + 0.1, "ky": y_floor + 0.1}},
+        {"i": 1, "obs": {"kx": x_left + 0.1, "ky": y_floor + 0.1},
+         "done": True, "won": True},
+        # ep 2 dies out of bounds right (clamps to edge bin).
+        {"ep": 2, "i": 0, "obs": {"kx": 99.0, "ky": y_floor + 0.1},
+         "done": True},
+        # ep 3 times out mid-arena: occupancy with the losses, no death.
+        # (27.0 sits mid-bin; the exact arena center is a bin edge and
+        # float error makes its index platform-shaky)
+        {"ep": 3, "i": 0, "obs": {"kx": 27.0, "ky": y_floor + 0.1},
+         "trunc": True},
+    ], episodes=[{"result": "WIN", "steps": 2},
+                 {"ep": 2, "result": "loss", "steps": 1},
+                 {"ep": 3, "result": "TIMEOUT", "steps": 1}])
+    a = arena_occupancy(read_recording(rec))
+    assert (a["nx"], a["ny"]) == (24, 12)
+    assert a["win"]["episodes"] == 1 and a["loss"]["episodes"] == 2
+    assert a["win"]["grid"][11][0] == pytest.approx(1.0)   # bottom row = iy 11
+    assert sum(map(sum, a["win"]["grid"])) == pytest.approx(1.0)
+    assert sum(map(sum, a["loss"]["grid"])) == pytest.approx(1.0)
+    assert a["loss"]["deaths"] == [[23, 11]]               # clamped edge bin
+    assert a["loss"]["grid"][11][12] > 0                   # timeout occupancy
+
+
+def test_arena_occupancy_handles_a_single_outcome_side(tmp_path):
+    from hkrl.analysis import arena_occupancy
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[{"i": 0, "done": True, "won": True}],
+                     episodes=[{"result": "WIN", "steps": 1}])
+    a = arena_occupancy(read_recording(rec))
+    assert a["loss"]["episodes"] == 0 and a["loss"]["deaths"] == []
+    assert sum(map(sum, a["loss"]["grid"])) == 0.0
+
+
 def test_render_writes_a_png(tmp_path):
     rec = tmp_path / "r.jsonl.gz"
     _write_recording(rec, steps=[("Antic", 5), ("Wait", 1), ("Antic", 6)])
