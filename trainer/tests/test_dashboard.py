@@ -408,6 +408,13 @@ def test_page_ships_the_launch_panel_and_summon_links(base_url):
     assert b'id="resume-btn"' not in body
 
 
+def test_page_ships_the_recording_views(base_url):
+    _, _, body = _get(base_url + "/")
+    assert b"views.json" in body and b"matrix.json" not in body
+    assert b"renderTrace" in body and b"renderArena" in body
+    assert b"ep-pick" in body
+
+
 def test_summon_serves_the_same_page_as_root(base_url):
     status_root, ctype_root, body_root = _get(base_url + "/")
     status, ctype, body = _get(base_url + "/summon")

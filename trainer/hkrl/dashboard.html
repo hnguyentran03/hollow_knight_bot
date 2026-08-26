@@ -227,6 +227,14 @@
   .m-cell.m-modal { box-shadow: inset 0 0 0 1.5px rgba(233, 230, 218, 0.85); }
   .matrix-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 11px; color: var(--muted); }
   .matrix-legend .ramp { width: 120px; height: 8px; border-radius: 4px; border: 1px solid var(--border); }
+  /* Per-recording view sections (trace, arena) under the matrix. */
+  .rec-view { position: relative; padding: 6px 0 12px; }
+  .rec-view-title { font-size: 12px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.12em; font-family: var(--display); margin-bottom: 6px; }
+  .ep-pick { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .ep-pick button { background: var(--raised); color: var(--ink-2); border: 1px solid var(--border); border-radius: 4px; font: 12px var(--body); padding: 3px 10px; cursor: pointer; }
+  .ep-pick button.on { color: var(--ink); border-color: var(--s1); box-shadow: 0 0 6px var(--glow); }
+  .ep-pick button.won { color: var(--s2); }
+  .rec-chart { position: relative; margin-top: 8px; }
   .card { padding: 12px 12px 8px; }
   .card.wide { grid-column: 1 / -1; }
   .card h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 0; }
@@ -556,7 +564,7 @@
     <div class="charts" id="recordings-wrap" hidden>
       <div class="card panel wide">
         <h2>Behavior recordings</h2>
-        <div class="subtitle">Replays captured with Record — open one for its action × boss-state matrix (cell = mean π, outlined = most-chosen action)</div>
+        <div class="subtitle">Replays captured with Record — open one for its action × boss-state matrix (cell = mean π, outlined = most-chosen action), confidence trace, and arena heatmaps</div>
         <div id="recordings"></div>
       </div>
     </div>
@@ -1180,6 +1188,83 @@ function renderMatrix(holder, data) {
   holder.appendChild(wrap);
 }
 
+/* The confidence trace: one episode at a time (picker buttons), two
+   stacked charts on a shared seconds axis -- policy certainty (pi of the
+   chosen action + normalized entropy, both 0-1) over V(s) with reward
+   events as hoverable dots on the value line. */
+function renderTrace(holder, trace) {
+  if (!trace || !trace.length) return;
+  const box = document.createElement("div");
+  box.className = "rec-view";
+  const head = document.createElement("div");
+  head.className = "rec-view-title";
+  head.textContent = "Confidence trace";
+  const pick = document.createElement("div");
+  pick.className = "ep-pick";
+  const charts = document.createElement("div");
+  const EVENT_COLOR = { hit: css("--critical"), dealt: css("--s1"),
+                        win: css("--s2"), death: css("--critical"),
+                        timeout: css("--muted") };
+  function draw(ep) {
+    charts.replaceChildren();
+    const t = i => i / 15;
+    const policy = document.createElement("div");
+    policy.className = "rec-chart";
+    const value = document.createElement("div");
+    value.className = "rec-chart";
+    charts.append(policy, value);
+    drawChart(policy, {
+      series: [
+        { name: "π(chosen)", color: css("--s1"),
+          points: ep.pia.map((y, i) => ({ x: t(i), y })), endDot: false },
+        { name: "entropy", color: css("--s2"),
+          points: ep.ent.map((y, i) => ({ x: t(i), y })), endDot: false },
+      ],
+      yDomain: [0, 1], height: 150,
+      xFormat: v => v.toFixed(0) + "s", yFormat: v => v.toFixed(2),
+      xTipFormat: v => v.toFixed(1) + " s · step " + Math.round(v * 15),
+      tipMeta: x => "khp " + (ep.khp[Math.round(x * 15)] ?? "?"),
+    });
+    drawChart(value, {
+      series: [
+        { name: "V(s)", color: css("--s1"),
+          points: ep.v.map((y, i) => ({ x: t(i), y })), endDot: false },
+        { name: "events", color: css("--critical"), kind: "dots",
+          hover: true, snapExempt: true,
+          points: ep.events.map(e => ({
+            x: t(e.i), y: ep.v[Math.min(e.i, ep.v.length - 1)],
+            color: EVENT_COLOR[e.kind], meta: e })) },
+      ],
+      legendItems: [{ name: "V(s)", color: css("--s1") },
+                    { name: "hit taken", color: css("--critical") },
+                    { name: "hit dealt", color: css("--s1") },
+                    { name: "win", color: css("--s2") }],
+      height: 150, xLabel: "fight time",
+      xFormat: v => v.toFixed(0) + "s", yFormat: v => v.toFixed(1),
+      dotTip: meta => meta && { title: meta.kind + " · step " + meta.i,
+                                lines: [] },
+    });
+  }
+  trace.forEach((ep, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "ep " + ep.ep + " · " + (ep.result || "cut short");
+    if (ep.result === "WIN") b.classList.add("won");
+    b.addEventListener("click", () => {
+      pick.querySelectorAll("button").forEach(x => x.classList.remove("on"));
+      b.classList.add("on");
+      draw(ep);
+    });
+    if (i === 0) b.classList.add("on");
+    pick.appendChild(b);
+  });
+  box.append(head, pick, charts);
+  holder.appendChild(box);
+  draw(trace[0]);
+}
+
+function renderArena(holder, arena) {}  // replaced by the arena-heatmaps view
+
 /* Behavior recordings: rebuilt only when the list itself changes (the 10s
    poll must not collapse an open matrix), with open rows remembered so a
    rebuild -- e.g. a new recording landing -- restores them. The matrix is
@@ -1215,12 +1300,15 @@ function renderRecordings(recs) {
       holder.appendChild(note);
       try {
         const resp = await fetch("/api/run/" + encodeURIComponent(state.runId)
-          + "/recording/" + encodeURIComponent(r.file) + "/matrix.json");
+          + "/recording/" + encodeURIComponent(r.file) + "/views.json");
         if (!resp.ok) throw new Error("HTTP " + resp.status);
-        renderMatrix(holder, await resp.json());
+        const views = await resp.json();
+        renderMatrix(holder, views.matrix);
+        renderTrace(holder, views.trace);
+        renderArena(holder, views.arena);
         note.remove();
       } catch (err) {
-        note.textContent = "matrix failed (" + err.message
+        note.textContent = "views failed (" + err.message
           + ") — try scripts/analyze_steps.py on " + r.file;
       }
     });
