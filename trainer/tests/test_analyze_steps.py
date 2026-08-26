@@ -85,6 +85,31 @@ def test_action_labels_compact_and_complete():
     assert len(set(labels)) == len(labels)      # no ambiguous duplicates
 
 
+def test_action_class_priority_and_coverage():
+    from hkrl.analysis import ACTION_CLASSES, action_class
+    # Every frozen action maps into the fixed class list.
+    classes = [action_class(a) for a in ACTIONS]
+    assert set(classes) <= set(ACTION_CLASSES)
+    assert classes[0] == "idle"                  # no buttons
+    assert classes[1] == classes[2] == "move"    # bare directions
+    assert classes[3] == "jump"
+    assert classes[6] == "attack"
+    assert classes[12] == "attack"               # ↑Atk: attack, not move
+    assert classes[14] == "attack"               # Jump+Atk: attack wins
+    assert classes[9] == "dash"
+    assert classes[15] == "cast"
+    assert classes[20] == "focus"
+
+
+def test_episode_results_maps_ep_to_summary(tmp_path):
+    from hkrl.analysis import episode_results
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[("Antic", 5)])
+    results = episode_results(read_recording(rec))
+    assert results[1]["result"] == "loss"
+    assert episode_results([]) == {}
+
+
 def test_render_writes_a_png(tmp_path):
     rec = tmp_path / "r.jsonl.gz"
     _write_recording(rec, steps=[("Antic", 5), ("Wait", 1), ("Antic", 6)])

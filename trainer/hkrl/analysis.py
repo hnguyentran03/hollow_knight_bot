@@ -26,6 +26,27 @@ def action_labels(actions: list[dict]) -> list[str]:
     return labels
 
 
+# Fixed class order for stable axes and legend colors everywhere.
+ACTION_CLASSES = ["focus", "cast", "dash", "attack", "jump", "move", "idle"]
+
+
+def action_class(buttons: dict) -> str:
+    """Collapse a frozen action dict to one class; a combo classifies as
+    its highest-priority verb (Jump+Atk is an attack)."""
+    for verb in ("focus", "cast", "dash", "attack", "jump"):
+        if buttons.get(verb):
+            return verb
+    if any(buttons.get(d) for d in ("left", "right", "up", "down")):
+        return "move"
+    return "idle"
+
+
+def episode_results(rows: list[dict]) -> dict[int, dict]:
+    """ep -> episode summary row. Episodes an interrupted recording never
+    summarized are simply absent."""
+    return {r["ep"]: r for r in rows if r.get("type") == "episode"}
+
+
 def merge_recordings(recordings: list[list[dict]]) -> tuple[dict, list[dict], int]:
     """(header, concatenated step rows, episode count) across recordings.
 
