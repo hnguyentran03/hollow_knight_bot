@@ -278,3 +278,39 @@ def test_run_connected_without_record_behaves_as_before(tmp_path):
             port=fg.port, episodes=1, deterministic=True)
     assert [s["result"] for s in summaries] == ["WIN"]
     assert not (tmp_path / "replays").exists()
+
+
+def test_record_replay_truncation_rows_and_summary(tmp_path):
+    # The capture branch deferred this: a fight that hits max_steps must
+    # record trunc=True (done stays False), a TIMEOUT episode row with the
+    # truncation death penalty in its final terms, and still pair the next
+    # episode's first obs correctly across the autoreset.
+    from sb3_contrib import RecurrentPPO
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+
+    weights, vecnorm = _make_checkpoint(tmp_path)
+    # Six mid frames after the reset frame; max_steps=3 truncates first.
+    long_ep = [state(obs(bhp=900)) for _ in range(7)]
+    with FakeGame([long_ep, _scripted(win=True), _scripted(win=False)]) as fg:
+        venv = DummyVecEnv([make_env(fg.port, capture=True, max_steps=3)])
+        env = VecNormalize.load(str(vecnorm), venv)
+        env.training = False
+        env.norm_reward = False
+        model = RecurrentPPO.load(str(weights), device="cpu")
+        writer = RecordingWriter(tmp_path / "trunc.jsonl.gz")
+        try:
+            summaries = replay.record_replay(model, env, episodes=2,
+                                             writer=writer)
+        finally:
+            writer.close()
+            env.close()
+    assert summaries[0]["result"] == "TIMEOUT"
+    rows = read_recording(tmp_path / "trunc.jsonl.gz")
+    steps = [r for r in rows if r["type"] == "step"]
+    ep1_last = [r for r in steps if r["ep"] == 1][-1]
+    assert ep1_last["trunc"] is True and ep1_last["done"] is False
+    assert ep1_last["r_terms"].get("death") == -5.0
+    episodes = [r for r in rows if r["type"] == "episode"]
+    assert episodes[0]["result"] == "TIMEOUT"
+    ep2_first = [r for r in steps if r["ep"] == 2][0]
+    assert ep2_first["i"] == 0 and ep2_first["obs"]["bhp"] == 900
