@@ -363,6 +363,38 @@ def test_cli_postmortem_writes_a_png_and_notes_no_losses(tmp_path, capsys):
     assert not (tmp_path / "w.postmortem.png").exists()
 
 
+def test_cli_reaction_writes_png_or_notes_no_onsets(tmp_path, capsys):
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[
+        {"i": 0}, {"i": 1, "a": 9,
+                   "obs": {"projectile_active": True, "px": 30.0}}])
+    analyze_steps.main(["reaction", str(rec)])
+    assert (tmp_path / "r.reaction.png").exists()
+    quiet = tmp_path / "q.jsonl.gz"
+    _write_recording(quiet, steps=[("Antic", 5)])
+    capsys.readouterr()
+    analyze_steps.main(["reaction", str(quiet)])
+    assert "no projectile onsets" in capsys.readouterr().out
+    assert not (tmp_path / "q.reaction.png").exists()
+
+
+def test_cli_soul_writes_a_png(tmp_path):
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[
+        {"i": 0, "a": 15, "obs": {"khp": 5, "soul": 40}},
+        {"i": 1, "a": 20, "obs": {"khp": 3, "soul": 99}}])
+    analyze_steps.main(["soul", str(rec)])
+    assert (tmp_path / "r.soul.png").exists()
+
+
+def test_cli_actionmix_writes_a_png(tmp_path):
+    a, b = tmp_path / "a.jsonl.gz", tmp_path / "b.jsonl.gz"
+    _write_recording(a, gen=10, steps=[("Antic", 1)] * 3)
+    _write_recording(b, gen=50, steps=[("Antic", 6)] * 3)
+    analyze_steps.main(["actionmix", str(a), str(b)])
+    assert (tmp_path / "a.action_mix.png").exists()
+
+
 def test_render_writes_a_png(tmp_path):
     rec = tmp_path / "r.jsonl.gz"
     _write_recording(rec, steps=[("Antic", 5), ("Wait", 1), ("Antic", 6)])

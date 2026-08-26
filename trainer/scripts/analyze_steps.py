@@ -241,6 +241,197 @@ def _run_postmortem(args):
     print(f"{len(pms)} deaths -> {out}", flush=True)
 
 
+def render_reaction(prof, header, out: Path) -> None:
+    """Distance-bucket x action-class heatmap: what comes out in the half
+    second after a projectile appears at that range."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    kept = [b for b in prof["buckets"] if b["n"]]
+    classes = prof["classes"]
+    m = np.array([[b["shares"][c] for c in classes] for b in kept])
+    fig, ax = plt.subplots(figsize=(0.9 * len(classes) + 3.0,
+                                    0.5 * len(kept) + 2.2), dpi=150)
+    fig.patch.set_facecolor("white")
+    im = ax.imshow(m, cmap="Blues", vmin=0.0, vmax=1.0, aspect="auto")
+    ax.set_xticks(range(len(classes)), classes, fontsize=8, color="#333")
+    ax.set_yticks(range(len(kept)),
+                  [f"{b['name']} ({b['lo']:g}–{b['hi']:g})  (n={b['n']})"
+                   for b in kept], fontsize=8, color="#333")
+    ax.set_xticks([x - 0.5 for x in range(1, len(classes))], minor=True)
+    ax.set_yticks([y - 0.5 for y in range(1, len(kept))], minor=True)
+    ax.grid(which="minor", color="white", linewidth=1.4)
+    ax.tick_params(which="both", length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    for r, row in enumerate(m):
+        for c, v in enumerate(row):
+            if v >= 0.1:
+                ax.text(c, r, f"{v:.2f}", ha="center", va="center",
+                        fontsize=6.5,
+                        color="white" if v > 0.55 else "#1a3a5c")
+    boss = header.get("boss_spec", {}).get("display_name", header.get("boss"))
+    ax.set_title(f"{header.get('run_id')} gen {header.get('gen')} · {boss} "
+                 f"· action mix in the {prof['window']} steps after a "
+                 f"projectile appears · {prof['onsets']} onsets",
+                 fontsize=9, color="#222", pad=12)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
+    cbar.set_label("share of steps", fontsize=8, color="#333")
+    cbar.ax.tick_params(labelsize=7)
+    cbar.outline.set_visible(False)
+    empty = [b["name"] for b in prof["buckets"] if not b["n"]]
+    if empty:
+        fig.text(0.01, 0.01, f"no onsets in: {', '.join(empty)}",
+                 fontsize=7, color="#777")
+    fig.tight_layout()
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+
+
+def render_soul(econ, header, out: Path) -> None:
+    """Two side-by-side HP x SOUL heatmaps: P(cast) and P(focus), with the
+    per-cell step count printed so an empty region reads as no-data."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    buckets = econ["soul_buckets"]
+    fig, axes = plt.subplots(1, 2, figsize=(8.2, 4.6), dpi=150)
+    fig.patch.set_facecolor("white")
+    for ax, key in zip(axes, ("cast", "focus")):
+        # khp 9 at the top: reverse the row order for display.
+        m = np.array([[cell[key] for cell in row]
+                      for row in reversed(econ["cells"])])
+        ns = [[cell["n"] for cell in row] for row in reversed(econ["cells"])]
+        im = ax.imshow(m, cmap="Blues", vmin=0.0, vmax=1.0, aspect="auto")
+        ax.set_xticks(range(len(buckets)), buckets, fontsize=8, color="#333")
+        ax.set_yticks(range(9), [str(h) for h in reversed(econ["khp"])],
+                      fontsize=8, color="#333")
+        ax.set_xlabel("SOUL", fontsize=8)
+        ax.set_ylabel("masks (khp)", fontsize=8)
+        ax.set_xticks([x - 0.5 for x in range(1, len(buckets))], minor=True)
+        ax.set_yticks([y - 0.5 for y in range(1, 9)], minor=True)
+        ax.grid(which="minor", color="white", linewidth=1.2)
+        ax.tick_params(which="both", length=0)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        for r in range(9):
+            for c in range(len(buckets)):
+                if ns[r][c]:
+                    ax.text(c, r, f"{m[r][c]:.2f}\nn={ns[r][c]}",
+                            ha="center", va="center", fontsize=5.5,
+                            color="white" if m[r][c] > 0.55 else "#1a3a5c")
+        ax.set_title(f"P({key} | HP, SOUL)", fontsize=9, color="#222")
+    boss = header.get("boss_spec", {}).get("display_name", header.get("boss"))
+    fig.suptitle(f"{header.get('run_id')} gen {header.get('gen')} · {boss} "
+                 f"· SOUL economy", fontsize=10, color="#222")
+    fig.colorbar(im, ax=list(axes), fraction=0.03, pad=0.02,
+                 label="probability").outline.set_visible(False)
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+
+
+def render_actionmix(mix, header, out: Path) -> None:
+    """Class share vs generation, one line per class that ever exceeds 1%."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8.0, 4.2), dpi=150)
+    fig.patch.set_facecolor("white")
+    for cls in mix["classes"]:
+        ys = [r["shares"][cls] for r in mix["rows"]]
+        if max(ys) <= 0.01:
+            continue                      # a never-used class earns no line
+        ax.plot(mix["gens"], ys, color=CLASS_COLORS[cls], lw=2,
+                marker="o", ms=4, label=cls)
+    ax.set_ylim(0, 1.0)
+    ax.set_xlabel("generation", fontsize=8)
+    ax.set_ylabel("share of steps", fontsize=8)
+    ax.legend(fontsize=7, frameon=False, ncol=4)
+    ax.tick_params(labelsize=7, length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.grid(color="#eee", lw=0.6)
+    boss = header.get("boss_spec", {}).get("display_name", header.get("boss"))
+    episodes = sum(r["episodes"] for r in mix["rows"])
+    ax.set_title(f"{header.get('run_id')} · {boss} · action mix across "
+                 f"{len(mix['gens'])} recorded generations "
+                 f"({episodes} episodes)", fontsize=10, color="#222",
+                 pad=12)
+    fig.tight_layout()
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _add_reaction(sub):
+    ap = sub.add_parser("reaction", help="action mix after projectile onset")
+    ap.add_argument("recordings", nargs="+", type=Path)
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--window", type=int, default=8)
+    ap.set_defaults(run=_run_reaction)
+
+
+def _run_reaction(args):
+    recs = [read_recording(p.expanduser()) for p in args.recordings]
+    header, _, _ = merge_recordings(recs)
+    # Episode numbers restart at 1 in every file; renumber while
+    # concatenating so onset detection never sees a false flip across a
+    # file boundary.
+    combined, offset = [header], 0
+    for rec in recs:
+        max_ep = 0
+        for r in rec:
+            if r["type"] == "step":
+                combined.append({**r, "ep": r["ep"] + offset})
+                max_ep = max(max_ep, r["ep"])
+        offset += max_ep
+    prof = reaction_profile(combined, window=args.window)
+    if prof["onsets"] == 0:
+        print("no projectile onsets in the given recordings; nothing to "
+              "render", flush=True)
+        return
+    out = args.out or _default_out(args.recordings, ".reaction.png")
+    render_reaction(prof, header, out)
+    print(f"{prof['onsets']} onsets -> {out}", flush=True)
+
+
+def _add_soul(sub):
+    ap = sub.add_parser("soul", help="heal-vs-cast over the HP x SOUL grid")
+    ap.add_argument("recordings", nargs="+", type=Path)
+    ap.add_argument("--out", type=Path, default=None)
+    ap.set_defaults(run=_run_soul)
+
+
+def _run_soul(args):
+    recs = [read_recording(p.expanduser()) for p in args.recordings]
+    header, steps, _ = merge_recordings(recs)
+    econ = soul_economy([header] + steps)
+    out = args.out or _default_out(args.recordings, ".soul.png")
+    render_soul(econ, header, out)
+    print(f"{len(steps)} steps -> {out}", flush=True)
+
+
+def _add_actionmix(sub):
+    ap = sub.add_parser("actionmix",
+                        help="class shares across recorded generations")
+    ap.add_argument("recordings", nargs="+", type=Path,
+                    help="recordings of one run, any mix of generations")
+    ap.add_argument("--out", type=Path, default=None)
+    ap.set_defaults(run=_run_actionmix)
+
+
+def _run_actionmix(args):
+    recs = [read_recording(p.expanduser()) for p in args.recordings]
+    mix = action_mix(recs)
+    out = args.out or _default_out(args.recordings, ".action_mix.png")
+    render_actionmix(mix, recs[0][0], out)
+    print(f"{len(mix['gens'])} generations -> {out}", flush=True)
+
+
 def _default_out(recordings, suffix: str) -> Path:
     first = recordings[0].expanduser()
     return first.parent / (first.name.replace(".jsonl.gz", "") + suffix)
@@ -283,6 +474,9 @@ def main(argv=None) -> None:
     _add_matrix(sub)
     _add_trace(sub)
     _add_postmortem(sub)
+    _add_reaction(sub)
+    _add_soul(sub)
+    _add_actionmix(sub)
     args = ap.parse_args(argv)
     args.run(args)
 
