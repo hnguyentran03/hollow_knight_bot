@@ -19,6 +19,7 @@ import signal
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -281,12 +282,11 @@ def run_connected(weights, vecnorm, *, run_dir, host, port, episodes,
         env.close()
 
 
-def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
-             deterministic, headless=False, timescale=1.0, record=None,
-             gen=None):
-    """Self-contained replay: launch one game, replay against it, shut it
-    down. Mirrors train.py's game handling so the dashboard can drive a
-    replay exactly as it drives a run.
+@contextmanager
+def auto_game(root, app, port, headless=False, timescale=1.0):
+    """Save-safe single-game lifecycle shared by --auto replay and the
+    batch recorder (scripts/record_gens.py): backup, isolate, start, and
+    always reap.
 
     Save safety is train.py's, doubled: backup_saves(root) snapshots the
     master save first, and -- where APFS clones are supported -- the game
@@ -295,12 +295,7 @@ def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
     regular 1280x720 windowed size (seed_prefs), which is what makes a
     replay watchable rather than one of training's shrunken hidden windows.
     Where clones are unsupported the replay falls back to playing the master
-    save directly (the historical N=1 path), backup-protected only.
-
-    The boot macro, driven by the env's first reset(), walks the game into
-    the Hall of Gods -- there is no human ready prompt under --auto. A single
-    SIGINT ends the loop at the next episode boundary; a second forces an
-    abort, and the finally always reaps the game."""
+    save directly (the historical N=1 path), backup-protected only."""
     backup = backup_saves(root)
     if backup is not None:
         print(f"master save backed up to {backup}", flush=True)
@@ -316,6 +311,26 @@ def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
               flush=True)
     game = GameFleet([port], app=app, apps=apps, headless=headless,
                      timescale=timescale)
+    try:
+        game.start()
+        print(f"game up on port {game.ports[0]}", flush=True)
+        yield game
+    finally:
+        game.stop()
+
+
+def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
+             deterministic, headless=False, timescale=1.0, record=None,
+             gen=None):
+    """Self-contained replay: launch one game, replay against it, shut it
+    down. Mirrors train.py's game handling so the dashboard can drive a
+    replay exactly as it drives a run (auto_game holds the save-safety
+    story).
+
+    The boot macro, driven by the env's first reset(), walks the game into
+    the Hall of Gods -- there is no human ready prompt under --auto. A single
+    SIGINT ends the loop at the next episode boundary; a second forces an
+    abort, and the finally always reaps the game."""
     env = None
     stop = threading.Event()
 
@@ -327,30 +342,30 @@ def run_auto(weights, vecnorm, *, run_dir, root, app, port, episodes,
               "the game down (Ctrl-C again to force)", file=sys.stderr,
               flush=True)
 
-    try:
-        game.start()
-        print(f"game up on port {game.ports[0]}", flush=True)
-        # After start() so a Ctrl-C during the cold boot still unwinds
-        # through the finally's game.stop() rather than this handler.
-        signal.signal(signal.SIGINT, request_stop)
-        model, env = load_policy(weights, vecnorm, port=port, run_dir=run_dir,
-                                 capture=record is not None)
-        if record is None:
-            return replay(model, env, episodes=episodes,
-                          deterministic=deterministic, stop=stop)
-        with RecordingWriter(record) as writer:
-            writer.header(**build_header(
-                run_dir=run_dir, gen=gen, weights=weights, vecnorm=vecnorm,
-                boss_id=run_boss(run_dir), deterministic=deterministic,
-                episodes=episodes, timescale=timescale, headless=headless,
-                auto=True))
-            return record_replay(model, env, episodes=episodes,
-                                 writer=writer, deterministic=deterministic,
-                                 stop=stop)
-    finally:
-        if env is not None:
-            env.close()
-        game.stop()
+    with auto_game(root, app, port, headless=headless,
+                   timescale=timescale):
+        try:
+            # After start() so a Ctrl-C during the cold boot still unwinds
+            # through auto_game's game.stop() rather than this handler.
+            signal.signal(signal.SIGINT, request_stop)
+            model, env = load_policy(weights, vecnorm, port=port,
+                                     run_dir=run_dir,
+                                     capture=record is not None)
+            if record is None:
+                return replay(model, env, episodes=episodes,
+                              deterministic=deterministic, stop=stop)
+            with RecordingWriter(record) as writer:
+                writer.header(**build_header(
+                    run_dir=run_dir, gen=gen, weights=weights,
+                    vecnorm=vecnorm, boss_id=run_boss(run_dir),
+                    deterministic=deterministic, episodes=episodes,
+                    timescale=timescale, headless=headless, auto=True))
+                return record_replay(model, env, episodes=episodes,
+                                     writer=writer,
+                                     deterministic=deterministic, stop=stop)
+        finally:
+            if env is not None:
+                env.close()
 
 
 def main() -> None:

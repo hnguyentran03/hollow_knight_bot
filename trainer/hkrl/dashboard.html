@@ -227,6 +227,21 @@
   .m-cell.m-modal { box-shadow: inset 0 0 0 1.5px rgba(233, 230, 218, 0.85); }
   .matrix-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 11px; color: var(--muted); }
   .matrix-legend .ramp { width: 120px; height: 8px; border-radius: 4px; border: 1px solid var(--border); }
+  /* Per-recording view sections (trace, arena) under the matrix. */
+  .rec-view { position: relative; padding: 6px 0 12px; }
+  .rec-view-title { font-size: 12px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.12em; font-family: var(--display); margin-bottom: 6px; }
+  .rec-view-sub { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 4px 0 8px; max-width: 72em; }
+  .ep-pick { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .ep-pick button { background: var(--raised); color: var(--ink-2); border: 1px solid var(--border); border-radius: 4px; font: 12px var(--body); padding: 3px 10px; cursor: pointer; }
+  .ep-pick button.on { color: var(--ink); border-color: var(--s1); box-shadow: 0 0 6px var(--glow); }
+  .ep-pick button.won { color: var(--s2); }
+  .rec-chart { position: relative; margin-top: 8px; }
+  .arena-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .arena-pair { grid-template-columns: 1fr; } }
+  .arena-cap { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .arena-grid { display: grid; gap: 1px; aspect-ratio: 2 / 1; }
+  .arena-cell { font-size: 9px; line-height: 1; color: var(--critical); display: flex; align-items: center; justify-content: center; }
+  .arena-cell.death { outline: 1px solid var(--critical); outline-offset: -1px; }
   .card { padding: 12px 12px 8px; }
   .card.wide { grid-column: 1 / -1; }
   .card h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 0; }
@@ -554,9 +569,13 @@
     </div>
 
     <div class="charts" id="recordings-wrap" hidden>
+      <div class="card panel wide" id="chart-actionmix" hidden>
+        <h2>Action mix across generations</h2>
+        <div class="subtitle">Share of steps per action class, from every recording of this run — record several generations to grow it</div>
+      </div>
       <div class="card panel wide">
         <h2>Behavior recordings</h2>
-        <div class="subtitle">Replays captured with Record — open one for its action × boss-state matrix (cell = mean π, outlined = most-chosen action)</div>
+        <div class="subtitle">Replays captured with Record — open one for its action × boss-state matrix (cell = mean π, outlined = most-chosen action), confidence trace, and arena heatmaps</div>
         <div id="recordings"></div>
       </div>
     </div>
@@ -1180,6 +1199,209 @@ function renderMatrix(holder, data) {
   holder.appendChild(wrap);
 }
 
+/* The confidence trace: one episode at a time (picker buttons), two
+   stacked charts on a shared seconds axis -- policy certainty (pi of the
+   chosen action + normalized entropy, both 0-1) over V(s) with reward
+   events as hoverable dots on the value line. */
+function renderTrace(holder, trace) {
+  if (!trace || !trace.length) return;
+  const box = document.createElement("div");
+  box.className = "rec-view";
+  const head = document.createElement("div");
+  head.className = "rec-view-title";
+  head.textContent = "Confidence trace";
+  // One definition per line, sitting under the chart it describes.
+  const explain = (el, lines) => {
+    const sub = document.createElement("div");
+    sub.className = "rec-view-sub";
+    for (const line of lines) {
+      const row = document.createElement("div");
+      row.textContent = line;
+      sub.appendChild(row);
+    }
+    el.appendChild(sub);
+  };
+  const pick = document.createElement("div");
+  pick.className = "ep-pick";
+  const charts = document.createElement("div");
+  // "dealt" gets its own aqua (validated dark-mode step): dots the same
+  // blue as the V(s) line they sit on would disappear into it.
+  const EVENT_COLOR = { hit: css("--critical"), dealt: "#199e70",
+                        win: css("--s2"), death: css("--critical"),
+                        timeout: css("--muted") };
+  function draw(ep) {
+    charts.replaceChildren();
+    const t = i => i / 15;
+    const policy = document.createElement("div");
+    policy.className = "rec-chart";
+    const value = document.createElement("div");
+    value.className = "rec-chart";
+    charts.append(policy, value);
+    drawChart(policy, {
+      series: [
+        { name: "π(chosen)", color: css("--s1"),
+          points: ep.pia.map((y, i) => ({ x: t(i), y })), endDot: false },
+        { name: "entropy", color: css("--s2"),
+          points: ep.ent.map((y, i) => ({ x: t(i), y })), endDot: false },
+      ],
+      yDomain: [0, 1], height: 150,
+      xFormat: v => v.toFixed(0) + "s", yFormat: v => v.toFixed(2),
+      xTipFormat: v => v.toFixed(1) + " s · step " + Math.round(v * 15),
+      tipMeta: x => "khp " + (ep.khp[Math.round(x * 15)] ?? "?"),
+    });
+    explain(policy, [
+      "π(chosen) = probability the policy gave the action it took (1 = certain)",
+      "entropy = spread over all 21 actions (0 = decisive, 1 = uniformly unsure)",
+    ]);
+    drawChart(value, {
+      series: [
+        { name: "V(s)", color: css("--s1"),
+          points: ep.v.map((y, i) => ({ x: t(i), y })), endDot: false },
+        { name: "events", color: css("--critical"), kind: "dots",
+          hover: true, snapExempt: true,
+          points: ep.events.map(e => ({
+            x: t(e.i), y: ep.v[Math.min(e.i, ep.v.length - 1)],
+            color: EVENT_COLOR[e.kind], meta: e })) },
+      ],
+      legendItems: [{ name: "V(s)", color: css("--s1") },
+                    { name: "hit taken", color: css("--critical") },
+                    { name: "hit dealt", color: "#199e70" },
+                    { name: "win", color: css("--s2") }],
+      height: 150, xLabel: "fight time",
+      xFormat: v => v.toFixed(0) + "s", yFormat: v => v.toFixed(1),
+      dotTip: meta => meta && { title: meta.kind + " · step " + meta.i,
+                                lines: [] },
+    });
+    explain(value, [
+      "V(s) = the critic's estimate of the reward still to come from this "
+        + "moment — dips mean it sees trouble ahead",
+    ]);
+  }
+  trace.forEach((ep, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "ep " + ep.ep + " · " + (ep.result || "cut short");
+    if (ep.result === "WIN") b.classList.add("won");
+    b.addEventListener("click", () => {
+      pick.querySelectorAll("button").forEach(x => x.classList.remove("on"));
+      b.classList.add("on");
+      draw(ep);
+    });
+    if (i === 0) b.classList.add("on");
+    pick.appendChild(b);
+  });
+  box.append(head, pick, charts);
+  holder.appendChild(box);
+  draw(trace[0]);
+}
+
+/* Arena occupancy, wins vs losses: same ramp as the matrix, top row =
+   top of the arena, death bins outlined with an x. Each panel is
+   normalized within its own outcome so the two are comparable at
+   different episode counts; shading is scaled to the pair's hottest bin
+   so a sparse recording still shows structure. */
+function renderArena(holder, arena) {
+  if (!arena) return;
+  const box = document.createElement("div");
+  box.className = "rec-view";
+  const head = document.createElement("div");
+  head.className = "rec-view-title";
+  head.textContent = "Arena occupancy";
+  const pair = document.createElement("div");
+  pair.className = "arena-pair";
+  const vmax = Math.max(
+    ...arena.win.grid.flat(), ...arena.loss.grid.flat(), 1e-6);
+  const tip = document.createElement("div");
+  tip.className = "tooltip";
+  for (const [key, label] of [["win", "wins"],
+                              ["loss", "losses incl. timeouts"]]) {
+    const panel = arena[key];
+    const cell = document.createElement("div");
+    const cap = document.createElement("div");
+    cap.className = "arena-cap";
+    cap.textContent = label + " · " + panel.episodes + " episode"
+      + (panel.episodes === 1 ? "" : "s");
+    cell.appendChild(cap);
+    if (!panel.episodes) {
+      const note = document.createElement("div");
+      note.className = "matrix-note";
+      note.textContent = "no " + label + " in this recording";
+      cell.appendChild(note);
+      pair.appendChild(cell);
+      continue;
+    }
+    const deaths = new Set((panel.deaths || []).map(d => d[0] + "," + d[1]));
+    const grid = document.createElement("div");
+    grid.className = "arena-grid";
+    grid.style.gridTemplateColumns = "repeat(" + arena.nx + ", 1fr)";
+    panel.grid.forEach((row, iy) => row.forEach((v, ix) => {
+      const c = document.createElement("div");
+      c.className = "arena-cell";
+      c.style.background = rampColor(v / vmax);
+      if (deaths.has(ix + "," + iy)) {
+        c.classList.add("death");
+        c.textContent = "×";
+      }
+      c.addEventListener("mouseenter", () => {
+        tip.replaceChildren();
+        const tx = document.createElement("div");
+        tx.className = "tx";
+        tx.textContent = (v * 100).toFixed(2) + "% of " + label + " time"
+          + (deaths.has(ix + "," + iy) ? " · death here" : "");
+        tip.appendChild(tx);
+        tip.style.display = "block";
+        const br = box.getBoundingClientRect(), cr = c.getBoundingClientRect();
+        tip.style.left = (cr.left - br.left + 10) + "px";
+        tip.style.top = (cr.bottom - br.top + 6) + "px";
+      });
+      grid.appendChild(c);
+    }));
+    grid.addEventListener("mouseleave", () => tip.style.display = "none");
+    cell.appendChild(grid);
+    pair.appendChild(cell);
+  }
+  box.append(head, pair, tip);
+  holder.appendChild(box);
+}
+
+/* One color per action class, in the analysis core's ACTION_CLASSES
+   order: the dataviz reference categorical sequence, dark-mode steps,
+   CVD-validated for adjacent pairs on this surface. */
+const CLASS_COLORS = { focus: "#3987e5", cast: "#d95926", dash: "#199e70",
+                       attack: "#c98500", jump: "#d55181", move: "#008300",
+                       idle: "#9085e9" };
+
+/* Fetched once per recordings-list change (the caller gates on recSig);
+   hidden below two recorded generations -- one point isn't a trend. */
+async function renderActionMix(recs) {
+  const card = document.getElementById("chart-actionmix");
+  const gens = new Set(recs.map(r => r.gen).filter(g => g != null));
+  if (gens.size < 2) { card.hidden = true; return; }
+  try {
+    const resp = await fetch("/api/run/" + encodeURIComponent(state.runId)
+      + "/actionmix.json");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const mix = await resp.json();
+    card.hidden = false;
+    drawChart(card, {
+      series: mix.classes
+        .filter(c => mix.rows.some(r => r.shares[c] > 0.01))
+        .map(c => ({ name: c, color: CLASS_COLORS[c], endDot: false,
+                     points: mix.rows.map(r => ({ x: r.gen,
+                                                  y: r.shares[c] })) })),
+      yDomain: [0, 1], height: 190, xLabel: "generation",
+      xFormat: v => String(Math.round(v)), yFormat: v => fmtPct(v),
+      xTipFormat: g => "generation " + Math.round(g),
+      tipMeta: g => {
+        const row = mix.rows.find(r => r.gen === Math.round(g));
+        return row && row.episodes + " episodes · " + row.steps + " steps";
+      },
+    });
+  } catch (err) {
+    card.hidden = true;
+  }
+}
+
 /* Behavior recordings: rebuilt only when the list itself changes (the 10s
    poll must not collapse an open matrix), with open rows remembered so a
    rebuild -- e.g. a new recording landing -- restores them. The matrix is
@@ -1193,6 +1415,7 @@ function renderRecordings(recs) {
   if (sig === recSig) return;
   if (recSig !== null && recSig.split("|")[0] !== state.runId) openRecs.clear();
   recSig = sig;
+  renderActionMix(recs);
   const list = document.getElementById("recordings");
   list.replaceChildren();
   for (const r of recs) {
@@ -1215,12 +1438,15 @@ function renderRecordings(recs) {
       holder.appendChild(note);
       try {
         const resp = await fetch("/api/run/" + encodeURIComponent(state.runId)
-          + "/recording/" + encodeURIComponent(r.file) + "/matrix.json");
+          + "/recording/" + encodeURIComponent(r.file) + "/views.json");
         if (!resp.ok) throw new Error("HTTP " + resp.status);
-        renderMatrix(holder, await resp.json());
+        const views = await resp.json();
+        renderMatrix(holder, views.matrix);
+        renderTrace(holder, views.trace);
+        renderArena(holder, views.arena);
         note.remove();
       } catch (err) {
-        note.textContent = "matrix failed (" + err.message
+        note.textContent = "views failed (" + err.message
           + ") — try scripts/analyze_steps.py on " + r.file;
       }
     });

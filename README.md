@@ -98,13 +98,21 @@ line, then a `step` line per decision (raw obs, the full action distribution,
 V(s), log-prob, entropy, and itemized reward) and an `episode` summary line
 after each fight. Composes with `--stochastic`, `--auto`, `--headless`, and
 `--timescale`; the header line documents the format. To see what a recording
-holds, `scripts/analyze_steps.py <recording...>` renders an action ×
-boss-state heatmap PNG next to the file (what the policy favors in each boss
-FSM state, with a dot on the action it actually chose most). The dashboard
-covers the same loop without a terminal: the summon page's Replay dialog has
-a Record checkbox, and each run's page grows a "Behavior recordings" section
-listing its recordings — open one and the matrix renders in place as an
-interactive heatmap (hover any cell for the exact numbers).
+holds, `scripts/analyze_steps.py <subcommand> <recording...>` renders a PNG
+next to the file: `matrix` (action × boss-state heatmap, the default when
+the first argument is a recording path), `trace` (per-episode π/entropy/V(s)
+timeline with reward events), `postmortem` (the last ~5 s before each
+death), `reaction` (action mix after a projectile appears, by distance),
+`soul` (heal-vs-cast over the HP × SOUL grid), and `actionmix` (action-class
+shares across recorded generations). To feed `actionmix` with history,
+`scripts/record_gens.py --run-dir ... --every N` (or `--gens 50,150,...`)
+launches one game and records every selected checkpoint in sequence. The
+dashboard covers the same loop without a terminal: the summon page's Replay
+dialog has a Record checkbox, and each run's page grows a "Behavior
+recordings" section — open a recording and the matrix, confidence trace
+(episode picker, event dots), and wins-vs-losses arena heatmaps render in
+place; once recordings span two or more generations an "Action mix across
+generations" chart appears above the list.
 
 **Play a bot in-game with F9** — drops a trained bot into *your* game for exactly one fight. Export a generation (the Export button on any generation row in the dashboard, or `scripts/export_gen.py --run-dir ~/hkrl/runs/my-run`), start the playback daemon (`./.venv/bin/python scripts/play.py`) and the game in either order, pick the bot under **Options → Mods → HKRLBotMod**, stand in the Hall of Gods, and press **F9**. The daemon walks the Knight to the right statue, fights one episode, and hands control back; the F1 HUD's BOT chip shows its state.
 
