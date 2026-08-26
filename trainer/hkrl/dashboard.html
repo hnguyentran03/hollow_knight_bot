@@ -230,7 +230,7 @@
   /* Per-recording view sections (trace, arena) under the matrix. */
   .rec-view { position: relative; padding: 6px 0 12px; }
   .rec-view-title { font-size: 12px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.12em; font-family: var(--display); margin-bottom: 6px; }
-  .rec-view-sub { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 8px; max-width: 72em; }
+  .rec-view-sub { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 4px 0 8px; max-width: 72em; }
   .ep-pick { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
   .ep-pick button { background: var(--raised); color: var(--ink-2); border: 1px solid var(--border); border-radius: 4px; font: 12px var(--body); padding: 3px 10px; cursor: pointer; }
   .ep-pick button.on { color: var(--ink); border-color: var(--s1); box-shadow: 0 0 6px var(--glow); }
@@ -1210,13 +1210,17 @@ function renderTrace(holder, trace) {
   const head = document.createElement("div");
   head.className = "rec-view-title";
   head.textContent = "Confidence trace";
-  const sub = document.createElement("div");
-  sub.className = "rec-view-sub";
-  sub.textContent = "π(chosen) = probability the policy gave the action it "
-    + "took (1 = certain) · entropy = spread over all 21 actions "
-    + "(0 = decisive, 1 = uniformly unsure) · V(s) = the critic's estimate "
-    + "of the reward still to come from this moment — dips mean it sees "
-    + "trouble ahead";
+  // One definition per line, sitting under the chart it describes.
+  const explain = (el, lines) => {
+    const sub = document.createElement("div");
+    sub.className = "rec-view-sub";
+    for (const line of lines) {
+      const row = document.createElement("div");
+      row.textContent = line;
+      sub.appendChild(row);
+    }
+    el.appendChild(sub);
+  };
   const pick = document.createElement("div");
   pick.className = "ep-pick";
   const charts = document.createElement("div");
@@ -1245,6 +1249,10 @@ function renderTrace(holder, trace) {
       xTipFormat: v => v.toFixed(1) + " s · step " + Math.round(v * 15),
       tipMeta: x => "khp " + (ep.khp[Math.round(x * 15)] ?? "?"),
     });
+    explain(policy, [
+      "π(chosen) = probability the policy gave the action it took (1 = certain)",
+      "entropy = spread over all 21 actions (0 = decisive, 1 = uniformly unsure)",
+    ]);
     drawChart(value, {
       series: [
         { name: "V(s)", color: css("--s1"),
@@ -1264,6 +1272,10 @@ function renderTrace(holder, trace) {
       dotTip: meta => meta && { title: meta.kind + " · step " + meta.i,
                                 lines: [] },
     });
+    explain(value, [
+      "V(s) = the critic's estimate of the reward still to come from this "
+        + "moment — dips mean it sees trouble ahead",
+    ]);
   }
   trace.forEach((ep, i) => {
     const b = document.createElement("button");
@@ -1278,7 +1290,7 @@ function renderTrace(holder, trace) {
     if (i === 0) b.classList.add("on");
     pick.appendChild(b);
   });
-  box.append(head, sub, pick, charts);
+  box.append(head, pick, charts);
   holder.appendChild(box);
   draw(trace[0]);
 }
