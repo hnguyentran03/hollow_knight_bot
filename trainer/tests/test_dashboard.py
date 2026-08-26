@@ -187,6 +187,28 @@ def test_views_endpoint_rejects_bad_names(base_url, tmp_path):
     assert err.value.code == 404
 
 
+def test_actionmix_endpoint_aggregates_per_gen(base_url, tmp_path):
+    replays = tmp_path / "runs" / "r1" / "replays"
+    _write_recording(replays / "20260823-070000_gen0007.jsonl.gz", gen=7)
+    _write_recording(replays / "20260824-090000_gen0012.jsonl.gz", gen=12)
+    status, ctype, body = _get(base_url + "/api/run/r1/actionmix.json")
+    assert status == 200
+    assert ctype.startswith("application/json")
+    data = json.loads(body)
+    assert data["gens"] == [7, 12]
+    assert set(data["rows"][0]["shares"]) == set(data["classes"])
+    assert data["rows"][0]["episodes"] == 1
+
+
+def test_actionmix_endpoint_404s_without_recordings(base_url):
+    for path in ["/api/run/r1/actionmix.json",       # no replays dir
+                 "/api/run/nope/actionmix.json",     # no such run
+                 "/api/run/%2e%2e/actionmix.json"]:  # traversal
+        with pytest.raises(urllib.error.HTTPError) as err:
+            _get(base_url + path)
+        assert err.value.code == 404
+
+
 def test_unknown_run_and_unknown_path_are_404(base_url):
     for path in ["/api/run/nope", "/favicon.ico"]:
         with pytest.raises(urllib.error.HTTPError) as err:

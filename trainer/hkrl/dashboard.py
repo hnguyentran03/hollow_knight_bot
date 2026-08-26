@@ -14,8 +14,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from hkrl import launcher
-from hkrl.analysis import (action_labels, aggregate, arena_occupancy,
-                           confidence_trace, merge_recordings)
+from hkrl.analysis import (action_labels, action_mix, aggregate,
+                           arena_occupancy, confidence_trace,
+                           merge_recordings)
 from hkrl.bosses import BOSSES
 from hkrl.exports import exported_generations
 from hkrl.recording import read_recording
@@ -71,6 +72,8 @@ class _Handler(BaseHTTPRequestHandler):
             if "/recording/" in rest and rest.endswith("/views.json"):
                 run_id, _, tail = rest.partition("/recording/")
                 self._views(run_id, tail[:-len("/views.json")])
+            elif rest.endswith("/actionmix.json"):
+                self._actionmix(rest[:-len("/actionmix.json")])
             else:
                 self._run(rest)
         elif path == "/api/launcher":
@@ -204,6 +207,23 @@ class _Handler(BaseHTTPRequestHandler):
             for p in sorted((run_dir / "replays").glob("*.jsonl.gz"),
                             key=lambda p: p.name, reverse=True)]
         self._json(detail)
+
+    def _actionmix(self, run_id):
+        """Per-generation action-class shares over every recording of the
+        run -- the training-evolution chart's data. Read-only."""
+        if (not run_id or "/" in run_id or "\\" in run_id
+                or run_id in (".", "..")):
+            self.send_error(404)
+            return
+        files = sorted((Path(self.server.root) / "runs" / run_id
+                        / "replays").glob("*.jsonl.gz"))
+        if not files:
+            self.send_error(404)
+            return
+        try:
+            self._json(action_mix([read_recording(p) for p in files]))
+        except (ValueError, KeyError, OSError) as exc:
+            self.send_error(500, "unreadable recordings", str(exc)[:500])
 
     def _views(self, run_id, name):
         """Serve every per-recording view (matrix, confidence trace, arena
