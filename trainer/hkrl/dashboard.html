@@ -1212,7 +1212,9 @@ function renderTrace(holder, trace) {
   const pick = document.createElement("div");
   pick.className = "ep-pick";
   const charts = document.createElement("div");
-  const EVENT_COLOR = { hit: css("--critical"), dealt: css("--s1"),
+  // "dealt" gets its own aqua (validated dark-mode step): dots the same
+  // blue as the V(s) line they sit on would disappear into it.
+  const EVENT_COLOR = { hit: css("--critical"), dealt: "#199e70",
                         win: css("--s2"), death: css("--critical"),
                         timeout: css("--muted") };
   function draw(ep) {
@@ -1247,7 +1249,7 @@ function renderTrace(holder, trace) {
       ],
       legendItems: [{ name: "V(s)", color: css("--s1") },
                     { name: "hit taken", color: css("--critical") },
-                    { name: "hit dealt", color: css("--s1") },
+                    { name: "hit dealt", color: "#199e70" },
                     { name: "win", color: css("--s2") }],
       height: 150, xLabel: "fight time",
       xFormat: v => v.toFixed(0) + "s", yFormat: v => v.toFixed(1),

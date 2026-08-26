@@ -30,7 +30,7 @@ from hkrl.recording import read_recording  # noqa: E402
 CLASS_COLORS = dict(zip(ACTION_CLASSES,
                         ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
                          "#e87ba4", "#008300", "#4a3aa7"]))
-_EVENT_STYLE = {"hit": ("#e34948", "v"), "dealt": ("#2a78d6", "^"),
+_EVENT_STYLE = {"hit": ("#e34948", "v"), "dealt": ("#1baf7a", "^"),
                 "win": ("#008300", "*"), "death": ("#e34948", "x"),
                 "timeout": ("#7a8697", "s")}
 
@@ -179,8 +179,9 @@ def render_postmortem(pms, header, out: Path) -> None:
                       color=state_color.get(s["obs"]["boss_state"], "#ccc"))
         bands.set_ylim(0, 2.1)
         bands.set_yticks([0.5, 1.6], ["action", "boss"], fontsize=7)
-        killing = ", ".join(f"{k2} {v:+.1f}"
-                            for k2, v in pm["killing_terms"].items())
+        killing = ", ".join(f"{k2} {v:+.3g}"
+                            for k2, v in pm["killing_terms"].items()
+                            if k2 != "time_penalty")
         bands.set_title(f"episode {pm['ep']} death · step "
                         f"{pm['total_steps']} · {killing}",
                         fontsize=9, color="#222")
@@ -258,7 +259,9 @@ def render_reaction(prof, header, out: Path) -> None:
     im = ax.imshow(m, cmap="Blues", vmin=0.0, vmax=1.0, aspect="auto")
     ax.set_xticks(range(len(classes)), classes, fontsize=8, color="#333")
     ax.set_yticks(range(len(kept)),
-                  [f"{b['name']} ({b['lo']:g}–{b['hi']:g})  (n={b['n']})"
+                  [(f"{b['name']} ({b['lo']:g}–{b['hi']:g})  (n={b['n']})"
+                    if b["hi"] != float("inf") else
+                    f"{b['name']} ({b['lo']:g}+)  (n={b['n']})")
                    for b in kept], fontsize=8, color="#333")
     ax.set_xticks([x - 0.5 for x in range(1, len(classes))], minor=True)
     ax.set_yticks([y - 0.5 for y in range(1, len(kept))], minor=True)
