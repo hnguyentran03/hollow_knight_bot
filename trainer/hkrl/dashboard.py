@@ -14,7 +14,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from hkrl import launcher
-from hkrl.analysis import action_labels, aggregate, merge_recordings
+from hkrl.analysis import (action_labels, aggregate, arena_occupancy,
+                           confidence_trace, merge_recordings)
 from hkrl.bosses import BOSSES
 from hkrl.exports import exported_generations
 from hkrl.recording import read_recording
@@ -67,9 +68,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(scan_runs(self.server.root))
         elif path.startswith("/api/run/"):
             rest = path[len("/api/run/"):]
-            if "/recording/" in rest and rest.endswith("/matrix.json"):
+            if "/recording/" in rest and rest.endswith("/views.json"):
                 run_id, _, tail = rest.partition("/recording/")
-                self._matrix(run_id, tail[:-len("/matrix.json")])
+                self._views(run_id, tail[:-len("/views.json")])
             else:
                 self._run(rest)
         elif path == "/api/launcher":
@@ -204,10 +205,10 @@ class _Handler(BaseHTTPRequestHandler):
                             key=lambda p: p.name, reverse=True)]
         self._json(detail)
 
-    def _matrix(self, run_id, name):
-        """Serve one recording's aggregated action x boss-state matrix as
-        JSON; the page renders it interactively. Same numbers as the CLI
-        renderer -- both sit on hkrl.analysis."""
+    def _views(self, run_id, name):
+        """Serve every per-recording view (matrix, confidence trace, arena
+        occupancy) from ONE gzip read; the page renders them interactively.
+        Same numbers as the CLI renderers -- all sit on hkrl.analysis."""
         for part in (run_id, name):
             if (not part or "/" in part or "\\" in part
                     or part in (".", "..")):
@@ -221,27 +222,34 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         try:
-            header, steps, episodes = merge_recordings([read_recording(rec)])
+            rows = read_recording(rec)
+            header, steps, episodes = merge_recordings([rows])
             # Every observed state gets a row; min-steps is a CLI concern
             # (the interactive view can afford the extra rows -- hover
             # carries the counts).
             agg = aggregate(steps, min_steps=1)
+            trace = confidence_trace(rows)
+            arena = arena_occupancy(rows)
         except (ValueError, KeyError, OSError) as exc:
             self.send_error(500, "unreadable recording", str(exc)[:500])
             return
         self._json({
-            "run_id": header.get("run_id"),
-            "gen": header.get("gen"),
-            "boss": header.get("boss_spec", {}).get("display_name",
-                                                    header.get("boss")),
-            "deterministic": header.get("deterministic"),
-            "episodes": episodes,
-            "steps": sum(agg.counts),
-            "actions": action_labels(header["actions"]),
-            "states": agg.states,
-            "counts": agg.counts,
-            "matrix": agg.matrix,
-            "modal": agg.modal,
+            "matrix": {
+                "run_id": header.get("run_id"),
+                "gen": header.get("gen"),
+                "boss": header.get("boss_spec", {}).get("display_name",
+                                                        header.get("boss")),
+                "deterministic": header.get("deterministic"),
+                "episodes": episodes,
+                "steps": sum(agg.counts),
+                "actions": action_labels(header["actions"]),
+                "states": agg.states,
+                "counts": agg.counts,
+                "matrix": agg.matrix,
+                "modal": agg.modal,
+            },
+            "trace": trace,
+            "arena": arena,
         })
 
     def _json(self, payload, status: int = 200):

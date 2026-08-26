@@ -85,25 +85,39 @@ def test_api_run_flags_exported_generations(base_url, tmp_path):
 def _write_recording(path, gen=7, steps=3, rare_state=None):
     """A minimal real schema-v1 recording so the endpoints exercise the
     actual reader/renderer, not a stand-in format. `rare_state` appends one
-    single step in that state (a state the CLI's min-steps default drops)."""
+    single step in that state (a state the CLI's min-steps default drops).
+    Step rows carry the full obs + policy fields the trace and arena
+    aggregations read."""
     from hkrl.env import ACTIONS
     from hkrl.recording import RecordingWriter
     path.parent.mkdir(parents=True, exist_ok=True)
     pi = [0.0] * len(ACTIONS)
     pi[5] = 1.0
+
+    def full_obs(boss_state):
+        return {"kx": 26.5, "ky": 28.5, "kvx": 0.0, "kvy": 0.0, "khp": 9,
+                "soul": 0, "on_ground": True, "dashing": False,
+                "invuln": False, "facing_right": True, "bx": 30.0,
+                "by": 28.5, "bvx": 0.0, "bvy": 0.0, "bhp": 900,
+                "boss_state": boss_state, "projectile_active": False,
+                "px": 0.0, "py": 0.0}
+
     with RecordingWriter(path) as w:
         w.header(run_id="r1", gen=gen, boss="gorb",
                  boss_spec={"id": "gorb", "display_name": "Gorb",
-                            "fsm_states": ["Wait", "Antic", "UNKNOWN"]},
+                            "fsm_states": ["Wait", "Antic", "UNKNOWN"],
+                            "arena_center_x": 26.5, "arena_half_w": 11.23,
+                            "floor_y": 28.41, "arena_height": 9.59},
                  actions=ACTIONS, obs_keys=["kx"], deterministic=True,
                  episodes_requested=1)
         for i in range(steps):
-            w.step(ep=1, i=i, obs={"boss_state": "Antic"}, a=5, pi=pi,
-                   r=0.0, r_terms={}, done=False, trunc=False, won=False)
+            w.step(ep=1, i=i, obs=full_obs("Antic"), a=5, pi=pi, v=0.5,
+                   logp=-0.2, ent=1.0, h_norm=1.0, r=0.0, r_terms={},
+                   done=False, trunc=False, won=False)
         if rare_state is not None:
-            w.step(ep=1, i=steps, obs={"boss_state": rare_state}, a=5,
-                   pi=pi, r=0.0, r_terms={}, done=False, trunc=False,
-                   won=False)
+            w.step(ep=1, i=steps, obs=full_obs(rare_state), a=5, pi=pi,
+                   v=0.5, logp=-0.2, ent=1.0, h_norm=1.0, r=0.0,
+                   r_terms={}, done=False, trunc=False, won=False)
         w.episode(ep=1, result="loss", steps=steps, reward=0.0,
                   boss_damage_frac=0.0, attempt=1, wall_s=1.0)
 
@@ -125,15 +139,16 @@ def test_api_run_without_replays_dir_has_empty_recordings(base_url):
     assert json.loads(body)["recordings"] == []
 
 
-def test_matrix_endpoint_serves_the_aggregated_json(base_url, tmp_path):
+def test_views_endpoint_serves_matrix_trace_and_arena(base_url, tmp_path):
     name = "20260823-070000_gen0007.jsonl.gz"
     _write_recording(tmp_path / "runs" / "r1" / "replays" / name, steps=6,
                      rare_state="Wait")
     status, ctype, body = _get(
-        base_url + f"/api/run/r1/recording/{name}/matrix.json")
+        base_url + f"/api/run/r1/recording/{name}/views.json")
     assert status == 200
     assert ctype.startswith("application/json")
-    data = json.loads(body)
+    payload = json.loads(body)
+    data = payload["matrix"]
     assert data["run_id"] == "r1" and data["gen"] == 7
     assert data["boss"] == "Gorb"
     assert data["episodes"] == 1 and data["steps"] == 7
@@ -147,17 +162,29 @@ def test_matrix_endpoint_serves_the_aggregated_json(base_url, tmp_path):
     assert data["modal"] == [5, 5]
     assert data["matrix"][0][5] == pytest.approx(1.0)
     assert "dropped" not in data  # nothing is ever dropped, so no field
+    # The trace and arena blocks ride the same single gzip read.
+    (trace_ep,) = payload["trace"]
+    assert trace_ep["result"] == "loss"
+    assert trace_ep["steps"] == len(trace_ep["v"]) == len(trace_ep["pia"]) == 7
+    arena = payload["arena"]
+    assert arena["nx"] == 24 and arena["ny"] == 12
+    assert arena["loss"]["episodes"] == 1 and "deaths" in arena["loss"]
+    assert "grid" in arena["win"] and arena["win"]["episodes"] == 0
 
 
-def test_matrix_endpoint_rejects_bad_names(base_url, tmp_path):
-    _write_recording(tmp_path / "runs" / "r1" / "replays"
-                     / "20260823-070000_gen0007.jsonl.gz")
+def test_views_endpoint_rejects_bad_names(base_url, tmp_path):
+    name = "20260823-070000_gen0007.jsonl.gz"
+    _write_recording(tmp_path / "runs" / "r1" / "replays" / name)
     for bad in ["nope.jsonl.gz",              # no such recording
                 "%2e%2e%2fsecret.jsonl.gz",   # traversal out of replays/
                 "20260823-070000_gen0007"]:   # wrong extension
         with pytest.raises(urllib.error.HTTPError) as err:
-            _get(base_url + f"/api/run/r1/recording/{bad}/matrix.json")
+            _get(base_url + f"/api/run/r1/recording/{bad}/views.json")
         assert err.value.code == 404
+    # The pre-views matrix.json route is gone, not aliased.
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _get(base_url + f"/api/run/r1/recording/{name}/matrix.json")
+    assert err.value.code == 404
 
 
 def test_unknown_run_and_unknown_path_are_404(base_url):
