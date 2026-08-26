@@ -329,6 +329,40 @@ def test_cli_matrix_subcommand_is_explicit(tmp_path):
     assert (tmp_path / "m.png").exists()
 
 
+def _loss_episode_steps(n=6, ep=1):
+    steps = [{"ep": ep, "i": i, "a": 6, "v": 1.0 - i * 0.2,
+              "obs": {"khp": max(1, 9 - i), "soul": i * 10}}
+             for i in range(n)]
+    steps[-1].update(done=True,
+                     r_terms={"knight_hit": -1.0, "death": -5.0})
+    return steps
+
+
+def test_cli_trace_writes_a_png(tmp_path):
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=_loss_episode_steps(),
+                     episodes=[{"result": "loss", "steps": 6}])
+    analyze_steps.main(["trace", str(rec)])
+    out = tmp_path / "r.trace.png"
+    assert out.exists() and out.stat().st_size > 1000
+
+
+def test_cli_postmortem_writes_a_png_and_notes_no_losses(tmp_path, capsys):
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=_loss_episode_steps(),
+                     episodes=[{"result": "loss", "steps": 6}])
+    analyze_steps.main(["postmortem", str(rec)])
+    assert (tmp_path / "r.postmortem.png").exists()
+    wins = tmp_path / "w.jsonl.gz"
+    _write_recording(wins, steps=[{"i": 0, "done": True, "won": True}],
+                     episodes=[{"result": "WIN", "steps": 1}])
+    capsys.readouterr()
+    analyze_steps.main(["postmortem", str(wins)])
+    out = capsys.readouterr().out
+    assert "no losses" in out
+    assert not (tmp_path / "w.postmortem.png").exists()
+
+
 def test_render_writes_a_png(tmp_path):
     rec = tmp_path / "r.jsonl.gz"
     _write_recording(rec, steps=[("Antic", 5), ("Wait", 1), ("Antic", 6)])

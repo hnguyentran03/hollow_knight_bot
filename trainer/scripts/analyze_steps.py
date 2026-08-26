@@ -19,8 +19,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from hkrl.analysis import (  # noqa: E402,F401  (Aggregate re-exported for callers)
-    Aggregate, action_labels, aggregate, merge_recordings)
+    ACTION_CLASSES, Aggregate, action_class, action_labels, aggregate,
+    action_mix, confidence_trace, merge_recordings, postmortems,
+    reaction_profile, soul_economy)
 from hkrl.recording import read_recording  # noqa: E402
+
+# One color per action class, in ACTION_CLASSES order: the dataviz-skill
+# reference categorical sequence (light mode), CVD-validated for adjacent
+# pairs on white. The dashboard uses the same sequence's dark-mode steps.
+CLASS_COLORS = dict(zip(ACTION_CLASSES,
+                        ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+                         "#e87ba4", "#008300", "#4a3aa7"]))
+_EVENT_STYLE = {"hit": ("#e34948", "v"), "dealt": ("#2a78d6", "^"),
+                "win": ("#008300", "*"), "death": ("#e34948", "x"),
+                "timeout": ("#7a8697", "s")}
 
 
 def render(agg: Aggregate, header: dict, episodes: int, out: Path) -> None:
@@ -86,6 +98,149 @@ def render(agg: Aggregate, header: dict, episodes: int, out: Path) -> None:
     plt.close(fig)
 
 
+def _mute_axes(*axes):
+    for ax in axes:
+        ax.tick_params(labelsize=7, length=0)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+
+def render_trace(episodes, header, out: Path) -> None:
+    """One column per episode: policy panel (pi[a] + normalized entropy)
+    over a value panel (V(s) with event markers), x in fight seconds."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    n = max(len(episodes), 1)
+    fig, axes = plt.subplots(2 * n, 1, figsize=(8.5, 3.6 * n), dpi=150,
+                             squeeze=False)
+    fig.patch.set_facecolor("white")
+    for k, ep in enumerate(episodes):
+        t = [i / 15 for i in range(ep["steps"])]
+        top, bot = axes[2 * k][0], axes[2 * k + 1][0]
+        top.plot(t, ep["pia"], color="#2a78d6", lw=1.4, label="π(chosen)")
+        top.plot(t, ep["ent"], color="#eda100", lw=1.2, label="entropy")
+        top.set_ylim(0, 1.02)
+        top.set_title(f"episode {ep['ep']} · {ep['result'] or 'interrupted'}"
+                      f" · {ep['steps']} steps", fontsize=9, color="#222")
+        top.legend(fontsize=7, frameon=False, loc="upper right")
+        bot.plot(t, ep["v"], color="#12314e", lw=1.4, label="V(s)")
+        for e in ep["events"]:
+            color, marker = _EVENT_STYLE[e["kind"]]
+            bot.scatter([e["i"] / 15],
+                        [ep["v"][min(e["i"], ep["steps"] - 1)]],
+                        s=26, color=color, marker=marker, zorder=3,
+                        label=e["kind"])
+        bot.set_xlabel("fight time (s)", fontsize=8)
+        bot.set_ylabel("V(s)", fontsize=8)
+        # Dedup marker legend entries (every hit adds one otherwise).
+        handles, labels = bot.get_legend_handles_labels()
+        seen = dict(zip(labels, handles))
+        bot.legend(seen.values(), seen.keys(), fontsize=7, frameon=False,
+                   loc="upper right")
+        for ax in (top, bot):
+            _mute_axes(ax)
+            ax.grid(color="#eee", lw=0.6)
+    boss = header.get("boss_spec", {}).get("display_name", header.get("boss"))
+    fig.suptitle(f"{header.get('run_id')} gen {header.get('gen')} · {boss} "
+                 f"· confidence trace", fontsize=10, color="#222")
+    fig.tight_layout(rect=(0, 0, 1, 0.985))
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+
+
+def render_postmortem(pms, header, out: Path) -> None:
+    """One strip per death: action-class band, boss-state band, khp/soul,
+    V(s), over the last ~5 s."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    actions = header["actions"]
+    states = header["boss_spec"]["fsm_states"]
+    state_color = {s: plt.get_cmap("tab20")(i % 20)
+                   for i, s in enumerate(states)}
+    n = len(pms)
+    fig, axes = plt.subplots(3 * n, 1, figsize=(8.5, 3.4 * n), dpi=150,
+                             squeeze=False,
+                             gridspec_kw={"height_ratios": [1, 2, 2] * n})
+    fig.patch.set_facecolor("white")
+    for k, pm in enumerate(pms):
+        steps = pm["steps"]
+        t = [(s["i"] - steps[-1]["i"]) / 15 for s in steps]  # death at 0
+        bands, hp, val = (axes[3 * k][0], axes[3 * k + 1][0],
+                          axes[3 * k + 2][0])
+        for x, s in zip(t, steps):
+            bands.bar(x, 1, width=1 / 15, align="edge",
+                      color=CLASS_COLORS[action_class(actions[s["a"]])])
+            bands.bar(x, 1, bottom=1.1, width=1 / 15, align="edge",
+                      color=state_color.get(s["obs"]["boss_state"], "#ccc"))
+        bands.set_ylim(0, 2.1)
+        bands.set_yticks([0.5, 1.6], ["action", "boss"], fontsize=7)
+        killing = ", ".join(f"{k2} {v:+.1f}"
+                            for k2, v in pm["killing_terms"].items())
+        bands.set_title(f"episode {pm['ep']} death · step "
+                        f"{pm['total_steps']} · {killing}",
+                        fontsize=9, color="#222")
+        hp.step(t, [s["obs"]["khp"] for s in steps], where="post",
+                color="#e34948", label="khp")
+        hp.plot(t, [s["obs"]["soul"] / 11 for s in steps], color="#2a78d6",
+                lw=1.1, label="soul/11")
+        hp.set_ylim(0, 9.5)
+        hp.legend(fontsize=7, frameon=False)
+        val.plot(t, [s["v"] for s in steps], color="#12314e", lw=1.4)
+        val.set_ylabel("V(s)", fontsize=8)
+        val.set_xlabel("seconds before death", fontsize=8)
+        _mute_axes(bands, hp, val)
+    fig.legend(handles=[Patch(color=c, label=l)
+                        for l, c in CLASS_COLORS.items()],
+               ncol=7, fontsize=7, frameon=False, loc="upper center")
+    fig.tight_layout(rect=(0, 0, 1, 0.955))
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _add_trace(sub):
+    ap = sub.add_parser("trace", help="per-episode confidence timeline")
+    ap.add_argument("recordings", nargs="+", type=Path)
+    ap.add_argument("--out", type=Path, default=None)
+    ap.set_defaults(run=_run_trace)
+
+
+def _run_trace(args):
+    recs = [read_recording(p.expanduser()) for p in args.recordings]
+    header, _, _ = merge_recordings(recs)   # boss check + batch header only
+    # Per-recording: episode numbers restart at 1 in every file, so each
+    # file traces separately rather than over concatenated rows.
+    trace = [ep for rec in recs for ep in confidence_trace(rec)]
+    out = args.out or _default_out(args.recordings, ".trace.png")
+    render_trace(trace, header, out)
+    print(f"{len(trace)} episode traces -> {out}", flush=True)
+
+
+def _add_postmortem(sub):
+    ap = sub.add_parser("postmortem", help="last ~5 s before each death")
+    ap.add_argument("recordings", nargs="+", type=Path)
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--window", type=int, default=75)
+    ap.set_defaults(run=_run_postmortem)
+
+
+def _run_postmortem(args):
+    recs = [read_recording(p.expanduser()) for p in args.recordings]
+    header, _, _ = merge_recordings(recs)
+    pms = [pm for rec in recs for pm in postmortems(rec, window=args.window)]
+    if not pms:
+        print("no losses in the given recordings; nothing to render",
+              flush=True)
+        return
+    out = args.out or _default_out(args.recordings, ".postmortem.png")
+    render_postmortem(pms, header, out)
+    print(f"{len(pms)} deaths -> {out}", flush=True)
+
+
 def _default_out(recordings, suffix: str) -> Path:
     first = recordings[0].expanduser()
     return first.parent / (first.name.replace(".jsonl.gz", "") + suffix)
@@ -126,6 +281,8 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(required=True)
     _add_matrix(sub)
+    _add_trace(sub)
+    _add_postmortem(sub)
     args = ap.parse_args(argv)
     args.run(args)
 
