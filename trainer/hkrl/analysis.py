@@ -242,6 +242,38 @@ def soul_economy(rows: list[dict]) -> dict:
             "khp": list(range(1, 10)), "cells": cells}
 
 
+def action_mix(recordings: list[list[dict]]) -> dict:
+    """Per-generation action-class shares across many recordings of one
+    run: the training-evolution view. Same-gen recordings merge."""
+    bosses = {rec[0]["boss"] for rec in recordings}
+    if len(bosses) > 1:
+        raise ValueError(
+            f"recordings mix bosses {sorted(bosses)}; compare one boss's "
+            f"run at a time")
+    by_gen: dict[int, dict] = {}
+    for rec in recordings:
+        g = by_gen.setdefault(rec[0]["gen"],
+                              {"actions": rec[0]["actions"],
+                               "counter": Counter(), "steps": 0,
+                               "episodes": 0})
+        for row in rec:
+            if row["type"] == "step":
+                g["counter"][action_class(g["actions"][row["a"]])] += 1
+                g["steps"] += 1
+            elif row["type"] == "episode":
+                g["episodes"] += 1
+    rows = []
+    for gen in sorted(by_gen):
+        g = by_gen[gen]
+        total = g["steps"] or 1
+        rows.append({"gen": gen, "episodes": g["episodes"],
+                     "steps": g["steps"],
+                     "shares": {c: _r4(g["counter"][c] / total)
+                                for c in ACTION_CLASSES}})
+    return {"classes": list(ACTION_CLASSES),
+            "gens": [r["gen"] for r in rows], "rows": rows}
+
+
 @dataclass
 class Aggregate:
     states: list[str]            # observed states, most-visited first

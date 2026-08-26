@@ -288,6 +288,30 @@ def test_soul_economy_buckets_and_shares(tmp_path):
     assert econ["cells"][8][3]["cast"] == pytest.approx(1.0)
 
 
+def test_action_mix_groups_by_gen_and_merges(tmp_path):
+    from hkrl.analysis import action_mix
+    a, b, c = (tmp_path / n for n in ("a.jsonl.gz", "b.jsonl.gz",
+                                      "c.jsonl.gz"))
+    _write_recording(a, gen=10, steps=[("Antic", 1)] * 4)        # all move
+    _write_recording(b, gen=50, steps=[("Antic", 6)] * 4)        # all attack
+    _write_recording(c, gen=50, steps=[("Antic", 1)] * 4)        # merges into 50
+    mix = action_mix([read_recording(p) for p in (a, b, c)])
+    assert mix["gens"] == [10, 50]
+    r10, r50 = mix["rows"]
+    assert r10["shares"]["move"] == pytest.approx(1.0)
+    assert r50["shares"]["attack"] == pytest.approx(0.5)
+    assert r50["episodes"] == 2 and r50["steps"] == 8
+
+
+def test_action_mix_rejects_mixed_bosses(tmp_path):
+    from hkrl.analysis import action_mix
+    a, b = tmp_path / "a.jsonl.gz", tmp_path / "b.jsonl.gz"
+    _write_recording(a, boss="gorb", steps=[("Antic", 1)])
+    _write_recording(b, boss="marmu", steps=[("Antic", 1)])
+    with pytest.raises(ValueError, match="boss"):
+        action_mix([read_recording(a), read_recording(b)])
+
+
 def test_render_writes_a_png(tmp_path):
     rec = tmp_path / "r.jsonl.gz"
     _write_recording(rec, steps=[("Antic", 5), ("Wait", 1), ("Antic", 6)])
