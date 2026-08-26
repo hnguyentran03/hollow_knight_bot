@@ -568,6 +568,10 @@
     </div>
 
     <div class="charts" id="recordings-wrap" hidden>
+      <div class="card panel wide" id="chart-actionmix" hidden>
+        <h2>Action mix across generations</h2>
+        <div class="subtitle">Share of steps per action class, from every recording of this run — record several generations to grow it</div>
+      </div>
       <div class="card panel wide">
         <h2>Behavior recordings</h2>
         <div class="subtitle">Replays captured with Record — open one for its action × boss-state matrix (cell = mean π, outlined = most-chosen action), confidence trace, and arena heatmaps</div>
@@ -1338,6 +1342,44 @@ function renderArena(holder, arena) {
   holder.appendChild(box);
 }
 
+/* One color per action class, in the analysis core's ACTION_CLASSES
+   order: the dataviz reference categorical sequence, dark-mode steps,
+   CVD-validated for adjacent pairs on this surface. */
+const CLASS_COLORS = { focus: "#3987e5", cast: "#d95926", dash: "#199e70",
+                       attack: "#c98500", jump: "#d55181", move: "#008300",
+                       idle: "#9085e9" };
+
+/* Fetched once per recordings-list change (the caller gates on recSig);
+   hidden below two recorded generations -- one point isn't a trend. */
+async function renderActionMix(recs) {
+  const card = document.getElementById("chart-actionmix");
+  const gens = new Set(recs.map(r => r.gen).filter(g => g != null));
+  if (gens.size < 2) { card.hidden = true; return; }
+  try {
+    const resp = await fetch("/api/run/" + encodeURIComponent(state.runId)
+      + "/actionmix.json");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const mix = await resp.json();
+    card.hidden = false;
+    drawChart(card, {
+      series: mix.classes
+        .filter(c => mix.rows.some(r => r.shares[c] > 0.01))
+        .map(c => ({ name: c, color: CLASS_COLORS[c], endDot: false,
+                     points: mix.rows.map(r => ({ x: r.gen,
+                                                  y: r.shares[c] })) })),
+      yDomain: [0, 1], height: 190, xLabel: "generation",
+      xFormat: v => String(Math.round(v)), yFormat: v => fmtPct(v),
+      xTipFormat: g => "generation " + Math.round(g),
+      tipMeta: g => {
+        const row = mix.rows.find(r => r.gen === Math.round(g));
+        return row && row.episodes + " episodes · " + row.steps + " steps";
+      },
+    });
+  } catch (err) {
+    card.hidden = true;
+  }
+}
+
 /* Behavior recordings: rebuilt only when the list itself changes (the 10s
    poll must not collapse an open matrix), with open rows remembered so a
    rebuild -- e.g. a new recording landing -- restores them. The matrix is
@@ -1351,6 +1393,7 @@ function renderRecordings(recs) {
   if (sig === recSig) return;
   if (recSig !== null && recSig.split("|")[0] !== state.runId) openRecs.clear();
   recSig = sig;
+  renderActionMix(recs);
   const list = document.getElementById("recordings");
   list.replaceChildren();
   for (const r of recs) {

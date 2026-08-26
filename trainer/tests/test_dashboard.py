@@ -417,6 +417,12 @@ def test_page_ships_the_recording_views(base_url):
     assert b"losses incl. timeouts" in body
 
 
+def test_page_ships_the_actionmix_chart(base_url):
+    _, _, body = _get(base_url + "/")
+    assert b'id="chart-actionmix"' in body
+    assert b"actionmix.json" in body
+
+
 def test_summon_serves_the_same_page_as_root(base_url):
     status_root, ctype_root, body_root = _get(base_url + "/")
     status, ctype, body = _get(base_url + "/summon")
