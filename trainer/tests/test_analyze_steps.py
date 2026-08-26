@@ -144,6 +144,41 @@ def test_episode_results_maps_ep_to_summary(tmp_path):
     assert episode_results([]) == {}
 
 
+def test_confidence_trace_series_and_events(tmp_path):
+    from hkrl.analysis import confidence_trace
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[
+        {"i": 0, "a": 5, "ent": 3.0446, "v": 1.0},          # ~ln(21): ent→1.0
+        {"i": 1, "a": 5, "r_terms": {"knight_hit": -1.0},
+         "obs": {"khp": 8}},
+        {"i": 2, "a": 6, "r_terms": {"boss_damage": 0.6}},
+        {"i": 3, "a": 6, "r_terms": {"win": 10.0}, "done": True,
+         "won": True},
+    ], episodes=[{"result": "WIN"}])
+    (ep,) = confidence_trace(read_recording(rec))
+    assert ep["ep"] == 1 and ep["result"] == "WIN" and ep["steps"] == 4
+    assert len(ep["pia"]) == len(ep["ent"]) == len(ep["v"]) == 4
+    assert ep["pia"][0] == pytest.approx(0.8)
+    assert 0.99 <= ep["ent"][0] <= 1.0            # normalized by ln(21)
+    assert ep["khp"][1] == 8
+    kinds = {(e["i"], e["kind"]) for e in ep["events"]}
+    assert kinds == {(1, "hit"), (2, "dealt"), (3, "win")}
+
+
+def test_confidence_trace_marks_interrupted_and_terminal_kinds(tmp_path):
+    from hkrl.analysis import confidence_trace
+    rec = tmp_path / "r.jsonl.gz"
+    # ep 1 dies; ep 2 has steps but no episode summary (interrupt).
+    _write_recording(rec, steps=[
+        {"i": 0, "a": 1, "r_terms": {"death": -5.0}, "done": True},
+        {"ep": 2, "i": 0, "a": 1},
+    ], episodes=[{"result": "loss", "steps": 1}])
+    eps = confidence_trace(read_recording(rec))
+    assert [e["ep"] for e in eps] == [1, 2]
+    assert eps[0]["events"] == [{"i": 0, "kind": "death"}]
+    assert eps[1]["result"] is None and eps[1]["events"] == []
+
+
 def test_render_writes_a_png(tmp_path):
     rec = tmp_path / "r.jsonl.gz"
     _write_recording(rec, steps=[("Antic", 5), ("Wait", 1), ("Antic", 6)])

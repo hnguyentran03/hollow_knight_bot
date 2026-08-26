@@ -5,6 +5,7 @@ renderer (scripts/analyze_steps.py) and the dashboard's matrix endpoint so
 the two can never disagree about the numbers. Read-only: consumes recording
 rows, touches no run data.
 """
+import math
 from collections import Counter
 from dataclasses import dataclass
 
@@ -62,6 +63,57 @@ def merge_recordings(recordings: list[list[dict]]) -> tuple[dict, list[dict], in
     episodes = sum(1 for rec in recordings for row in rec
                    if row["type"] == "episode")
     return headers[0], steps, episodes
+
+
+def _r4(x: float) -> float:
+    return float(f"{x:.4g}")
+
+
+def _steps_by_episode(rows: list[dict]) -> dict[int, list[dict]]:
+    by_ep: dict[int, list[dict]] = {}
+    for row in rows:
+        if row.get("type") == "step":
+            by_ep.setdefault(row["ep"], []).append(row)
+    return by_ep
+
+
+def confidence_trace(rows: list[dict]) -> list[dict]:
+    """Per-episode certainty timeline: pi(chosen), normalized entropy,
+    V(s), khp, and reward-term events. Interrupted trailing episodes are
+    kept (result None) -- a partial fight still traces."""
+    results = episode_results(rows)
+    out = []
+    by_ep = _steps_by_episode(rows)
+    for ep in sorted(by_ep):
+        steps = by_ep[ep]
+        ent_max = math.log(len(steps[0]["pi"]))
+        events = []
+        for s in steps:
+            terms = s.get("r_terms", {})
+            if terms.get("knight_hit"):
+                events.append({"i": s["i"], "kind": "hit"})
+            # The env keys this term "boss_damage" (not "boss_hp_scale");
+            # see HKEnv._reward_terms.
+            if terms.get("boss_damage", 0) > 0:
+                events.append({"i": s["i"], "kind": "dealt"})
+        last = steps[-1]
+        if last.get("won"):
+            events.append({"i": last["i"], "kind": "win"})
+        elif last.get("trunc"):
+            events.append({"i": last["i"], "kind": "timeout"})
+        elif last.get("done"):
+            events.append({"i": last["i"], "kind": "death"})
+        summary = results.get(ep)
+        out.append({
+            "ep": ep,
+            "result": summary["result"] if summary else None,
+            "steps": len(steps),
+            "pia": [_r4(s["pi"][s["a"]]) for s in steps],
+            "ent": [_r4(min(1.0, s["ent"] / ent_max)) for s in steps],
+            "v": [_r4(s["v"]) for s in steps],
+            "khp": [s["obs"]["khp"] for s in steps],
+            "events": events})
+    return out
 
 
 @dataclass
