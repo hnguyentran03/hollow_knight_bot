@@ -312,6 +312,23 @@ def test_action_mix_rejects_mixed_bosses(tmp_path):
         action_mix([read_recording(a), read_recording(b)])
 
 
+def test_cli_bare_recordings_still_render_the_matrix(tmp_path, capsys):
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[("Antic", 5), ("Wait", 1)])
+    analyze_steps.main([str(rec)])                 # no subcommand: matrix
+    out = capsys.readouterr().out
+    assert "states x" in out
+    assert (tmp_path / "r.action_matrix.png").exists()
+
+
+def test_cli_matrix_subcommand_is_explicit(tmp_path):
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[("Antic", 5)])
+    analyze_steps.main(["matrix", str(rec), "--min-steps", "1",
+                        "--out", str(tmp_path / "m.png")])
+    assert (tmp_path / "m.png").exists()
+
+
 def test_render_writes_a_png(tmp_path):
     rec = tmp_path / "r.jsonl.gz"
     _write_recording(rec, steps=[("Antic", 5), ("Wait", 1), ("Antic", 6)])

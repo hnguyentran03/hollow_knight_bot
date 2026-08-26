@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Offline analysis of schema-v1 behavior recordings (replay.py --record).
 
-First visualization: the action x boss-FSM-state matrix -- "which buttons,
-in response to what". Reads one or more recordings of the same boss and
-renders a heatmap PNG: rows are the boss states actually observed, columns
-the 21 actions, each cell the mean recorded policy probability
-pi(action | state), with a dot marking the action most often CHOSEN in
-that state (intent vs behavior in one picture).
+The behavioral views as subcommands: `matrix` (action x boss-FSM-state
+heatmap -- "which buttons, in response to what"; the default when the
+first argument is a recording path, which keeps the original bare
+invocation working), `trace` (per-episode confidence timeline),
+`postmortem` (the last ~5 s before each death), `reaction` (action mix
+after a projectile appears), `soul` (heal-vs-cast over HP x SOUL), and
+`actionmix` (class shares across recorded generations).
 
 Read-only: consumes recording files, touches no run data. Everything it
 needs to label the axes travels inside the recording's frozen header.
@@ -85,8 +86,13 @@ def render(agg: Aggregate, header: dict, episodes: int, out: Path) -> None:
     plt.close(fig)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
+def _default_out(recordings, suffix: str) -> Path:
+    first = recordings[0].expanduser()
+    return first.parent / (first.name.replace(".jsonl.gz", "") + suffix)
+
+
+def _add_matrix(sub):
+    ap = sub.add_parser("matrix", help="action x boss-state heatmap")
     ap.add_argument("recordings", nargs="+", type=Path,
                     help="schema-v1 .jsonl.gz recording file(s), one boss")
     ap.add_argument("--out", type=Path, default=None,
@@ -94,18 +100,34 @@ def main() -> None:
                          ".action_matrix.png)")
     ap.add_argument("--min-steps", type=int, default=5,
                     help="drop states observed fewer than this many times")
-    args = ap.parse_args()
+    ap.set_defaults(run=_run_matrix)
 
+
+def _run_matrix(args):
     recs = [read_recording(p.expanduser()) for p in args.recordings]
     header, steps, episodes = merge_recordings(recs)
     agg = aggregate(steps, min_steps=args.min_steps)
-    out = args.out or args.recordings[0].expanduser().with_suffix(
-        "").with_suffix("").parent / (
-        args.recordings[0].name.replace(".jsonl.gz", "")
-        + ".action_matrix.png")
+    out = args.out or _default_out(args.recordings, ".action_matrix.png")
     render(agg, header, episodes, out)
     print(f"{len(agg.states)} states x {len(header['actions'])} actions "
           f"from {sum(agg.counts)} steps -> {out}", flush=True)
+
+
+SUBCOMMANDS = ("matrix", "trace", "postmortem", "reaction", "soul",
+               "actionmix")
+
+
+def main(argv=None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Back-compat shim: `analyze_steps.py rec.jsonl.gz` predates the
+    # subcommands and keeps meaning `matrix rec.jsonl.gz`.
+    if argv and argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help"):
+        argv.insert(0, "matrix")
+    ap = argparse.ArgumentParser(description=__doc__)
+    sub = ap.add_subparsers(required=True)
+    _add_matrix(sub)
+    args = ap.parse_args(argv)
+    args.run(args)
 
 
 if __name__ == "__main__":
