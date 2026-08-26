@@ -10,26 +10,60 @@ from hkrl.env import ACTIONS  # noqa: E402
 from hkrl.recording import RecordingWriter, read_recording  # noqa: E402
 
 
-def _write_recording(path, boss="gorb", steps=()):
-    """A minimal schema-v1 file: header + the given (state, action, pi) steps.
+_ARENA = {"arena_center_x": 26.5, "arena_half_w": 11.23,
+          "floor_y": 28.41, "arena_height": 9.59}
 
-    pi defaults to a distribution peaked on the chosen action so the mean-pi
-    matrix is predictable without hand-writing 21 floats per step."""
+
+def _step_defaults(i, state="Antic", action=0):
+    obs = {"kx": 26.5, "ky": 28.5, "kvx": 0.0, "kvy": 0.0, "khp": 9,
+           "soul": 0, "on_ground": True, "dashing": False, "invuln": False,
+           "facing_right": True, "bx": 30.0, "by": 28.5, "bvx": 0.0,
+           "bvy": 0.0, "bhp": 900, "boss_state": state,
+           "projectile_active": False, "px": 0.0, "py": 0.0}
+    pi = [0.0] * len(ACTIONS)
+    pi[action] = 0.8
+    pi[(action + 1) % len(ACTIONS)] = 0.2
+    return dict(ep=1, i=i, obs=obs, a=action, pi=pi, v=0.5, logp=-0.2,
+                ent=1.0, h_norm=1.0, r=0.0, r_terms={}, done=False,
+                trunc=False, won=False)
+
+
+def _write_recording(path, boss="gorb", steps=(), episodes=None, gen=7):
+    """A schema-v1 file from compact scripts. Each entry of `steps` is
+    either a (boss_state, action) tuple or a dict of overrides merged over
+    _step_defaults (an "obs" override updates, not replaces, the default
+    obs; an "a" override without an explicit "pi" re-peaks pi on it).
+    `episodes` lists episode-summary override dicts; the default is a
+    single loss episode covering all steps."""
     with RecordingWriter(path) as w:
-        w.header(run_id="test-run", gen=7, boss=boss,
+        w.header(run_id="test-run", gen=gen, boss=boss,
                  boss_spec={"id": boss, "display_name": boss.title(),
                             "fsm_states": ["Wait", "Antic", "Attack",
-                                           "UNKNOWN"]},
+                                           "UNKNOWN"], **_ARENA},
                  actions=ACTIONS, obs_keys=["kx"], deterministic=True,
                  episodes_requested=1)
-        for i, (state, action) in enumerate(steps):
-            pi = [0.0] * len(ACTIONS)
-            pi[action] = 0.8
-            pi[(action + 1) % len(ACTIONS)] = 0.2
-            w.step(ep=1, i=i, obs={"boss_state": state}, a=action, pi=pi,
-                   r=0.0, r_terms={}, done=False, trunc=False, won=False)
-        w.episode(ep=1, result="loss", steps=len(steps), reward=0.0,
-                  boss_damage_frac=0.0, attempt=1, wall_s=1.0)
+        n = 0
+        for i, entry in enumerate(steps):
+            if isinstance(entry, tuple):
+                row = _step_defaults(i, state=entry[0], action=entry[1])
+            else:
+                entry = dict(entry)
+                row = _step_defaults(i)
+                obs_over = entry.pop("obs", {})
+                row.update(entry)
+                row["obs"] = {**row["obs"], **obs_over}
+                if "a" in entry and "pi" not in entry:
+                    pi = [0.0] * len(ACTIONS)
+                    pi[row["a"]] = 0.8
+                    pi[(row["a"] + 1) % len(ACTIONS)] = 0.2
+                    row["pi"] = pi
+            w.step(**row)
+            n += 1
+        for epi in (episodes if episodes is not None else [{}] if n else []):
+            summary = dict(ep=1, result="loss", steps=n, reward=0.0,
+                           boss_damage_frac=0.0, attempt=1, wall_s=1.0)
+            summary.update(epi)
+            w.episode(**summary)
 
 
 def test_aggregate_orders_states_by_frequency_and_averages_pi(tmp_path):
