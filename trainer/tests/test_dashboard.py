@@ -413,6 +413,8 @@ def test_page_ships_the_recording_views(base_url):
     assert b"views.json" in body and b"matrix.json" not in body
     assert b"renderTrace" in body and b"renderArena" in body
     assert b"ep-pick" in body
+    assert b"arena-grid" in body
+    assert b"losses incl. timeouts" in body
 
 
 def test_summon_serves_the_same_page_as_root(base_url):

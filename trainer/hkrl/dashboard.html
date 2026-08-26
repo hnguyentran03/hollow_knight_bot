@@ -235,6 +235,12 @@
   .ep-pick button.on { color: var(--ink); border-color: var(--s1); box-shadow: 0 0 6px var(--glow); }
   .ep-pick button.won { color: var(--s2); }
   .rec-chart { position: relative; margin-top: 8px; }
+  .arena-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .arena-pair { grid-template-columns: 1fr; } }
+  .arena-cap { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .arena-grid { display: grid; gap: 1px; aspect-ratio: 2 / 1; }
+  .arena-cell { font-size: 9px; line-height: 1; color: var(--critical); display: flex; align-items: center; justify-content: center; }
+  .arena-cell.death { outline: 1px solid var(--critical); outline-offset: -1px; }
   .card { padding: 12px 12px 8px; }
   .card.wide { grid-column: 1 / -1; }
   .card h2 { font-family: var(--display); font-size: 16px; font-weight: 400; letter-spacing: 0.06em; margin: 0; }
@@ -1263,7 +1269,74 @@ function renderTrace(holder, trace) {
   draw(trace[0]);
 }
 
-function renderArena(holder, arena) {}  // replaced by the arena-heatmaps view
+/* Arena occupancy, wins vs losses: same ramp as the matrix, top row =
+   top of the arena, death bins outlined with an x. Each panel is
+   normalized within its own outcome so the two are comparable at
+   different episode counts; shading is scaled to the pair's hottest bin
+   so a sparse recording still shows structure. */
+function renderArena(holder, arena) {
+  if (!arena) return;
+  const box = document.createElement("div");
+  box.className = "rec-view";
+  const head = document.createElement("div");
+  head.className = "rec-view-title";
+  head.textContent = "Arena occupancy";
+  const pair = document.createElement("div");
+  pair.className = "arena-pair";
+  const vmax = Math.max(
+    ...arena.win.grid.flat(), ...arena.loss.grid.flat(), 1e-6);
+  const tip = document.createElement("div");
+  tip.className = "tooltip";
+  for (const [key, label] of [["win", "wins"],
+                              ["loss", "losses incl. timeouts"]]) {
+    const panel = arena[key];
+    const cell = document.createElement("div");
+    const cap = document.createElement("div");
+    cap.className = "arena-cap";
+    cap.textContent = label + " · " + panel.episodes + " episode"
+      + (panel.episodes === 1 ? "" : "s");
+    cell.appendChild(cap);
+    if (!panel.episodes) {
+      const note = document.createElement("div");
+      note.className = "matrix-note";
+      note.textContent = "no " + label + " in this recording";
+      cell.appendChild(note);
+      pair.appendChild(cell);
+      continue;
+    }
+    const deaths = new Set((panel.deaths || []).map(d => d[0] + "," + d[1]));
+    const grid = document.createElement("div");
+    grid.className = "arena-grid";
+    grid.style.gridTemplateColumns = "repeat(" + arena.nx + ", 1fr)";
+    panel.grid.forEach((row, iy) => row.forEach((v, ix) => {
+      const c = document.createElement("div");
+      c.className = "arena-cell";
+      c.style.background = rampColor(v / vmax);
+      if (deaths.has(ix + "," + iy)) {
+        c.classList.add("death");
+        c.textContent = "×";
+      }
+      c.addEventListener("mouseenter", () => {
+        tip.replaceChildren();
+        const tx = document.createElement("div");
+        tx.className = "tx";
+        tx.textContent = (v * 100).toFixed(2) + "% of " + label + " time"
+          + (deaths.has(ix + "," + iy) ? " · death here" : "");
+        tip.appendChild(tx);
+        tip.style.display = "block";
+        const br = box.getBoundingClientRect(), cr = c.getBoundingClientRect();
+        tip.style.left = (cr.left - br.left + 10) + "px";
+        tip.style.top = (cr.bottom - br.top + 6) + "px";
+      });
+      grid.appendChild(c);
+    }));
+    grid.addEventListener("mouseleave", () => tip.style.display = "none");
+    cell.appendChild(grid);
+    pair.appendChild(cell);
+  }
+  box.append(head, pair, tip);
+  holder.appendChild(box);
+}
 
 /* Behavior recordings: rebuilt only when the list itself changes (the 10s
    poll must not collapse an open matrix), with open rows remembered so a
