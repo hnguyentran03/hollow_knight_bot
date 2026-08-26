@@ -159,6 +159,89 @@ def arena_occupancy(rows: list[dict], nx: int = 24, ny: int = 12) -> dict:
             **panels}
 
 
+def postmortems(rows: list[dict], window: int = 75) -> list[dict]:
+    """The last `window` steps (~5 s at 15 Hz) of every true loss.
+    Timeouts are not deaths and wins need no autopsy."""
+    results = episode_results(rows)
+    by_ep = _steps_by_episode(rows)
+    out = []
+    for ep in sorted(by_ep):
+        summary = results.get(ep)
+        if summary is None or summary["result"] != "loss":
+            continue
+        steps = by_ep[ep]
+        out.append({"ep": ep, "total_steps": len(steps),
+                    "killing_terms": steps[-1].get("r_terms", {}),
+                    "steps": steps[-window:]})
+    return out
+
+
+_REACTION_BUCKETS = [("near", 0.0, 4.0), ("mid", 4.0, 8.0),
+                     ("far", 8.0, float("inf"))]
+
+
+def reaction_profile(rows: list[dict], window: int = 8) -> dict:
+    """Action-class mix in the ~half second after a projectile appears,
+    bucketed by how far away it appeared. An onset is active-after-
+    inactive within an episode; a step-0 already-active projectile also
+    counts (it appeared between frames)."""
+    actions = rows[0]["actions"]
+    counts = {name: Counter() for name, _, _ in _REACTION_BUCKETS}
+    ns = Counter()
+    onsets = 0
+    for steps in _steps_by_episode(rows).values():
+        prev_active = False
+        for idx, s in enumerate(steps):
+            active = bool(s["obs"]["projectile_active"])
+            if active and not prev_active:
+                onsets += 1
+                dist = abs(s["obs"]["px"] - s["obs"]["kx"])
+                name = next(n for n, lo, hi in _REACTION_BUCKETS
+                            if lo <= dist < hi)
+                ns[name] += 1
+                for w in steps[idx:idx + window]:
+                    counts[name][action_class(actions[w["a"]])] += 1
+            prev_active = active
+    buckets = []
+    for name, lo, hi in _REACTION_BUCKETS:
+        total = sum(counts[name].values()) or 1
+        buckets.append({"name": name, "lo": lo, "hi": hi, "n": ns[name],
+                        "shares": {c: _r4(counts[name][c] / total)
+                                   for c in ACTION_CLASSES}})
+    return {"onsets": onsets, "window": window,
+            "classes": list(ACTION_CLASSES), "buckets": buckets}
+
+
+def soul_economy(rows: list[dict]) -> dict:
+    """Heal-vs-cast over the HP x SOUL space. Buckets split at the 33-soul
+    cast/heal cost; 99 (full) is its own column."""
+    actions = rows[0]["actions"]
+    edges = [(0, 32), (33, 65), (66, 98), (99, 99)]
+    cells = [[{"n": 0, "cast": 0, "focus": 0} for _ in edges]
+             for _ in range(9)]
+    for row in rows:
+        if row.get("type") != "step":
+            continue
+        khp, soul = row["obs"]["khp"], row["obs"]["soul"]
+        if not 1 <= khp <= 9:
+            continue          # a terminal khp=0 frame isn't a choice state
+        col = next(i for i, (lo, hi) in enumerate(edges) if lo <= soul <= hi)
+        cell = cells[khp - 1][col]
+        cell["n"] += 1
+        cls = action_class(actions[row["a"]])
+        if cls == "cast":
+            cell["cast"] += 1
+        elif cls == "focus":
+            cell["focus"] += 1
+    for hp_row in cells:
+        for cell in hp_row:
+            n = cell["n"] or 1
+            cell["cast"] = _r4(cell["cast"] / n)
+            cell["focus"] = _r4(cell["focus"] / n)
+    return {"soul_buckets": ["0–32", "33–65", "66–98", "99"],
+            "khp": list(range(1, 10)), "cells": cells}
+
+
 @dataclass
 class Aggregate:
     states: list[str]            # observed states, most-visited first

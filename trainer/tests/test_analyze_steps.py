@@ -219,6 +219,75 @@ def test_arena_occupancy_handles_a_single_outcome_side(tmp_path):
     assert sum(map(sum, a["loss"]["grid"])) == 0.0
 
 
+def test_postmortems_selects_loss_windows(tmp_path):
+    from hkrl.analysis import postmortems
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=(
+        [{"i": i} for i in range(4)]
+        + [{"i": 4, "r_terms": {"knight_hit": -1.0, "death": -5.0},
+            "done": True}]
+        + [{"ep": 2, "i": 0, "done": True, "won": True}]
+        + [{"ep": 3, "i": 0, "trunc": True}]),
+        episodes=[{"result": "loss", "steps": 5},
+                  {"ep": 2, "result": "WIN", "steps": 1},
+                  {"ep": 3, "result": "TIMEOUT", "steps": 1}])
+    pms = postmortems(read_recording(rec), window=3)
+    assert [p["ep"] for p in pms] == [1]         # wins/timeouts excluded
+    p0 = pms[0]
+    assert [s["i"] for s in p0["steps"]] == [2, 3, 4]   # window truncates
+    assert p0["total_steps"] == 5
+    assert p0["killing_terms"] == {"knight_hit": -1.0, "death": -5.0}
+
+
+def test_reaction_profile_detects_onsets_and_buckets(tmp_path):
+    from hkrl.analysis import reaction_profile
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[
+        # Onset at i=1, |px-kx| = 2 (near); next 2 steps dash (a=9).
+        {"i": 0},
+        {"i": 1, "a": 9, "obs": {"projectile_active": True, "px": 28.5}},
+        {"i": 2, "a": 9, "obs": {"projectile_active": True, "px": 27.5}},
+        # Still active: no second onset.
+        {"i": 3, "obs": {"projectile_active": True, "px": 27.0}},
+        # ep 2 starts already active at |px-kx| = 10 (far): counts.
+        {"ep": 2, "i": 0, "a": 3,
+         "obs": {"projectile_active": True, "px": 36.5}},
+    ], episodes=[{"result": "loss", "steps": 4},
+                 {"ep": 2, "result": "loss", "steps": 1}])
+    prof = reaction_profile(read_recording(rec), window=2)
+    assert prof["onsets"] == 2
+    near = next(b for b in prof["buckets"] if b["name"] == "near")
+    far = next(b for b in prof["buckets"] if b["name"] == "far")
+    assert near["n"] == 1 and near["shares"]["dash"] == pytest.approx(1.0)
+    assert far["n"] == 1 and far["shares"]["jump"] == pytest.approx(1.0)
+
+
+def test_reaction_profile_no_onsets(tmp_path):
+    from hkrl.analysis import reaction_profile
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[("Antic", 5)] * 3)
+    assert reaction_profile(read_recording(rec))["onsets"] == 0
+
+
+def test_soul_economy_buckets_and_shares(tmp_path):
+    from hkrl.analysis import soul_economy
+    rec = tmp_path / "r.jsonl.gz"
+    _write_recording(rec, steps=[
+        {"i": 0, "a": 15, "obs": {"khp": 5, "soul": 33}},   # cast @ 33
+        {"i": 1, "a": 20, "obs": {"khp": 5, "soul": 33}},   # focus @ 33
+        {"i": 2, "a": 0, "obs": {"khp": 5, "soul": 32}},    # idle @ 32
+        {"i": 3, "a": 15, "obs": {"khp": 9, "soul": 99}},   # cast @ full
+    ])
+    econ = soul_economy(read_recording(rec))
+    assert econ["soul_buckets"] == ["0–32", "33–65", "66–98", "99"]
+    cell = econ["cells"][4][1]                   # khp 5 row, 33–65 bucket
+    assert cell["n"] == 2
+    assert cell["cast"] == pytest.approx(0.5)
+    assert cell["focus"] == pytest.approx(0.5)
+    assert econ["cells"][4][0] == {"n": 1, "cast": 0.0, "focus": 0.0}
+    assert econ["cells"][8][3]["cast"] == pytest.approx(1.0)
+
+
 def test_render_writes_a_png(tmp_path):
     rec = tmp_path / "r.jsonl.gz"
     _write_recording(rec, steps=[("Antic", 5), ("Wait", 1), ("Antic", 6)])
